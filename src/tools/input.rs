@@ -4,6 +4,14 @@ use serde::Deserialize;
 use std::thread;
 use std::time::Duration;
 
+/// Get the display scale factor and convert pixel coordinates to points.
+/// This is needed because screenshots are captured at pixel resolution,
+/// but input events use logical (point) coordinates.
+fn scale_coord(pixel_coord: f64) -> f64 {
+    let scale = macos::get_main_display_scale_factor();
+    macos::pixels_to_points(pixel_coord, scale)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ClickParams {
     /// X coordinate
@@ -42,7 +50,11 @@ pub fn click(params: ClickParams) -> CallToolResult {
         }
     };
 
-    match macos::click(params.x, params.y, click_type, params.double_click, params.synthetic) {
+    // Scale coordinates from pixels (screenshot) to points (input events)
+    let x = scale_coord(params.x);
+    let y = scale_coord(params.y);
+
+    match macos::click(x, y, click_type, params.double_click, params.synthetic) {
         Ok(()) => {
             let action = if params.double_click {
                 "Double-clicked"
@@ -112,7 +124,11 @@ pub struct ScrollParams {
 }
 
 pub fn scroll(params: ScrollParams) -> CallToolResult {
-    match macos::scroll(params.x, params.y, params.delta_x, params.delta_y) {
+    // Scale coordinates from pixels (screenshot) to points (input events)
+    let x = scale_coord(params.x);
+    let y = scale_coord(params.y);
+
+    match macos::scroll(x, y, params.delta_x, params.delta_y) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Scrolled at ({}, {}) by ({}, {})",
             params.x, params.y, params.delta_x, params.delta_y
@@ -137,7 +153,13 @@ pub struct DragParams {
 }
 
 pub fn drag(params: DragParams) -> CallToolResult {
-    match macos::drag(params.from_x, params.from_y, params.to_x, params.to_y) {
+    // Scale coordinates from pixels (screenshot) to points (input events)
+    let from_x = scale_coord(params.from_x);
+    let from_y = scale_coord(params.from_y);
+    let to_x = scale_coord(params.to_x);
+    let to_y = scale_coord(params.to_y);
+
+    match macos::drag(from_x, from_y, to_x, to_y) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Dragged from ({}, {}) to ({}, {})",
             params.from_x, params.from_y, params.to_x, params.to_y
@@ -156,7 +178,11 @@ pub struct MoveMouseParams {
 }
 
 pub fn move_mouse(params: MoveMouseParams) -> CallToolResult {
-    match macos::move_mouse(params.x, params.y) {
+    // Scale coordinates from pixels (screenshot) to points (input events)
+    let x = scale_coord(params.x);
+    let y = scale_coord(params.y);
+
+    match macos::move_mouse(x, y) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Moved mouse to ({}, {})",
             params.x, params.y
