@@ -19,6 +19,10 @@ pub struct ClickParams {
     /// Whether to double-click
     #[serde(default)]
     pub double_click: bool,
+
+    /// If true, use Accessibility API to click without moving the mouse cursor
+    #[serde(default)]
+    pub synthetic: bool,
 }
 
 fn default_click_type() -> String {
@@ -38,16 +42,21 @@ pub fn click(params: ClickParams) -> CallToolResult {
         }
     };
 
-    match macos::click(params.x, params.y, click_type, params.double_click) {
+    match macos::click(params.x, params.y, click_type, params.double_click, params.synthetic) {
         Ok(()) => {
             let action = if params.double_click {
                 "Double-clicked"
             } else {
                 "Clicked"
             };
+            let mode = if params.synthetic {
+                " (synthetic)"
+            } else {
+                ""
+            };
             CallToolResult::success(vec![Content::text(format!(
-                "{} at ({}, {})",
-                action, params.x, params.y
+                "{}{} at ({}, {})",
+                action, mode, params.x, params.y
             ))])
         }
         Err(e) => CallToolResult::error(vec![Content::text(format!("Click failed: {}", e))]),

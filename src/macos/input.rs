@@ -1,3 +1,4 @@
+use crate::macos::accessibility;
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton,
 };
@@ -17,6 +18,8 @@ pub enum InputError {
     EventCreationError,
     #[error("Unknown key: {0}")]
     UnknownKey(String),
+    #[error("Accessibility error: {0}")]
+    AccessibilityError(#[from] accessibility::AccessibilityError),
 }
 
 /// Click types
@@ -27,8 +30,28 @@ pub enum ClickType {
     Middle,
 }
 
-/// Perform a mouse click at the given coordinates
-pub fn click(x: f64, y: f64, click_type: ClickType, double_click: bool) -> Result<(), InputError> {
+/// Perform a mouse click at the given coordinates.
+/// If `synthetic` is true, uses the Accessibility API to click without moving the mouse cursor.
+pub fn click(
+    x: f64,
+    y: f64,
+    click_type: ClickType,
+    double_click: bool,
+    synthetic: bool,
+) -> Result<(), InputError> {
+    // Use accessibility API for synthetic clicks (doesn't move mouse cursor)
+    if synthetic {
+        let click_count = if double_click { 2 } else { 1 };
+        for _ in 0..click_count {
+            accessibility::click_at_position(x, y)?;
+            if double_click {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        return Ok(());
+    }
+
+    // Standard CGEvent-based click (moves mouse cursor)
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|_| InputError::EventSourceError)?;
 

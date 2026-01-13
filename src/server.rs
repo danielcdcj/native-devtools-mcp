@@ -107,7 +107,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "click",
-                "Click at the specified screen coordinates. Supports left, right, middle clicks and double-clicks.",
+                "Click at the specified screen coordinates. Supports left, right, middle clicks and double-clicks. Use synthetic=true to click without moving the mouse cursor.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["x", "y"],
@@ -129,6 +129,11 @@ impl MacOSDevToolsServer {
                         "double_click": {
                             "type": "boolean",
                             "description": "Whether to double-click",
+                            "default": false
+                        },
+                        "synthetic": {
+                            "type": "boolean",
+                            "description": "If true, use Accessibility API to click without moving the mouse cursor",
                             "default": false
                         }
                     }
