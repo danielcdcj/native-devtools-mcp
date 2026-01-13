@@ -29,6 +29,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Error handling
 thiserror = "2"
 
+# WebSocket client for app debug protocol
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+url = "2.5"
+
 [lints.rust]
 # Suppress cfg warnings from objc crate macros
 unexpected_cfgs = "allow"

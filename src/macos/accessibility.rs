@@ -29,7 +29,10 @@ extern "C" {
         y: f32,
         element: *mut AXUIElementRef,
     ) -> i32;
-    fn AXUIElementPerformAction(element: AXUIElementRef, action: core_foundation::string::CFStringRef) -> i32;
+    fn AXUIElementPerformAction(
+        element: AXUIElementRef,
+        action: core_foundation::string::CFStringRef,
+    ) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -49,12 +52,8 @@ pub fn click_at_position(x: f64, y: f64) -> Result<(), AccessibilityError> {
 
         // Get element at position
         let mut element: AXUIElementRef = std::ptr::null_mut();
-        let result = AXUIElementCopyElementAtPosition(
-            system_wide,
-            x as f32,
-            y as f32,
-            &mut element,
-        );
+        let result =
+            AXUIElementCopyElementAtPosition(system_wide, x as f32, y as f32, &mut element);
 
         if result != K_AX_ERROR_SUCCESS {
             CFRelease(system_wide);

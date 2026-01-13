@@ -61,11 +61,7 @@ pub fn click(params: ClickParams) -> CallToolResult {
             } else {
                 "Clicked"
             };
-            let mode = if params.synthetic {
-                " (synthetic)"
-            } else {
-                ""
-            };
+            let mode = if params.synthetic { " (synthetic)" } else { "" };
             CallToolResult::success(vec![Content::text(format!(
                 "{}{} at ({}, {})",
                 action, mode, params.x, params.y

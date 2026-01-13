@@ -1,3 +1,16 @@
+# Rust
 /target
+
+# Swift
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+*.xcworkspace
+Package.resolved
+
+# IDE
 .claude/
 .mcp.json
+.DS_Store

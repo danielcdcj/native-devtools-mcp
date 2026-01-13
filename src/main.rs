@@ -1,6 +1,7 @@
 // Suppress warnings from cocoa/objc crates (deprecated APIs and cfg warnings)
 #![allow(deprecated)]
 
+mod app_protocol;
 mod macos;
 mod server;
 mod tools;
