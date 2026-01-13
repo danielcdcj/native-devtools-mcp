@@ -78,14 +78,10 @@ pub struct PressKeyParams {
 
 pub fn press_key(params: PressKeyParams) -> CallToolResult {
     match macos::press_key(&params.key) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
-            "Pressed key: {}",
-            params.key
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!(
-            "Key press failed: {}",
-            e
-        ))]),
+        Ok(()) => {
+            CallToolResult::success(vec![Content::text(format!("Pressed key: {}", params.key))])
+        }
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Key press failed: {}", e))]),
     }
 }
 
@@ -156,10 +152,7 @@ pub fn move_mouse(params: MoveMouseParams) -> CallToolResult {
             "Moved mouse to ({}, {})",
             params.x, params.y
         ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!(
-            "Move mouse failed: {}",
-            e
-        ))]),
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Move mouse failed: {}", e))]),
     }
 }
 

@@ -1,12 +1,12 @@
 use crate::tools::{input, navigation, screenshot};
 use rmcp::{
-    Error as McpError,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, Implementation, ListToolsResult,
+        CallToolRequestParam, CallToolResult, Implementation, ListToolsResult,
         PaginatedRequestParam, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
+    Error as McpError,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -271,95 +271,91 @@ impl ServerHandler for MacOSDevToolsServer {
         }
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: PaginatedRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListToolsResult {
-                tools: Self::get_tools(),
-                next_cursor: None,
-            })
-        }
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult {
+            tools: Self::get_tools(),
+            next_cursor: None,
+        })
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        async move {
-            let args = request
-                .arguments
-                .map(|m| Value::Object(m))
-                .unwrap_or(Value::Object(Default::default()));
+    ) -> Result<CallToolResult, McpError> {
+        let args = request
+            .arguments
+            .map(Value::Object)
+            .unwrap_or(Value::Object(Default::default()));
 
-            let result = match request.name.as_ref() {
-                "take_screenshot" => {
-                    let params: screenshot::TakeScreenshotParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    screenshot::take_screenshot(params)
-                }
-                "list_windows" => {
-                    let params: navigation::ListWindowsParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    navigation::list_windows(params)
-                }
-                "list_apps" => {
-                    let params: navigation::ListAppsParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    navigation::list_apps(params)
-                }
-                "focus_window" => {
-                    let params: navigation::FocusWindowParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    navigation::focus_window(params)
-                }
-                "click" => {
-                    let params: input::ClickParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::click(params)
-                }
-                "type_text" => {
-                    let params: input::TypeTextParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::type_text(params)
-                }
-                "press_key" => {
-                    let params: input::PressKeyParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::press_key(params)
-                }
-                "scroll" => {
-                    let params: input::ScrollParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::scroll(params)
-                }
-                "drag" => {
-                    let params: input::DragParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::drag(params)
-                }
-                "move_mouse" => {
-                    let params: input::MoveMouseParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::move_mouse(params)
-                }
-                "wait" => {
-                    let params: input::WaitParams = serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                    input::wait(params)
-                }
-                _ => {
-                    return Err(McpError::invalid_params(
-                        format!("Unknown tool: {}", request.name),
-                        None,
-                    ));
-                }
-            };
+        let result = match request.name.as_ref() {
+            "take_screenshot" => {
+                let params: screenshot::TakeScreenshotParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                screenshot::take_screenshot(params)
+            }
+            "list_windows" => {
+                let params: navigation::ListWindowsParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                navigation::list_windows(params)
+            }
+            "list_apps" => {
+                let params: navigation::ListAppsParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                navigation::list_apps(params)
+            }
+            "focus_window" => {
+                let params: navigation::FocusWindowParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                navigation::focus_window(params)
+            }
+            "click" => {
+                let params: input::ClickParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::click(params)
+            }
+            "type_text" => {
+                let params: input::TypeTextParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::type_text(params)
+            }
+            "press_key" => {
+                let params: input::PressKeyParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::press_key(params)
+            }
+            "scroll" => {
+                let params: input::ScrollParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::scroll(params)
+            }
+            "drag" => {
+                let params: input::DragParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::drag(params)
+            }
+            "move_mouse" => {
+                let params: input::MoveMouseParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::move_mouse(params)
+            }
+            "wait" => {
+                let params: input::WaitParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                input::wait(params)
+            }
+            _ => {
+                return Err(McpError::invalid_params(
+                    format!("Unknown tool: {}", request.name),
+                    None,
+                ));
+            }
+        };
 
-            Ok(result)
-        }
+        Ok(result)
     }
 }

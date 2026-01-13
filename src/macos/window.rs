@@ -44,10 +44,7 @@ pub fn list_windows() -> Vec<WindowInfo> {
     end tell
     "#;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output();
+    let output = Command::new("osascript").arg("-e").arg(script).output();
 
     let mut windows = Vec::new();
 
@@ -191,10 +188,7 @@ for w in windows:
 print(json.dumps(result))
 "#;
 
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(script)
-        .output();
+    let output = Command::new("python3").arg("-c").arg(script).output();
 
     if let Ok(output) = output {
         if output.status.success() {
@@ -217,6 +211,10 @@ pub fn find_window_by_id(window_id: u32) -> Option<WindowInfo> {
 pub fn find_windows_by_app(app_name: &str) -> Vec<WindowInfo> {
     list_windows()
         .into_iter()
-        .filter(|w| w.owner_name.to_lowercase().contains(&app_name.to_lowercase()))
+        .filter(|w| {
+            w.owner_name
+                .to_lowercase()
+                .contains(&app_name.to_lowercase())
+        })
         .collect()
 }

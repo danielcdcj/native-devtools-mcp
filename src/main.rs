@@ -1,10 +1,13 @@
+// Suppress warnings from cocoa/objc crates (deprecated APIs and cfg warnings)
+#![allow(deprecated)]
+
 mod macos;
 mod server;
 mod tools;
 
 use rmcp::ServiceExt;
 use server::MacOSDevToolsServer;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

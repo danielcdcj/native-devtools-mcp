@@ -43,12 +43,20 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
 }
 
 /// Capture a specific region of the screen using screencapture
-pub fn capture_region(x: f64, y: f64, width: f64, height: f64) -> Result<Screenshot, ScreenshotError> {
+pub fn capture_region(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<Screenshot, ScreenshotError> {
     let temp_file = NamedTempFile::with_suffix(".png")?;
     let path = temp_file.path().to_string_lossy().to_string();
 
     // screencapture -R x,y,w,h for region
-    let region = format!("{},{},{},{}", x as i32, y as i32, width as i32, height as i32);
+    let region = format!(
+        "{},{},{},{}",
+        x as i32, y as i32, width as i32, height as i32
+    );
 
     let output = Command::new("screencapture")
         .args(["-x", "-R", &region, "-t", "png", &path])

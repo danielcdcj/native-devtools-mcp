@@ -28,3 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 thiserror = "2"
+
+[lints.rust]
+# Suppress cfg warnings from objc crate macros
+unexpected_cfgs = "allow"

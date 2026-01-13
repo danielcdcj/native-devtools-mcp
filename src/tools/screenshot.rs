@@ -60,9 +60,6 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
             let base64_data = screenshot.to_base64();
             CallToolResult::success(vec![Content::image(base64_data, "image/png")])
         }
-        Err(e) => CallToolResult::error(vec![Content::text(format!(
-            "Screenshot failed: {}",
-            e
-        ))]),
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Screenshot failed: {}", e))]),
     }
 }
