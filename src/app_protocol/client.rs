@@ -27,9 +27,6 @@ pub enum ClientError {
 
     #[error("Protocol error {code}: {message}")]
     Protocol { code: i32, message: String },
-
-    #[error("Not connected to app")]
-    NotConnected,
 }
 
 impl From<ProtocolError> for ClientError {
@@ -252,14 +249,5 @@ impl AppProtocolClient {
     /// List windows
     pub async fn list_windows(&self) -> Result<serde_json::Value, ClientError> {
         self.call("Window.list", None).await
-    }
-
-    /// Focus a window
-    pub async fn focus_window(&self, window_id: &str) -> Result<serde_json::Value, ClientError> {
-        self.call(
-            "Window.focus",
-            Some(serde_json::json!({ "windowId": window_id })),
-        )
-        .await
     }
 }
