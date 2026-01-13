@@ -22,8 +22,11 @@ pub struct WindowBounds {
 
 /// List all visible windows on screen using AppleScript
 pub fn list_windows() -> Vec<WindowInfo> {
-    // Use AppleScript to get window info as it's more reliable
+    // Use AppleScript to get window info, output as JSON for reliable parsing
     let script = r#"
+    use framework "Foundation"
+    use scripting additions
+
     tell application "System Events"
         set windowList to {}
         repeat with proc in (every process whose background only is false)
@@ -35,7 +38,8 @@ pub fn list_windows() -> Vec<WindowInfo> {
                         set winName to name of w
                         set winPos to position of w
                         set winSize to size of w
-                        set end of windowList to {procName, procPID, winName, item 1 of winPos, item 2 of winPos, item 1 of winSize, item 2 of winSize}
+                        set windowData to "WINDOW:" & procName & "|" & procPID & "|" & winName & "|" & (item 1 of winPos) & "|" & (item 2 of winPos) & "|" & (item 1 of winSize) & "|" & (item 2 of winSize)
+                        set end of windowList to windowData
                     end try
                 end repeat
             end try
@@ -52,7 +56,6 @@ pub fn list_windows() -> Vec<WindowInfo> {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             // Parse the AppleScript output
-            // Format: procName, pid, winName, x, y, width, height, ...
             if let Some(parsed) = parse_applescript_output(&stdout) {
                 windows = parsed;
             }
@@ -71,48 +74,18 @@ fn parse_applescript_output(output: &str) -> Option<Vec<WindowInfo>> {
     let mut windows = Vec::new();
     let trimmed = output.trim();
 
-    // AppleScript returns a list like: {{"App", 123, "Window", 0, 0, 800, 600}, ...}
-    // We need to parse this format
-    if trimmed.is_empty() || trimmed == "{}" {
+    if trimmed.is_empty() {
         return Some(windows);
     }
 
-    // Simple parsing - split by }, { patterns
-    let content = trimmed.trim_start_matches('{').trim_end_matches('}');
-
+    // Parse output format: WINDOW:app|pid|name|x|y|w|h, WINDOW:app|pid|name|x|y|w|h, ...
     let mut id_counter = 1u32;
-    let mut current_item = String::new();
-    let mut brace_depth = 0;
 
-    for ch in content.chars() {
-        match ch {
-            '{' => {
-                brace_depth += 1;
-                if brace_depth > 1 {
-                    current_item.push(ch);
-                }
-            }
-            '}' => {
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    // Parse current item
-                    if let Some(window) = parse_window_item(&current_item, id_counter) {
-                        windows.push(window);
-                        id_counter += 1;
-                    }
-                    current_item.clear();
-                } else {
-                    current_item.push(ch);
-                }
-            }
-            ',' if brace_depth == 0 => {
-                // Skip commas between items
-            }
-            _ => {
-                if brace_depth > 0 {
-                    current_item.push(ch);
-                }
-            }
+    for part in trimmed.split(", WINDOW:") {
+        let item = part.trim_start_matches("WINDOW:");
+        if let Some(window) = parse_window_item(item, id_counter) {
+            windows.push(window);
+            id_counter += 1;
         }
     }
 
@@ -120,15 +93,15 @@ fn parse_applescript_output(output: &str) -> Option<Vec<WindowInfo>> {
 }
 
 fn parse_window_item(item: &str, id: u32) -> Option<WindowInfo> {
-    let parts: Vec<&str> = item.split(',').map(|s| s.trim()).collect();
+    let parts: Vec<&str> = item.split('|').collect();
     if parts.len() < 7 {
         return None;
     }
 
-    let owner_name = parts[0].trim_matches('"').to_string();
+    let owner_name = parts[0].to_string();
     let owner_pid = parts[1].parse().ok()?;
     let name = {
-        let n = parts[2].trim_matches('"').to_string();
+        let n = parts[2].to_string();
         if n.is_empty() || n == "missing value" {
             None
         } else {

@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::process::Command;
-use tempfile::NamedTempFile;
+use tempfile::tempdir;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -25,11 +25,12 @@ impl Screenshot {
 
 /// Capture the entire screen (main display) using screencapture
 pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
-    let temp_file = NamedTempFile::with_suffix(".png")?;
-    let path = temp_file.path().to_string_lossy().to_string();
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("screenshot.png");
+    let path_str = path.to_string_lossy().to_string();
 
     let output = Command::new("screencapture")
-        .args(["-x", "-C", "-t", "png", &path])
+        .args(["-x", "-C", "-t", "png", &path_str])
         .output()?;
 
     if !output.status.success() {
@@ -49,8 +50,9 @@ pub fn capture_region(
     width: f64,
     height: f64,
 ) -> Result<Screenshot, ScreenshotError> {
-    let temp_file = NamedTempFile::with_suffix(".png")?;
-    let path = temp_file.path().to_string_lossy().to_string();
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("screenshot.png");
+    let path_str = path.to_string_lossy().to_string();
 
     // screencapture -R x,y,w,h for region
     let region = format!(
@@ -59,7 +61,7 @@ pub fn capture_region(
     );
 
     let output = Command::new("screencapture")
-        .args(["-x", "-R", &region, "-t", "png", &path])
+        .args(["-x", "-R", &region, "-t", "png", &path_str])
         .output()?;
 
     if !output.status.success() {
@@ -74,12 +76,13 @@ pub fn capture_region(
 
 /// Capture a specific window by its ID using screencapture
 pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
-    let temp_file = NamedTempFile::with_suffix(".png")?;
-    let path = temp_file.path().to_string_lossy().to_string();
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("screenshot.png");
+    let path_str = path.to_string_lossy().to_string();
 
     // screencapture -l window_id for specific window
     let output = Command::new("screencapture")
-        .args(["-x", "-l", &window_id.to_string(), "-t", "png", &path])
+        .args(["-x", "-l", &window_id.to_string(), "-t", "png", &path_str])
         .output()?;
 
     if !output.status.success() {
