@@ -86,13 +86,30 @@ enum InputSimulator {
 
     // MARK: - Type Text
 
+    /// Get the default window, preferring keyWindow, then mainWindow, then any visible window
+    private static func getDefaultWindow() -> NSWindow? {
+        if let keyWindow = NSApp.keyWindow {
+            return keyWindow
+        }
+        if let mainWindow = NSApp.mainWindow {
+            return mainWindow
+        }
+        // Fall back to first visible window (excluding panels)
+        for window in NSApp.windows {
+            if window.isVisible && !window.isKind(of: NSPanel.self) {
+                return window
+            }
+        }
+        return nil
+    }
+
     /// Type text into a view (must be a text input)
     static func type(text: String, into view: NSView?, clearFirst: Bool = false) -> Bool {
         // Find the text input view
         let targetView: NSView?
         if let view = view {
             targetView = view
-        } else if let window = NSApp.keyWindow {
+        } else if let window = getDefaultWindow() {
             targetView = window.firstResponder as? NSView
         } else {
             return false
@@ -145,7 +162,7 @@ enum InputSimulator {
 
     /// Press a key combination
     static func pressKey(_ key: String, modifiers: [String] = []) -> Bool {
-        guard let window = NSApp.keyWindow else { return false }
+        guard let window = getDefaultWindow() else { return false }
 
         var modifierFlags: NSEvent.ModifierFlags = []
         for modifier in modifiers {

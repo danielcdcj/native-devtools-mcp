@@ -290,6 +290,20 @@ impl MacOSDevToolsServer {
                     "properties": {}
                 }))),
             ),
+            Tool::new(
+                "app_focus_window",
+                "Focus a window in the connected app (make it key and main window).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["window_id"],
+                    "properties": {
+                        "window_id": {
+                            "type": "string",
+                            "description": "Window ID to focus (e.g., 'window-1')"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 }
@@ -404,6 +418,11 @@ impl ServerHandler for MacOSDevToolsServer {
                 Ok(app_tools::app_screenshot(params, self.app_client.clone()).await)
             }
             "app_list_windows" => Ok(app_tools::app_list_windows(self.app_client.clone()).await),
+            "app_focus_window" => {
+                let params: app_tools::AppFocusWindowParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(app_tools::app_focus_window(params, self.app_client.clone()).await)
+            }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
                 None,

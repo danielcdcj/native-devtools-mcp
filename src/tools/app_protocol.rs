@@ -65,6 +65,11 @@ pub struct AppGetElementParams {
     pub element_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AppFocusWindowParams {
+    pub window_id: String,
+}
+
 pub async fn app_connect(params: AppConnectParams, client: SharedClient) -> CallToolResult {
     match AppProtocolClient::connect(&params.url).await {
         Ok(new_client) => {
@@ -260,6 +265,21 @@ pub async fn app_list_windows(client: SharedClient) -> CallToolResult {
         Ok(windows) => CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&windows).unwrap_or_else(|_| "{}".to_string()),
         )]),
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Failed: {}", e))]),
+    }
+}
+
+pub async fn app_focus_window(params: AppFocusWindowParams, client: SharedClient) -> CallToolResult {
+    let guard = client.read().await;
+    let Some(client) = guard.as_ref() else {
+        return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
+    };
+
+    match client.focus_window(&params.window_id).await {
+        Ok(_) => CallToolResult::success(vec![Content::text(format!(
+            "Focused window: {}",
+            params.window_id
+        ))]),
         Err(e) => CallToolResult::error(vec![Content::text(format!("Failed: {}", e))]),
     }
 }

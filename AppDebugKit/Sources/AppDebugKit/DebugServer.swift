@@ -177,6 +177,23 @@ final class DebugServer {
 
     // MARK: - View Domain
 
+    /// Get the default root view, preferring keyWindow, then mainWindow, then any visible window
+    private func getDefaultRootView() -> NSView? {
+        if let keyWindow = NSApp.keyWindow, let contentView = keyWindow.contentView {
+            return contentView
+        }
+        if let mainWindow = NSApp.mainWindow, let contentView = mainWindow.contentView {
+            return contentView
+        }
+        // Fall back to first visible window (excluding panels)
+        for window in NSApp.windows {
+            if window.isVisible && !window.isKind(of: NSPanel.self), let contentView = window.contentView {
+                return contentView
+            }
+        }
+        return nil
+    }
+
     private func handleViewGetTree(id: UInt64, params: [String: AnyCodable]) -> ProtocolResponse {
         let depth = (params["depth"]?.value as? Int) ?? 5
         let rootId = params["rootId"]?.value as? String
@@ -185,7 +202,7 @@ final class DebugServer {
         if let rootId = rootId {
             rootView = ViewRegistry.shared.view(for: rootId)
         } else {
-            rootView = NSApp.keyWindow?.contentView ?? NSApp.mainWindow?.contentView
+            rootView = getDefaultRootView()
         }
 
         guard let view = rootView else {
@@ -205,7 +222,7 @@ final class DebugServer {
         if let rootId = params["rootId"]?.value as? String {
             rootView = ViewRegistry.shared.view(for: rootId)
         } else {
-            rootView = NSApp.keyWindow?.contentView ?? NSApp.mainWindow?.contentView
+            rootView = getDefaultRootView()
         }
 
         guard let view = rootView else {
@@ -229,7 +246,7 @@ final class DebugServer {
         if let rootId = params["rootId"]?.value as? String {
             rootView = ViewRegistry.shared.view(for: rootId)
         } else {
-            rootView = NSApp.keyWindow?.contentView ?? NSApp.mainWindow?.contentView
+            rootView = getDefaultRootView()
         }
 
         guard let view = rootView else {
@@ -260,7 +277,7 @@ final class DebugServer {
         if let elementId = params["elementId"]?.value as? String {
             targetView = ViewRegistry.shared.view(for: elementId)
         } else {
-            targetView = NSApp.keyWindow?.contentView ?? NSApp.mainWindow?.contentView
+            targetView = getDefaultRootView()
         }
 
         guard let view = targetView else {
