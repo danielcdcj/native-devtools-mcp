@@ -1,12 +1,22 @@
-# macos-devtools-mcp
+# native-devtools-mcp
 
-A Model Context Protocol (MCP) server for testing native macOS applications, similar to how Chrome DevTools enables web UI testing.
+A Model Context Protocol (MCP) server for testing native desktop applications, similar to how Chrome DevTools enables web UI testing.
+
+## Platform Support
+
+| Platform | Status |
+|----------|--------|
+| **macOS** | Supported |
+| **Windows** | Planned |
+| **Linux** | Planned |
+
+> Windows and Linux support will be added in future releases with platform-specific backends.
 
 ## Overview
 
-This MCP server enables LLM-driven testing of native macOS apps by providing:
+This MCP server enables LLM-driven testing of native desktop apps by providing:
 - **Screenshots** - Capture full screen, windows, or regions
-- **Input simulation** - Click, type, scroll, drag via Core Graphics events
+- **Input simulation** - Click, type, scroll, drag via platform-native events
 - **Window/app enumeration** - List and focus windows and applications
 
 The LLM interprets screenshots visually to decide actions—no OCR or accessibility tree required.
@@ -18,10 +28,12 @@ The LLM interprets screenshots visually to decide actions—no OCR or accessibil
 cargo build --release
 
 # Binary location
-./target/release/macos-devtools-mcp
+./target/release/native-devtools-mcp
 ```
 
 ## Required Permissions
+
+### macOS
 
 Grant these in **System Settings > Privacy & Security**:
 - **Screen Recording** - For screenshots
@@ -34,8 +46,8 @@ Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "macos-devtools": {
-      "command": "/path/to/macos-devtools-mcp"
+    "native-devtools": {
+      "command": "/path/to/native-devtools-mcp"
     }
   }
 }
@@ -71,15 +83,15 @@ Claude: [calls take_screenshot]
 
 ```
 ┌─────────────────┐     JSON-RPC 2.0      ┌──────────────────┐
-│  Claude/Client  │ ◄──────────────────► │  macos-devtools  │
+│  Claude/Client  │ ◄──────────────────► │  native-devtools │
 │  (with vision)  │      stdio           │     MCP Server   │
 └─────────────────┘                       └────────┬─────────┘
                                                    │
                                ┌───────────────────┼───────────────────┐
                                ▼                   ▼                   ▼
                         ┌────────────┐      ┌────────────┐      ┌────────────┐
-                        │screencapture│      │Core Graphics│      │ NSWorkspace│
-                        │   (CLI)    │      │   Events   │      │   (objc)   │
+                        │  Platform  │      │  Platform  │      │  Platform  │
+                        │ Screenshot │      │   Events   │      │  App Enum  │
                         └────────────┘      └────────────┘      └────────────┘
 ```
 

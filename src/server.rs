@@ -314,7 +314,7 @@ impl ServerHandler for MacOSDevToolsServer {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
-                name: "macos-devtools-mcp".to_string(),
+                name: "native-devtools-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             instructions: Some(
