@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:macos-devtools-mcp}/TestApp",
+            "name": "Debug TestApp (TestApp)",
+            "target": "TestApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug TestApp (TestApp)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:macos-devtools-mcp}/TestApp",
+            "name": "Release TestApp (TestApp)",
+            "target": "TestApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release TestApp (TestApp)"
+        }
+    ]
+}
