@@ -93,6 +93,11 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Copy binary to npm package
+        run: |
+          mkdir -p npm/darwin-arm64/bin
+          cp artifacts/npm-darwin-arm64/bin/native-devtools-mcp npm/darwin-arm64/bin/
+
       - name: Update versions from tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
@@ -109,10 +114,6 @@ jobs:
 
           # Update optionalDependencies version in main package
           sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \"$VERSION\"/" package.json
-
-      - name: Copy binary to npm package
-        run: |
-          cp -r artifacts/npm-darwin-arm64/* npm/darwin-arm64/
 
       - name: Publish darwin-arm64 package
         run: npm publish --provenance --access public
