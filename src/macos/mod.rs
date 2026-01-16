@@ -1,4 +1,7 @@
 pub mod app;
+pub mod display;
+pub mod input;
+pub mod ocr;
 pub mod screenshot;
 pub mod window;
 
