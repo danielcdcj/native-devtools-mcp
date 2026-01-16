@@ -41,6 +41,7 @@ jobs:
 
       - name: Prepare npm package
         run: |
+          mkdir -p npm/${{ matrix.npm_dir }}/bin
           cp target/${{ matrix.target }}/release/native-devtools-mcp npm/${{ matrix.npm_dir }}/bin/
           chmod +x npm/${{ matrix.npm_dir }}/bin/native-devtools-mcp
 
