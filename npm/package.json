@@ -5,9 +5,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anthropics/native-devtools-mcp.git"
+    "url": "git+https://github.com/sh3ll3x3c/native-devtools-mcp.git"
   },
-  "homepage": "https://github.com/anthropics/native-devtools-mcp",
+  "homepage": "https://github.com/sh3ll3x3c/native-devtools-mcp",
   "keywords": [
     "mcp",
     "model-context-protocol",
