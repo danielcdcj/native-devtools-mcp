@@ -100,6 +100,7 @@ jobs:
         run: |
           mkdir -p npm/darwin-arm64/bin
           cp artifacts/npm-darwin-arm64/bin/native-devtools-mcp npm/darwin-arm64/bin/
+          chmod +x npm/darwin-arm64/bin/native-devtools-mcp
 
       - name: Update versions from tag
         run: |
