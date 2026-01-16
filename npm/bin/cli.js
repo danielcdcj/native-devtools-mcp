@@ -6,7 +6,6 @@ const fs = require("fs");
 
 const PLATFORMS = {
   "darwin-arm64": "@sh3ll3x3c/native-devtools-mcp-darwin-arm64",
-  "darwin-x64": "@sh3ll3x3c/native-devtools-mcp-darwin-x64",
 };
 
 function getPlatformPackage() {
@@ -17,7 +16,7 @@ function getPlatformPackage() {
   const pkg = PLATFORMS[key];
   if (!pkg) {
     console.error(`Unsupported platform: ${platform}-${arch}`);
-    console.error("native-devtools-mcp supports: darwin-arm64, darwin-x64");
+    console.error("native-devtools-mcp supports: darwin-arm64 (Apple Silicon)");
     process.exit(1);
   }
 

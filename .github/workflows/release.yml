@@ -19,9 +19,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             npm_dir: darwin-arm64
-          - target: x86_64-apple-darwin
-            os: macos-13
-            npm_dir: darwin-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -105,29 +102,21 @@ jobs:
           cd npm
           npm version $VERSION --no-git-tag-version
 
-          # Update platform package versions
+          # Update platform package version
           cd darwin-arm64
-          npm version $VERSION --no-git-tag-version
-          cd ../darwin-x64
           npm version $VERSION --no-git-tag-version
           cd ..
 
-          # Update optionalDependencies versions in main package
+          # Update optionalDependencies version in main package
           sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \"$VERSION\"/" package.json
-          sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-x64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-x64\": \"$VERSION\"/" package.json
 
-      - name: Copy binaries to npm packages
+      - name: Copy binary to npm package
         run: |
           cp -r artifacts/npm-darwin-arm64/* npm/darwin-arm64/
-          cp -r artifacts/npm-darwin-x64/* npm/darwin-x64/
 
       - name: Publish darwin-arm64 package
         run: npm publish --provenance --access public
         working-directory: npm/darwin-arm64
-
-      - name: Publish darwin-x64 package
-        run: npm publish --provenance --access public
-        working-directory: npm/darwin-x64
 
       - name: Wait for npm registry to update
         run: sleep 30
