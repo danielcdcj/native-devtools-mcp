@@ -1,0 +1,33 @@
+{
+  "name": "native-devtools-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for testing native desktop applications",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthropics/native-devtools-mcp.git"
+  },
+  "homepage": "https://github.com/anthropics/native-devtools-mcp",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "devtools",
+    "desktop",
+    "testing",
+    "automation",
+    "macos"
+  ],
+  "bin": {
+    "native-devtools-mcp": "bin/cli.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "optionalDependencies": {
+    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.1.0",
+    "@sh3ll3x3c/native-devtools-mcp-darwin-x64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -65,7 +65,23 @@ Merging them into auto-fallback would hide important context from the LLM and re
 
 ## Installation
 
+### Option 1: npm (Recommended)
+
 ```bash
+# Install globally
+npm install -g native-devtools-mcp
+
+# Or run directly with npx
+npx native-devtools-mcp
+```
+
+### Option 2: Build from source
+
+```bash
+# Clone the repository
+git clone https://github.com/anthropics/native-devtools-mcp
+cd native-devtools-mcp
+
 # Build
 cargo build --release
 
@@ -86,6 +102,19 @@ The permission must be granted to the **app that runs the MCP server** (e.g., Cl
 ## MCP Configuration
 
 Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "native-devtools": {
+      "command": "npx",
+      "args": ["-y", "native-devtools-mcp"]
+    }
+  }
+}
+```
+
+Or if you built from source:
 
 ```json
 {

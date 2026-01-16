@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            npm_dir: darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            npm_dir: darwin-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary for GitHub Release
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../native-devtools-mcp-${{ matrix.target }}.tar.gz native-devtools-mcp
+
+      - name: Prepare npm package
+        run: |
+          cp target/${{ matrix.target }}/release/native-devtools-mcp npm/${{ matrix.npm_dir }}/bin/
+          chmod +x npm/${{ matrix.npm_dir }}/bin/native-devtools-mcp
+
+      - name: Upload GitHub Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-devtools-mcp-${{ matrix.target }}
+          path: native-devtools-mcp-${{ matrix.target }}.tar.gz
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.npm_dir }}
+          path: npm/${{ matrix.npm_dir }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/native-devtools-mcp-*/*.tar.gz
+          generate_release_notes: true
+
+  publish-npm:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download npm artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Update versions from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Publishing version: $VERSION"
+
+          # Update main package version
+          cd npm
+          npm version $VERSION --no-git-tag-version
+
+          # Update platform package versions
+          cd darwin-arm64
+          npm version $VERSION --no-git-tag-version
+          cd ../darwin-x64
+          npm version $VERSION --no-git-tag-version
+          cd ..
+
+          # Update optionalDependencies versions in main package
+          sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \"$VERSION\"/" package.json
+          sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-x64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-x64\": \"$VERSION\"/" package.json
+
+      - name: Copy binaries to npm packages
+        run: |
+          cp -r artifacts/npm-darwin-arm64/* npm/darwin-arm64/
+          cp -r artifacts/npm-darwin-x64/* npm/darwin-x64/
+
+      - name: Publish darwin-arm64 package
+        run: npm publish --provenance --access public
+        working-directory: npm/darwin-arm64
+
+      - name: Publish darwin-x64 package
+        run: npm publish --provenance --access public
+        working-directory: npm/darwin-x64
+
+      - name: Wait for npm registry to update
+        run: sleep 30
+
+      - name: Publish main package
+        run: npm publish --provenance --access public
+        working-directory: npm

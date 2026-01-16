@@ -10,6 +10,11 @@ DerivedData/
 *.xcworkspace
 Package.resolved
 
+# Node.js
+node_modules/
+npm/darwin-arm64/bin/native-devtools-mcp
+npm/darwin-x64/bin/native-devtools-mcp
+
 # IDE
 .claude/
 .mcp.json
