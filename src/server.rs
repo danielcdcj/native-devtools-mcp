@@ -36,7 +36,7 @@ impl MacOSDevToolsServer {
         vec![
             Tool::new(
                 "take_screenshot",
-                "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded PNG image.",
+                "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded PNG image with OCR text annotations including clickable coordinates.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -65,6 +65,11 @@ impl MacOSDevToolsServer {
                         "height": {
                             "type": "number",
                             "description": "Height of region (required for mode='region')"
+                        },
+                        "include_ocr": {
+                            "type": "boolean",
+                            "description": "Include OCR text detection with clickable coordinates (default: true)",
+                            "default": true
                         }
                     }
                 }))),

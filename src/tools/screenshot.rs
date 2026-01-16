@@ -16,10 +16,18 @@ pub struct TakeScreenshotParams {
     pub y: Option<f64>,
     pub width: Option<f64>,
     pub height: Option<f64>,
+
+    /// Include OCR text annotations with clickable coordinates (default: true)
+    #[serde(default = "default_include_ocr")]
+    pub include_ocr: bool,
 }
 
 fn default_mode() -> String {
     "screen".to_string()
+}
+
+fn default_include_ocr() -> bool {
+    true
 }
 
 pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
@@ -58,8 +66,39 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
     match result {
         Ok(screenshot) => {
             let base64_data = screenshot.to_base64();
-            CallToolResult::success(vec![Content::image(base64_data, "image/png")])
+            let mut contents = vec![Content::image(base64_data, "image/png")];
+
+            // Run OCR if requested
+            if params.include_ocr {
+                match macos::ocr_image(&screenshot.png_data) {
+                    Ok(matches) => {
+                        if !matches.is_empty() {
+                            let ocr_text = format_ocr_results(&matches);
+                            contents.push(Content::text(ocr_text));
+                        }
+                    }
+                    Err(e) => {
+                        contents.push(Content::text(format!("OCR failed: {}", e)));
+                    }
+                }
+            }
+
+            CallToolResult::success(contents)
         }
         Err(e) => CallToolResult::error(vec![Content::text(format!("Screenshot failed: {}", e))]),
     }
+}
+
+/// Format OCR results as a text summary with clickable coordinates.
+fn format_ocr_results(matches: &[macos::TextMatch]) -> String {
+    let mut result = String::from("## OCR Text Detected (click coordinates)\n\n");
+
+    for m in matches.iter().filter(|m| m.confidence > 50.0) {
+        result.push_str(&format!(
+            "- \"{}\" at ({:.0}, {:.0})\n",
+            m.text, m.x, m.y
+        ));
+    }
+
+    result
 }
