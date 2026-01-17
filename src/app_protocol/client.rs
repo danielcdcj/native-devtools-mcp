@@ -57,6 +57,8 @@ pub struct AppProtocolClient {
     pending: PendingRequests,
     next_id: Arc<AtomicU64>,
     request_timeout: Duration,
+    /// Shutdown signal sender - when dropped or sent, tasks will terminate
+    shutdown: Arc<tokio::sync::watch::Sender<bool>>,
 }
 
 impl AppProtocolClient {
@@ -74,12 +76,28 @@ impl AppProtocolClient {
 
         let (tx, mut rx) = mpsc::channel::<Message>(32);
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+        let (shutdown_tx, mut shutdown_rx1) = tokio::sync::watch::channel(false);
+        let mut shutdown_rx2 = shutdown_tx.subscribe();
 
         // Spawn writer task
         tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                if write.send(msg).await.is_err() {
-                    break;
+            loop {
+                tokio::select! {
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                if write.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = shutdown_rx1.changed() => {
+                        // Send close frame before exiting
+                        let _ = write.send(Message::Close(None)).await;
+                        break;
+                    }
                 }
             }
         });
@@ -87,13 +105,24 @@ impl AppProtocolClient {
         // Spawn reader task
         let pending_clone = pending.clone();
         tokio::spawn(async move {
-            while let Some(msg_result) = read.next().await {
-                if let Ok(Message::Text(text)) = msg_result {
-                    if let Ok(response) = serde_json::from_str::<ProtocolResponse>(&text) {
-                        let mut pending = pending_clone.lock().await;
-                        if let Some(sender) = pending.remove(&response.id) {
-                            let _ = sender.send(response);
+            loop {
+                tokio::select! {
+                    msg_result = read.next() => {
+                        match msg_result {
+                            Some(Ok(Message::Text(text))) => {
+                                if let Ok(response) = serde_json::from_str::<ProtocolResponse>(&text) {
+                                    let mut pending = pending_clone.lock().await;
+                                    if let Some(sender) = pending.remove(&response.id) {
+                                        let _ = sender.send(response);
+                                    }
+                                }
+                            }
+                            Some(Ok(_)) => {} // Ignore non-text messages
+                            Some(Err(_)) | None => break,
                         }
+                    }
+                    _ = shutdown_rx2.changed() => {
+                        break;
                     }
                 }
             }
@@ -104,6 +133,7 @@ impl AppProtocolClient {
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            shutdown: Arc::new(shutdown_tx),
         })
     }
 
@@ -269,5 +299,12 @@ impl AppProtocolClient {
             Some(serde_json::json!({ "windowId": window_id })),
         )
         .await
+    }
+
+    /// Close the connection and shut down background tasks.
+    /// This sends a WebSocket close frame and signals tasks to terminate.
+    pub fn close(&self) {
+        // Signal shutdown to both tasks
+        let _ = self.shutdown.send(true);
     }
 }

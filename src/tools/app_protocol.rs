@@ -1,14 +1,86 @@
 use crate::app_protocol::AppProtocolClient;
 use rmcp::model::{CallToolResult, Content};
+use rmcp::service::{Peer, RoleServer};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub type SharedClient = Arc<RwLock<Option<AppProtocolClient>>>;
 
+/// Identity validation result
+#[derive(Debug, PartialEq)]
+pub enum IdentityValidationResult {
+    /// Validation passed
+    Ok,
+    /// Bundle ID mismatch
+    BundleIdMismatch {
+        expected: String,
+        actual: String,
+        actual_app_name: String,
+    },
+    /// App name mismatch
+    AppNameMismatch {
+        expected: String,
+        actual: String,
+        actual_bundle_id: String,
+    },
+}
+
+/// Validates bundle ID (exact, case-sensitive match)
+pub fn validate_bundle_id(expected: &str, actual: &str) -> bool {
+    expected == actual
+}
+
+/// Validates app name (case-insensitive, whitespace-trimmed)
+pub fn validate_app_name(expected: &str, actual: &str) -> bool {
+    expected.trim().eq_ignore_ascii_case(actual.trim())
+}
+
+/// Validates app identity against expected values from runtime info
+pub fn validate_identity(
+    expected_bundle_id: Option<&str>,
+    expected_app_name: Option<&str>,
+    info: &serde_json::Value,
+) -> IdentityValidationResult {
+    let actual_bundle_id = info.get("bundleId").and_then(|v| v.as_str()).unwrap_or("");
+    let actual_app_name = info
+        .get("appName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    // Validate bundle ID if expected
+    if let Some(expected) = expected_bundle_id {
+        if !validate_bundle_id(expected, actual_bundle_id) {
+            return IdentityValidationResult::BundleIdMismatch {
+                expected: expected.to_string(),
+                actual: actual_bundle_id.to_string(),
+                actual_app_name: actual_app_name.to_string(),
+            };
+        }
+    }
+
+    // Validate app name if expected
+    if let Some(expected) = expected_app_name {
+        if !validate_app_name(expected, actual_app_name) {
+            return IdentityValidationResult::AppNameMismatch {
+                expected: expected.to_string(),
+                actual: actual_app_name.to_string(),
+                actual_bundle_id: actual_bundle_id.to_string(),
+            };
+        }
+    }
+
+    IdentityValidationResult::Ok
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppConnectParams {
     pub url: String,
+    #[serde(default)]
+    pub expected_bundle_id: Option<String>,
+    #[serde(default)]
+    pub expected_app_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,35 +142,111 @@ pub struct AppFocusWindowParams {
     pub window_id: String,
 }
 
-pub async fn app_connect(params: AppConnectParams, client: SharedClient) -> CallToolResult {
-    match AppProtocolClient::connect(&params.url).await {
-        Ok(new_client) => {
-            // Get app info
-            let info = new_client.get_runtime_info().await;
+const RELIST_HINT: &str = "Re-list tools to see app_* tools if your client doesn't auto-refresh.";
 
-            let mut guard = client.write().await;
-            *guard = Some(new_client);
+pub async fn app_connect(
+    params: AppConnectParams,
+    client: SharedClient,
+    peer: Peer<RoleServer>,
+) -> CallToolResult {
+    // Check if there's an existing connection (for error messages)
+    let has_existing = client.read().await.is_some();
 
-            match info {
-                Ok(info) => CallToolResult::success(vec![Content::text(format!(
-                    "Connected to app: {}",
-                    serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())
-                ))]),
-                Err(_) => CallToolResult::success(vec![Content::text(format!(
-                    "Connected to {}",
-                    params.url
-                ))]),
-            }
+    let new_client = match AppProtocolClient::connect(&params.url).await {
+        Ok(c) => c,
+        Err(e) => {
+            return CallToolResult::error(vec![Content::text(format!("Failed to connect: {}", e))])
         }
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Failed to connect: {}", e))]),
+    };
+
+    // Get runtime info to validate identity
+    let info = match new_client.get_runtime_info().await {
+        Ok(info) => info,
+        Err(e) => {
+            // If we can't get info but have expectations, fail (preserve existing connection)
+            if params.expected_bundle_id.is_some() || params.expected_app_name.is_some() {
+                new_client.close(); // Clean up the new connection
+                let existing_note = if has_existing {
+                    " Existing connection preserved."
+                } else {
+                    ""
+                };
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Failed to get app info for validation: {}.{}",
+                    e, existing_note
+                ))]);
+            }
+            // No expectations, proceed without info
+            *client.write().await = Some(new_client);
+            let _ = peer.notify_tool_list_changed().await;
+            return CallToolResult::success(vec![Content::text(format!(
+                "Connected to {}. App debug tools (app_*) are now available. {}",
+                params.url, RELIST_HINT
+            ))]);
+        }
+    };
+
+    // Validate identity using the extracted helper
+    let validation_result = validate_identity(
+        params.expected_bundle_id.as_deref(),
+        params.expected_app_name.as_deref(),
+        &info,
+    );
+
+    match validation_result {
+        IdentityValidationResult::Ok => {}
+        IdentityValidationResult::BundleIdMismatch {
+            expected,
+            actual,
+            actual_app_name,
+        } => {
+            new_client.close(); // Clean up the new connection
+            let existing_note = if has_existing {
+                " Existing connection preserved."
+            } else {
+                ""
+            };
+            return CallToolResult::error(vec![Content::text(format!(
+                "Identity mismatch: connected to \"{}\" (bundleId \"{}\"), but expected bundleId \"{}\".{}",
+                actual_app_name, actual, expected, existing_note
+            ))]);
+        }
+        IdentityValidationResult::AppNameMismatch {
+            expected,
+            actual,
+            actual_bundle_id,
+        } => {
+            new_client.close(); // Clean up the new connection
+            let existing_note = if has_existing {
+                " Existing connection preserved."
+            } else {
+                ""
+            };
+            return CallToolResult::error(vec![Content::text(format!(
+                "Identity mismatch: connected to \"{}\" (bundleId \"{}\"), but expected app name \"{}\".{}",
+                actual, actual_bundle_id, expected, existing_note
+            ))]);
+        }
     }
+
+    // Validation passed (or no expectations), store client
+    *client.write().await = Some(new_client);
+    let _ = peer.notify_tool_list_changed().await;
+
+    let msg = format!(
+        "Connected. App debug tools (app_*) are now available. {}\n\n{}",
+        RELIST_HINT,
+        serde_json::to_string_pretty(&info).unwrap_or_default()
+    );
+    CallToolResult::success(vec![Content::text(msg)])
 }
 
-pub async fn app_disconnect(client: SharedClient) -> CallToolResult {
-    let mut guard = client.write().await;
-    if guard.is_some() {
-        *guard = None;
-        CallToolResult::success(vec![Content::text("Disconnected from app")])
+pub async fn app_disconnect(client: SharedClient, peer: Peer<RoleServer>) -> CallToolResult {
+    if client.write().await.take().is_some() {
+        let _ = peer.notify_tool_list_changed().await;
+        CallToolResult::success(vec![Content::text(
+            "Disconnected. App debug tools (app_*) are no longer available.",
+        )])
     } else {
         CallToolResult::error(vec![Content::text("Not connected to any app")])
     }

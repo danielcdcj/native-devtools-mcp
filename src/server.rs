@@ -25,6 +25,12 @@ pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
 }
 
+impl Default for MacOSDevToolsServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MacOSDevToolsServer {
     pub fn new() -> Self {
         Self {
@@ -32,7 +38,25 @@ impl MacOSDevToolsServer {
         }
     }
 
-    fn get_tools() -> Vec<Tool> {
+    /// Check if currently connected to an app debug server
+    async fn is_connected(&self) -> bool {
+        self.app_client.read().await.is_some()
+    }
+
+    /// Get tools available based on connection state.
+    /// Base tools and app_connect are always available.
+    /// Other app_* tools are only available when connected.
+    pub fn get_tools(connected: bool) -> Vec<Tool> {
+        let mut tools = Self::get_base_tools();
+        tools.push(Self::get_app_connect_tool());
+        if connected {
+            tools.extend(Self::get_app_tools());
+        }
+        tools
+    }
+
+    /// Tools that are always available (system tools, CGEvent tools, etc.)
+    fn get_base_tools() -> Vec<Tool> {
         vec![
             Tool::new(
                 "take_screenshot",
@@ -112,199 +136,6 @@ impl MacOSDevToolsServer {
                         "pid": {
                             "type": "integer",
                             "description": "Process ID to focus"
-                        }
-                    }
-                }))),
-            ),
-            // App Debug Protocol tools
-            Tool::new(
-                "app_connect",
-                "Connect to an app's debug server via WebSocket. The app must have AppDebugKit embedded.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["url"],
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "description": "WebSocket URL (e.g., ws://127.0.0.1:9222)"
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_disconnect",
-                "Disconnect from the app's debug server.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }))),
-            ),
-            Tool::new(
-                "app_get_info",
-                "Get runtime info from the connected app (name, bundle ID, version, etc.).",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }))),
-            ),
-            Tool::new(
-                "app_get_tree",
-                "Get the view hierarchy from the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "depth": {
-                            "type": "integer",
-                            "description": "Max depth to traverse (-1 for unlimited)",
-                            "default": 5
-                        },
-                        "root_id": {
-                            "type": "string",
-                            "description": "Element ID to start from (optional, defaults to key window)"
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_query",
-                "Find elements matching a CSS-like selector in the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["selector"],
-                    "properties": {
-                        "selector": {
-                            "type": "string",
-                            "description": "CSS-like selector (#id, .ClassName, [prop=value])"
-                        },
-                        "all": {
-                            "type": "boolean",
-                            "description": "Return all matches (default: first only)",
-                            "default": false
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_get_element",
-                "Get detailed information about an element by ID.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["element_id"],
-                    "properties": {
-                        "element_id": {
-                            "type": "string",
-                            "description": "Element ID to get details for"
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_click",
-                "Click an element in the connected app by ID.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["element_id"],
-                    "properties": {
-                        "element_id": {
-                            "type": "string",
-                            "description": "Element ID to click"
-                        },
-                        "click_count": {
-                            "type": "integer",
-                            "description": "Number of clicks (1 for single, 2 for double)",
-                            "default": 1
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_type",
-                "Type text into an element in the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["text"],
-                    "properties": {
-                        "text": {
-                            "type": "string",
-                            "description": "Text to type"
-                        },
-                        "element_id": {
-                            "type": "string",
-                            "description": "Element ID to type into (uses focused element if omitted)"
-                        },
-                        "clear_first": {
-                            "type": "boolean",
-                            "description": "Clear existing text first",
-                            "default": false
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_press_key",
-                "Press a key or key combination in the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["key"],
-                    "properties": {
-                        "key": {
-                            "type": "string",
-                            "description": "Key to press (e.g., 'Return', 'Tab', 'Escape')"
-                        },
-                        "modifiers": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Modifier keys: 'shift', 'control', 'option', 'command'",
-                            "default": []
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_focus",
-                "Focus an element in the connected app (make it first responder).",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["element_id"],
-                    "properties": {
-                        "element_id": {
-                            "type": "string",
-                            "description": "Element ID to focus"
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_screenshot",
-                "Take a screenshot of an element or window in the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "element_id": {
-                            "type": "string",
-                            "description": "Element ID to capture (whole window if omitted)"
-                        }
-                    }
-                }))),
-            ),
-            Tool::new(
-                "app_list_windows",
-                "List all windows in the connected app.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }))),
-            ),
-            Tool::new(
-                "app_focus_window",
-                "Focus a window in the connected app (make it key and main window).",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "required": ["window_id"],
-                    "properties": {
-                        "window_id": {
-                            "type": "string",
-                            "description": "Window ID to focus (e.g., 'window-1')"
                         }
                     }
                 }))),
@@ -499,13 +330,226 @@ impl MacOSDevToolsServer {
             ),
         ]
     }
+
+    /// The app_connect tool - always available to initiate connections
+    fn get_app_connect_tool() -> Tool {
+        Tool::new(
+            "app_connect",
+            "Connect to an app's debug server via WebSocket. The app must have AppDebugKit embedded.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "WebSocket URL (e.g., ws://127.0.0.1:9222)"
+                    },
+                    "expected_bundle_id": {
+                        "type": "string",
+                        "description": "Expected bundle ID (e.g., com.example.MyApp). Connection fails if mismatch."
+                    },
+                    "expected_app_name": {
+                        "type": "string",
+                        "description": "Expected app name (case-insensitive). Connection fails if mismatch."
+                    }
+                }
+            }))),
+        )
+    }
+
+    /// App debug tools - only available when connected to an app
+    fn get_app_tools() -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "app_disconnect",
+                "Disconnect from the app's debug server.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "app_get_info",
+                "Get runtime info from the connected app (name, bundle ID, version, etc.).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "app_get_tree",
+                "Get the view hierarchy from the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "depth": {
+                            "type": "integer",
+                            "description": "Max depth to traverse (-1 for unlimited)",
+                            "default": 5
+                        },
+                        "root_id": {
+                            "type": "string",
+                            "description": "Element ID to start from (optional, defaults to key window)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_query",
+                "Find elements matching a CSS-like selector in the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS-like selector (#id, .ClassName, [prop=value])"
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "Return all matches (default: first only)",
+                            "default": false
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_get_element",
+                "Get detailed information about an element by ID.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["element_id"],
+                    "properties": {
+                        "element_id": {
+                            "type": "string",
+                            "description": "Element ID to get details for"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_click",
+                "Click an element in the connected app by ID.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["element_id"],
+                    "properties": {
+                        "element_id": {
+                            "type": "string",
+                            "description": "Element ID to click"
+                        },
+                        "click_count": {
+                            "type": "integer",
+                            "description": "Number of clicks (1 for single, 2 for double)",
+                            "default": 1
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_type",
+                "Type text into an element in the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to type"
+                        },
+                        "element_id": {
+                            "type": "string",
+                            "description": "Element ID to type into (uses focused element if omitted)"
+                        },
+                        "clear_first": {
+                            "type": "boolean",
+                            "description": "Clear existing text first",
+                            "default": false
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_press_key",
+                "Press a key or key combination in the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Key to press (e.g., 'Return', 'Tab', 'Escape')"
+                        },
+                        "modifiers": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Modifier keys: 'shift', 'control', 'option', 'command'",
+                            "default": []
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_focus",
+                "Focus an element in the connected app (make it first responder).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["element_id"],
+                    "properties": {
+                        "element_id": {
+                            "type": "string",
+                            "description": "Element ID to focus"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_screenshot",
+                "Take a screenshot of an element or window in the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "element_id": {
+                            "type": "string",
+                            "description": "Element ID to capture (whole window if omitted)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "app_list_windows",
+                "List all windows in the connected app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "app_focus_window",
+                "Focus a window in the connected app (make it key and main window).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["window_id"],
+                    "properties": {
+                        "window_id": {
+                            "type": "string",
+                            "description": "Window ID to focus (e.g., 'window-1')"
+                        }
+                    }
+                }))),
+            ),
+        ]
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
             server_info: Implementation {
                 name: "native-devtools-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -528,8 +572,9 @@ impl ServerHandler for MacOSDevToolsServer {
         _request: PaginatedRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let connected = self.is_connected().await;
         Ok(ListToolsResult {
-            tools: Self::get_tools(),
+            tools: Self::get_tools(connected),
             next_cursor: None,
         })
     }
@@ -537,7 +582,7 @@ impl ServerHandler for MacOSDevToolsServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParam,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let args = request
             .arguments
@@ -569,9 +614,14 @@ impl ServerHandler for MacOSDevToolsServer {
             "app_connect" => {
                 let params: app_tools::AppConnectParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(app_tools::app_connect(params, self.app_client.clone()).await)
+                let result =
+                    app_tools::app_connect(params, self.app_client.clone(), context.peer).await;
+                Ok(result)
             }
-            "app_disconnect" => Ok(app_tools::app_disconnect(self.app_client.clone()).await),
+            "app_disconnect" => {
+                let result = app_tools::app_disconnect(self.app_client.clone(), context.peer).await;
+                Ok(result)
+            }
             "app_get_info" => Ok(app_tools::app_get_info(self.app_client.clone()).await),
             "app_get_tree" => {
                 let params: app_tools::AppGetTreeParams = serde_json::from_value(args)

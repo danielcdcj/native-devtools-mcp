@@ -1,0 +1,350 @@
+//! Tests for dynamic tool gating and identity validation
+//!
+//! These tests verify:
+//! 1. Tool list changes based on connection state
+//! 2. Server capability advertisement for tool list changes
+//! 3. Identity validation logic for expected_bundle_id and expected_app_name
+
+use native_devtools_mcp::server::MacOSDevToolsServer;
+use rmcp::handler::server::ServerHandler;
+
+#[cfg(test)]
+mod tool_gating {
+    use super::*;
+
+    #[test]
+    fn test_base_tools_always_present_when_disconnected() {
+        // When disconnected, should have base tools + app_connect
+        // app_* tools (except app_connect) should NOT be present
+
+        // This tests the get_tools(false) case
+        let tools = MacOSDevToolsServer::get_tools(false);
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        // Base tools should be present
+        assert!(tool_names.contains(&"take_screenshot".to_string()));
+        assert!(tool_names.contains(&"list_windows".to_string()));
+        assert!(tool_names.contains(&"click".to_string()));
+        assert!(tool_names.contains(&"type_text".to_string()));
+
+        // app_connect should always be present
+        assert!(tool_names.contains(&"app_connect".to_string()));
+
+        // app_* tools should NOT be present when disconnected
+        assert!(!tool_names.contains(&"app_disconnect".to_string()));
+        assert!(!tool_names.contains(&"app_get_info".to_string()));
+        assert!(!tool_names.contains(&"app_get_tree".to_string()));
+        assert!(!tool_names.contains(&"app_click".to_string()));
+    }
+
+    #[test]
+    fn test_app_tools_present_when_connected() {
+        // When connected, should have base tools + app_connect + all app_* tools
+
+        let tools = MacOSDevToolsServer::get_tools(true);
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        // Base tools should still be present
+        assert!(tool_names.contains(&"take_screenshot".to_string()));
+        assert!(tool_names.contains(&"list_windows".to_string()));
+
+        // app_connect should always be present
+        assert!(tool_names.contains(&"app_connect".to_string()));
+
+        // app_* tools should be present when connected
+        assert!(tool_names.contains(&"app_disconnect".to_string()));
+        assert!(tool_names.contains(&"app_get_info".to_string()));
+        assert!(tool_names.contains(&"app_get_tree".to_string()));
+        assert!(tool_names.contains(&"app_query".to_string()));
+        assert!(tool_names.contains(&"app_get_element".to_string()));
+        assert!(tool_names.contains(&"app_click".to_string()));
+        assert!(tool_names.contains(&"app_type".to_string()));
+        assert!(tool_names.contains(&"app_press_key".to_string()));
+        assert!(tool_names.contains(&"app_focus".to_string()));
+        assert!(tool_names.contains(&"app_screenshot".to_string()));
+        assert!(tool_names.contains(&"app_list_windows".to_string()));
+        assert!(tool_names.contains(&"app_focus_window".to_string()));
+    }
+
+    #[test]
+    fn test_tool_count_difference() {
+        let disconnected_tools = MacOSDevToolsServer::get_tools(false);
+        let connected_tools = MacOSDevToolsServer::get_tools(true);
+
+        // Connected state should have more tools
+        assert!(
+            connected_tools.len() > disconnected_tools.len(),
+            "Connected state should expose more tools than disconnected state"
+        );
+
+        // Verify the additional tools are all app_* tools (excluding app_connect which is always present)
+        let disconnected_names: std::collections::HashSet<String> = disconnected_tools
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let connected_names: std::collections::HashSet<String> =
+            connected_tools.iter().map(|t| t.name.to_string()).collect();
+
+        let added_tools: Vec<&String> = connected_names.difference(&disconnected_names).collect();
+
+        // All added tools should start with "app_"
+        for tool_name in &added_tools {
+            assert!(
+                tool_name.starts_with("app_"),
+                "Added tool '{}' should start with 'app_'",
+                tool_name
+            );
+        }
+
+        // There should be at least some app_* tools added
+        assert!(
+            !added_tools.is_empty(),
+            "At least one app_* tool should be added when connected"
+        );
+    }
+}
+
+#[cfg(test)]
+mod server_capabilities {
+    use super::*;
+
+    #[test]
+    fn test_server_advertises_tool_list_changed() {
+        let server = MacOSDevToolsServer::new();
+        let info = server.get_info();
+
+        // Check that tools capability exists
+        let tools_cap = info.capabilities.tools.as_ref();
+        assert!(
+            tools_cap.is_some(),
+            "Server should advertise tools capability"
+        );
+
+        // Check that list_changed is advertised
+        let tools = tools_cap.unwrap();
+        assert_eq!(
+            tools.list_changed,
+            Some(true),
+            "Server should advertise tools.listChanged capability"
+        );
+    }
+}
+
+#[cfg(test)]
+mod identity_validation {
+    //! Tests for expected_bundle_id and expected_app_name validation logic
+    //!
+    //! These tests exercise the extracted validation helpers that are used
+    //! by app_connect to validate app identity.
+
+    use native_devtools_mcp::tools::app_protocol::{
+        validate_app_name, validate_bundle_id, validate_identity, IdentityValidationResult,
+    };
+    use serde_json::json;
+
+    // MARK: - validate_bundle_id tests
+
+    #[test]
+    fn test_bundle_id_exact_match() {
+        assert!(validate_bundle_id("com.example.MyApp", "com.example.MyApp"));
+    }
+
+    #[test]
+    fn test_bundle_id_case_sensitive() {
+        // Bundle ID matching should be case-sensitive
+        assert!(!validate_bundle_id(
+            "com.example.MyApp",
+            "com.example.myapp"
+        ));
+        assert!(!validate_bundle_id(
+            "com.example.MyApp",
+            "COM.EXAMPLE.MYAPP"
+        ));
+    }
+
+    #[test]
+    fn test_bundle_id_different_ids() {
+        assert!(!validate_bundle_id("com.example.MyApp", "com.other.MyApp"));
+        assert!(!validate_bundle_id("com.example.MyApp", ""));
+    }
+
+    // MARK: - validate_app_name tests
+
+    #[test]
+    fn test_app_name_exact_match() {
+        assert!(validate_app_name("MyApp", "MyApp"));
+    }
+
+    #[test]
+    fn test_app_name_case_insensitive() {
+        assert!(validate_app_name("MyApp", "myapp"));
+        assert!(validate_app_name("MyApp", "MYAPP"));
+        assert!(validate_app_name("myapp", "MyApp"));
+    }
+
+    #[test]
+    fn test_app_name_whitespace_trimmed() {
+        assert!(validate_app_name("MyApp", "  MyApp  "));
+        assert!(validate_app_name("  MyApp  ", "MyApp"));
+        assert!(validate_app_name("  MyApp  ", "  myapp  "));
+    }
+
+    #[test]
+    fn test_app_name_different_names() {
+        assert!(!validate_app_name("MyApp", "OtherApp"));
+        assert!(!validate_app_name("MyApp", ""));
+    }
+
+    // MARK: - validate_identity tests (integration of both validations)
+
+    #[test]
+    fn test_validate_identity_no_expectations() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(None, None, &info),
+            IdentityValidationResult::Ok
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_bundle_id_match() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(Some("com.test.TestApp"), None, &info),
+            IdentityValidationResult::Ok
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_bundle_id_mismatch() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(Some("com.other.App"), None, &info),
+            IdentityValidationResult::BundleIdMismatch {
+                expected: "com.other.App".to_string(),
+                actual: "com.test.TestApp".to_string(),
+                actual_app_name: "TestApp".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_app_name_match() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(None, Some("TestApp"), &info),
+            IdentityValidationResult::Ok
+        );
+        // Case-insensitive
+        assert_eq!(
+            validate_identity(None, Some("testapp"), &info),
+            IdentityValidationResult::Ok
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_app_name_mismatch() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(None, Some("OtherApp"), &info),
+            IdentityValidationResult::AppNameMismatch {
+                expected: "OtherApp".to_string(),
+                actual: "TestApp".to_string(),
+                actual_bundle_id: "com.test.TestApp".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_both_expectations_pass() {
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        assert_eq!(
+            validate_identity(Some("com.test.TestApp"), Some("testapp"), &info),
+            IdentityValidationResult::Ok
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_bundle_id_checked_first() {
+        // When both are provided, bundle ID is checked first
+        let info = json!({
+            "appName": "TestApp",
+            "bundleId": "com.test.TestApp"
+        });
+
+        // Both mismatch - should return BundleIdMismatch since it's checked first
+        let result = validate_identity(Some("com.wrong.Id"), Some("WrongName"), &info);
+        assert!(matches!(
+            result,
+            IdentityValidationResult::BundleIdMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_identity_missing_fields() {
+        // Empty info object
+        let info = json!({});
+
+        // Missing bundleId should fail if expected
+        assert_eq!(
+            validate_identity(Some("com.test.App"), None, &info),
+            IdentityValidationResult::BundleIdMismatch {
+                expected: "com.test.App".to_string(),
+                actual: "".to_string(),
+                actual_app_name: "".to_string(),
+            }
+        );
+
+        // Missing appName should fail if expected
+        assert_eq!(
+            validate_identity(None, Some("TestApp"), &info),
+            IdentityValidationResult::AppNameMismatch {
+                expected: "TestApp".to_string(),
+                actual: "".to_string(),
+                actual_bundle_id: "".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_identity_whitespace_in_app_name() {
+        let info = json!({
+            "appName": "  TestApp  ",
+            "bundleId": "com.test.TestApp"
+        });
+
+        // Should still match with trimming
+        assert_eq!(
+            validate_identity(None, Some("TestApp"), &info),
+            IdentityValidationResult::Ok
+        );
+        assert_eq!(
+            validate_identity(None, Some("  testapp  "), &info),
+            IdentityValidationResult::Ok
+        );
+    }
+}
