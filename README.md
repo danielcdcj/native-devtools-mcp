@@ -114,6 +114,14 @@ This MCP server requires macOS privacy permissions to capture screenshots and si
 3. Add the same app as above (VS Code, Terminal, etc.)
 4. **Quit and restart the app completely**
 
+#### 3. Tesseract OCR (required for `find_text`)
+
+The `find_text` tool uses OCR to locate text on screen and return clickable coordinates. This is the **recommended way** to interact with apps when AppDebugKit is not available.
+
+```bash
+brew install tesseract
+```
+
 ### Important Notes
 
 - **Grant permissions to the host app** (VS Code, Terminal), not to the MCP server binary itself
