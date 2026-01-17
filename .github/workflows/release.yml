@@ -102,6 +102,9 @@ jobs:
           cp artifacts/npm-darwin-arm64/bin/native-devtools-mcp npm/darwin-arm64/bin/
           chmod +x npm/darwin-arm64/bin/native-devtools-mcp
 
+      - name: Copy README to npm package
+        run: cp README.md npm/
+
       - name: Update versions from tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
