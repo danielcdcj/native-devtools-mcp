@@ -489,6 +489,10 @@ impl MacOSDevToolsServer {
                         "text": {
                             "type": "string",
                             "description": "Text to search for (case-insensitive)"
+                        },
+                        "display_id": {
+                            "type": "integer",
+                            "description": "Display ID to search on. Use get_displays to list available displays. If omitted, searches the main display."
                         }
                     }
                 }))),
@@ -619,32 +623,32 @@ impl ServerHandler for MacOSDevToolsServer {
             "click" => {
                 let params: input_tools::ClickParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::click(params))
+                Ok(input_tools::click(params).await)
             }
             "move_mouse" => {
                 let params: input_tools::MoveMouseParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::move_mouse(params))
+                Ok(input_tools::move_mouse(params).await)
             }
             "drag" => {
                 let params: input_tools::DragParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::drag(params))
+                Ok(input_tools::drag(params).await)
             }
             "scroll" => {
                 let params: input_tools::ScrollParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::scroll(params))
+                Ok(input_tools::scroll(params).await)
             }
             "type_text" => {
                 let params: input_tools::TypeTextParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::type_text(params))
+                Ok(input_tools::type_text(params).await)
             }
             "press_key" => {
                 let params: input_tools::PressKeyParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(input_tools::press_key(params))
+                Ok(input_tools::press_key(params).await)
             }
             "get_displays" => {
                 let params: input_tools::GetDisplaysParams = serde_json::from_value(args)

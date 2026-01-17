@@ -1,4 +1,7 @@
 //! Input tools for system-level mouse and keyboard simulation.
+//!
+//! These tools wrap CGEvent-based input operations in `spawn_blocking` to avoid
+//! blocking the tokio runtime, since CGEvent operations use `thread::sleep`.
 
 use crate::macos::{display, input, ocr};
 use rmcp::model::{CallToolResult, Content};
@@ -16,6 +19,20 @@ fn check_permission() -> Option<CallToolResult> {
         )]));
     }
     None
+}
+
+/// Run a blocking input operation and convert the result to CallToolResult.
+async fn run_input<F>(op: F, success_msg: String, error_prefix: &str) -> CallToolResult
+where
+    F: FnOnce() -> Result<(), String> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(op).await {
+        Ok(Ok(())) => CallToolResult::success(vec![Content::text(success_msg)]),
+        Ok(Err(e)) => {
+            CallToolResult::error(vec![Content::text(format!("{}: {}", error_prefix, e))])
+        }
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Task failed: {}", e))]),
+    }
 }
 
 // ============================================================================
@@ -56,7 +73,7 @@ fn default_click_count() -> u32 {
     1
 }
 
-pub fn click(params: ClickParams) -> CallToolResult {
+pub async fn click(params: ClickParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
@@ -77,13 +94,14 @@ pub fn click(params: ClickParams) -> CallToolResult {
     {
         // Window-relative coordinates
         let window = match crate::macos::find_window_by_id(window_id) {
-            Some(w) => w,
-            None => {
+            Ok(Some(w)) => w,
+            Ok(None) => {
                 return CallToolResult::error(vec![Content::text(format!(
                     "Window {} not found",
                     window_id
                 ))])
             }
+            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
         };
 
         let bounds = display::WindowBounds {
@@ -98,13 +116,14 @@ pub fn click(params: ClickParams) -> CallToolResult {
     ) {
         // Screenshot pixel coordinates
         let window = match crate::macos::find_window_by_id(window_id) {
-            Some(w) => w,
-            None => {
+            Ok(Some(w)) => w,
+            Ok(None) => {
                 return CallToolResult::error(vec![Content::text(format!(
                     "Window {} not found",
                     window_id
                 ))])
             }
+            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
         };
 
         let bounds = display::WindowBounds {
@@ -124,13 +143,13 @@ pub fn click(params: ClickParams) -> CallToolResult {
         )]);
     };
 
-    match input::click(x, y, button, params.click_count) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
-            "Clicked at ({:.0}, {:.0})",
-            x, y
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Click failed: {}", e))]),
-    }
+    let click_count = params.click_count;
+    run_input(
+        move || input::click(x, y, button, click_count),
+        format!("Clicked at ({:.0}, {:.0})", x, y),
+        "Click failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -145,18 +164,18 @@ pub struct MoveMouseParams {
     pub y: f64,
 }
 
-pub fn move_mouse(params: MoveMouseParams) -> CallToolResult {
+pub async fn move_mouse(params: MoveMouseParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
 
-    match input::move_mouse(params.x, params.y) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
-            "Moved mouse to ({:.0}, {:.0})",
-            params.x, params.y
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Move failed: {}", e))]),
-    }
+    let (x, y) = (params.x, params.y);
+    run_input(
+        move || input::move_mouse(x, y),
+        format!("Moved mouse to ({:.0}, {:.0})", x, y),
+        "Move failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -178,7 +197,7 @@ pub struct DragParams {
     pub button: Option<String>,
 }
 
-pub fn drag(params: DragParams) -> CallToolResult {
+pub async fn drag(params: DragParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
@@ -189,19 +208,17 @@ pub fn drag(params: DragParams) -> CallToolResult {
         _ => input::MouseButton::Left,
     };
 
-    match input::drag(
-        params.start_x,
-        params.start_y,
-        params.end_x,
-        params.end_y,
-        button,
-    ) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
+    let (start_x, start_y, end_x, end_y) =
+        (params.start_x, params.start_y, params.end_x, params.end_y);
+    run_input(
+        move || input::drag(start_x, start_y, end_x, end_y, button),
+        format!(
             "Dragged from ({:.0}, {:.0}) to ({:.0}, {:.0})",
-            params.start_x, params.start_y, params.end_x, params.end_y
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Drag failed: {}", e))]),
-    }
+            start_x, start_y, end_x, end_y
+        ),
+        "Drag failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -221,18 +238,21 @@ pub struct ScrollParams {
     pub delta_y: i32,
 }
 
-pub fn scroll(params: ScrollParams) -> CallToolResult {
+pub async fn scroll(params: ScrollParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
 
-    match input::scroll(params.x, params.y, params.delta_x, params.delta_y) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
+    let (x, y, delta_x, delta_y) = (params.x, params.y, params.delta_x, params.delta_y);
+    run_input(
+        move || input::scroll(x, y, delta_x, delta_y),
+        format!(
             "Scrolled at ({:.0}, {:.0}) by ({}, {})",
-            params.x, params.y, params.delta_x, params.delta_y
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Scroll failed: {}", e))]),
-    }
+            x, y, delta_x, delta_y
+        ),
+        "Scroll failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -245,18 +265,19 @@ pub struct TypeTextParams {
     pub text: String,
 }
 
-pub fn type_text(params: TypeTextParams) -> CallToolResult {
+pub async fn type_text(params: TypeTextParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
 
-    match input::type_text(&params.text) {
-        Ok(()) => CallToolResult::success(vec![Content::text(format!(
-            "Typed {} characters",
-            params.text.len()
-        ))]),
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Type failed: {}", e))]),
-    }
+    let len = params.text.len();
+    let text = params.text;
+    run_input(
+        move || input::type_text(&text),
+        format!("Typed {} characters", len),
+        "Type failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -272,22 +293,25 @@ pub struct PressKeyParams {
     pub modifiers: Vec<String>,
 }
 
-pub fn press_key(params: PressKeyParams) -> CallToolResult {
+pub async fn press_key(params: PressKeyParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
     }
 
-    match input::press_key(&params.key, &params.modifiers) {
-        Ok(()) => {
-            let key_desc = if params.modifiers.is_empty() {
-                params.key.clone()
-            } else {
-                format!("{}+{}", params.modifiers.join("+"), params.key)
-            };
-            CallToolResult::success(vec![Content::text(format!("Pressed {}", key_desc))])
-        }
-        Err(e) => CallToolResult::error(vec![Content::text(format!("Key press failed: {}", e))]),
-    }
+    let key_desc = if params.modifiers.is_empty() {
+        params.key.clone()
+    } else {
+        format!("{}+{}", params.modifiers.join("+"), params.key)
+    };
+
+    let key = params.key;
+    let modifiers = params.modifiers;
+    run_input(
+        move || input::press_key(&key, &modifiers),
+        format!("Pressed {}", key_desc),
+        "Key press failed",
+    )
+    .await
 }
 
 // ============================================================================
@@ -320,22 +344,21 @@ pub fn get_displays(_params: GetDisplaysParams) -> CallToolResult {
 #[derive(Debug, Deserialize)]
 pub struct FindTextParams {
     pub text: String,
+    /// Optional display ID to search on. If omitted, searches the main display.
+    pub display_id: Option<u32>,
 }
 
 pub fn find_text(params: FindTextParams) -> CallToolResult {
-    match ocr::find_text(&params.text) {
-        Ok(matches) if matches.is_empty() => {
-            CallToolResult::success(vec![Content::text(format!(
-                "No matches found for \"{}\"",
-                params.text
-            ))])
-        }
+    match ocr::find_text(&params.text, params.display_id) {
+        Ok(matches) if matches.is_empty() => CallToolResult::success(vec![Content::text(format!(
+            "No matches found for \"{}\"",
+            params.text
+        ))]),
         Ok(matches) => match serde_json::to_string_pretty(&matches) {
             Ok(json) => CallToolResult::success(vec![Content::text(json)]),
-            Err(e) => CallToolResult::error(vec![Content::text(format!(
-                "Failed to serialize: {}",
-                e
-            ))]),
+            Err(e) => {
+                CallToolResult::error(vec![Content::text(format!("Failed to serialize: {}", e))])
+            }
         },
         Err(e) => CallToolResult::error(vec![Content::text(e)]),
     }

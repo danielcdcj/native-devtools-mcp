@@ -34,9 +34,17 @@ final class ViewRegistry {
         if let view = box.value {
             return view
         }
-        // Clean up stale reference
+        // Clean up stale references from both maps
+        if let staleObjectId = findObjectId(for: id) {
+            viewToId.removeValue(forKey: staleObjectId)
+        }
         idToView.removeValue(forKey: id)
         return nil
+    }
+
+    /// Find the ObjectIdentifier for a given ID (for cleanup)
+    private func findObjectId(for id: String) -> ObjectIdentifier? {
+        viewToId.first { $0.value == id }?.key
     }
 
     /// Clear all references (useful for testing)
@@ -44,6 +52,22 @@ final class ViewRegistry {
         viewToId.removeAll()
         idToView.removeAll()
         nextId = 1
+    }
+
+    /// Periodically clean up stale entries where the view has been deallocated
+    func cleanupStaleEntries() {
+        var staleIds: [String] = []
+        for (id, box) in idToView {
+            if box.value == nil {
+                staleIds.append(id)
+            }
+        }
+        for id in staleIds {
+            if let objectId = findObjectId(for: id) {
+                viewToId.removeValue(forKey: objectId)
+            }
+            idToView.removeValue(forKey: id)
+        }
     }
 }
 
@@ -85,14 +109,39 @@ final class WindowRegistry {
         if let window = box.value {
             return window
         }
+        // Clean up stale references from both maps
+        if let staleObjectId = findObjectId(for: id) {
+            windowToId.removeValue(forKey: staleObjectId)
+        }
         idToWindow.removeValue(forKey: id)
         return nil
+    }
+
+    /// Find the ObjectIdentifier for a given ID (for cleanup)
+    private func findObjectId(for id: String) -> ObjectIdentifier? {
+        windowToId.first { $0.value == id }?.key
     }
 
     func reset() {
         windowToId.removeAll()
         idToWindow.removeAll()
         nextId = 1
+    }
+
+    /// Periodically clean up stale entries where the window has been deallocated
+    func cleanupStaleEntries() {
+        var staleIds: [String] = []
+        for (id, box) in idToWindow {
+            if box.value == nil {
+                staleIds.append(id)
+            }
+        }
+        for id in staleIds {
+            if let objectId = findObjectId(for: id) {
+                windowToId.removeValue(forKey: objectId)
+            }
+            idToWindow.removeValue(forKey: id)
+        }
     }
 }
 

@@ -104,9 +104,13 @@ pub async fn app_disconnect(client: SharedClient) -> CallToolResult {
     }
 }
 
+/// Helper to get a cloned client, releasing the lock before async operations
+async fn get_client(shared: &SharedClient) -> Option<AppProtocolClient> {
+    shared.read().await.clone()
+}
+
 pub async fn app_get_info(client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -119,8 +123,7 @@ pub async fn app_get_info(client: SharedClient) -> CallToolResult {
 }
 
 pub async fn app_get_tree(params: AppGetTreeParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -136,8 +139,7 @@ pub async fn app_get_tree(params: AppGetTreeParams, client: SharedClient) -> Cal
 }
 
 pub async fn app_query(params: AppQueryParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -156,8 +158,7 @@ pub async fn app_query(params: AppQueryParams, client: SharedClient) -> CallTool
 }
 
 pub async fn app_get_element(params: AppGetElementParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -170,8 +171,7 @@ pub async fn app_get_element(params: AppGetElementParams, client: SharedClient) 
 }
 
 pub async fn app_click(params: AppClickParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -185,8 +185,7 @@ pub async fn app_click(params: AppClickParams, client: SharedClient) -> CallTool
 }
 
 pub async fn app_type(params: AppTypeParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -204,8 +203,7 @@ pub async fn app_type(params: AppTypeParams, client: SharedClient) -> CallToolRe
 }
 
 pub async fn app_press_key(params: AppPressKeyParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -216,8 +214,7 @@ pub async fn app_press_key(params: AppPressKeyParams, client: SharedClient) -> C
 }
 
 pub async fn app_focus(params: AppFocusParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -231,8 +228,7 @@ pub async fn app_focus(params: AppFocusParams, client: SharedClient) -> CallTool
 }
 
 pub async fn app_screenshot(params: AppScreenshotParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -256,8 +252,7 @@ pub async fn app_screenshot(params: AppScreenshotParams, client: SharedClient) -
 }
 
 pub async fn app_list_windows(client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 
@@ -269,9 +264,11 @@ pub async fn app_list_windows(client: SharedClient) -> CallToolResult {
     }
 }
 
-pub async fn app_focus_window(params: AppFocusWindowParams, client: SharedClient) -> CallToolResult {
-    let guard = client.read().await;
-    let Some(client) = guard.as_ref() else {
+pub async fn app_focus_window(
+    params: AppFocusWindowParams,
+    client: SharedClient,
+) -> CallToolResult {
+    let Some(client) = get_client(&client).await else {
         return CallToolResult::error(vec![Content::text("Not connected. Use app_connect first.")]);
     };
 

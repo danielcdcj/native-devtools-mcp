@@ -1,3 +1,4 @@
+use super::display;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::process::Command;
 use tempfile::tempdir;
@@ -15,6 +16,9 @@ pub enum ScreenshotError {
 
 pub struct Screenshot {
     pub png_data: Vec<u8>,
+    /// The backing scale factor of the display this screenshot was taken from.
+    /// Used for converting pixel coordinates to screen coordinates in OCR.
+    pub scale_factor: f64,
 }
 
 impl Screenshot {
@@ -39,8 +43,15 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
         ));
     }
 
+    let scale_factor = display::get_main_display()
+        .map(|d| d.backing_scale_factor)
+        .unwrap_or(2.0);
+
     let png_data = std::fs::read(&path)?;
-    Ok(Screenshot { png_data })
+    Ok(Screenshot {
+        png_data,
+        scale_factor,
+    })
 }
 
 /// Capture a specific region of the screen using screencapture
@@ -70,8 +81,14 @@ pub fn capture_region(
         ));
     }
 
+    // Determine scale factor based on which display the region is on
+    let scale_factor = display::backing_scale_for_point(x, y);
+
     let png_data = std::fs::read(&path)?;
-    Ok(Screenshot { png_data })
+    Ok(Screenshot {
+        png_data,
+        scale_factor,
+    })
 }
 
 /// Capture a specific window by its ID using screencapture
@@ -95,5 +112,15 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
         return Err(ScreenshotError::WindowNotFound(window_id));
     }
 
-    Ok(Screenshot { png_data })
+    // Determine scale factor based on window position
+    let scale_factor = super::find_window_by_id(window_id)
+        .ok()
+        .flatten()
+        .map(|w| display::backing_scale_for_point(w.bounds.x, w.bounds.y))
+        .unwrap_or(2.0);
+
+    Ok(Screenshot {
+        png_data,
+        scale_factor,
+    })
 }

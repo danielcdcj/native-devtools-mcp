@@ -18,8 +18,8 @@ pub struct TextMatch {
 /// Run OCR on an image file and return all text with coordinates.
 /// The `scale` parameter is used to convert pixel coordinates to screen coordinates.
 fn run_ocr_on_file(image_path: &Path, scale: f64) -> Result<Vec<TextMatch>, String> {
-    let tsv_base = NamedTempFile::new()
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    let tsv_base =
+        NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
     let tsv_base_path = tsv_base.path().to_str().unwrap().to_string();
 
     let output = Command::new("tesseract")
@@ -41,8 +41,8 @@ fn run_ocr_on_file(image_path: &Path, scale: f64) -> Result<Vec<TextMatch>, Stri
 
     // Parse TSV
     let tsv_path = format!("{}.tsv", tsv_base_path);
-    let tsv = std::fs::read_to_string(&tsv_path)
-        .map_err(|e| format!("Failed to read TSV: {}", e))?;
+    let tsv =
+        std::fs::read_to_string(&tsv_path).map_err(|e| format!("Failed to read TSV: {}", e))?;
     let _ = std::fs::remove_file(&tsv_path);
 
     let matches: Vec<TextMatch> = tsv
@@ -79,53 +79,79 @@ fn run_ocr_on_file(image_path: &Path, scale: f64) -> Result<Vec<TextMatch>, Stri
 
 /// Run OCR on PNG image data and return all detected text with screen coordinates.
 /// Used by take_screenshot to include OCR annotations.
-pub fn ocr_image(png_data: &[u8]) -> Result<Vec<TextMatch>, String> {
-    let scale = display::get_main_display()?.backing_scale_factor;
+///
+/// If `scale` is provided, it will be used to convert pixel coordinates to screen coordinates.
+/// Otherwise, the main display's backing scale factor is used as a fallback.
+pub fn ocr_image(png_data: &[u8], scale: Option<f64>) -> Result<Vec<TextMatch>, String> {
+    let scale = scale.unwrap_or_else(|| {
+        display::get_main_display()
+            .map(|d| d.backing_scale_factor)
+            .unwrap_or(2.0)
+    });
 
-    // Write PNG data to temp file
-    let image_path = std::env::temp_dir().join(format!(
-        "native-devtools-ocr-{}.png",
-        std::process::id()
-    ));
-    std::fs::write(&image_path, png_data)
+    // Write PNG data to unique temp file (auto-cleaned on drop)
+    let temp_file = tempfile::Builder::new()
+        .prefix("native-devtools-ocr-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    std::fs::write(temp_file.path(), png_data)
         .map_err(|e| format!("Failed to write temp image: {}", e))?;
 
-    let result = run_ocr_on_file(&image_path, scale);
-
-    // Clean up
-    let _ = std::fs::remove_file(&image_path);
-
-    result
+    run_ocr_on_file(temp_file.path(), scale)
 }
 
 /// Find text on screen using OCR. Returns screen coordinates for each match.
-pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
-    let scale = display::get_main_display()?.backing_scale_factor;
+///
+/// If `display_id` is provided, captures that specific display and uses its scale factor.
+/// Otherwise, captures the main display.
+pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
+    // Get the target display info
+    let display = match display_id {
+        Some(id) => display::get_displays()?
+            .into_iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("Display {} not found", id))?,
+        None => display::get_main_display()?,
+    };
 
-    // Take screenshot using a simple temp path
-    let screenshot_path = std::env::temp_dir().join(format!(
-        "native-devtools-ocr-{}.png",
-        std::process::id()
-    ));
+    let scale = display.backing_scale_factor;
 
+    // Take screenshot to unique temp file (auto-cleaned on drop)
+    let temp_file = tempfile::Builder::new()
+        .prefix("native-devtools-ocr-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    // Use -D flag to capture specific display
     let status = Command::new("screencapture")
-        .args(["-x", screenshot_path.to_str().unwrap()])
+        .args([
+            "-x",
+            "-D",
+            &display.id.to_string(),
+            temp_file.path().to_str().unwrap(),
+        ])
         .status()
         .map_err(|e| format!("screencapture failed: {}", e))?;
 
     if !status.success() {
-        let _ = std::fs::remove_file(&screenshot_path);
         return Err("screencapture failed".to_string());
     }
 
-    let result = run_ocr_on_file(&screenshot_path, scale);
+    // Run OCR and adjust coordinates to account for display offset
+    let mut matches = run_ocr_on_file(temp_file.path(), scale)?;
 
-    // Clean up screenshot
-    let _ = std::fs::remove_file(&screenshot_path);
+    // Offset coordinates by display origin for multi-display setups
+    for m in &mut matches {
+        m.x += display.bounds.x;
+        m.y += display.bounds.y;
+    }
 
     // Filter by search term
     let search_lower = search.to_lowercase();
-    let mut matches: Vec<TextMatch> = result?
+    let mut matches: Vec<TextMatch> = matches
         .into_iter()
         .filter(|m| m.text.to_lowercase().contains(&search_lower))
         .collect();

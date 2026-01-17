@@ -20,117 +20,18 @@ pub struct WindowBounds {
     pub height: f64,
 }
 
-/// List all visible windows on screen using AppleScript
-pub fn list_windows() -> Vec<WindowInfo> {
-    // Use AppleScript to get window info, output as JSON for reliable parsing
-    let script = r#"
-    use framework "Foundation"
-    use scripting additions
-
-    tell application "System Events"
-        set windowList to {}
-        repeat with proc in (every process whose background only is false)
-            try
-                set procName to name of proc
-                set procPID to unix id of proc
-                repeat with w in windows of proc
-                    try
-                        set winName to name of w
-                        set winPos to position of w
-                        set winSize to size of w
-                        set windowData to "WINDOW:" & procName & "|" & procPID & "|" & winName & "|" & (item 1 of winPos) & "|" & (item 2 of winPos) & "|" & (item 1 of winSize) & "|" & (item 2 of winSize)
-                        set end of windowList to windowData
-                    end try
-                end repeat
-            end try
-        end repeat
-        return windowList
-    end tell
-    "#;
-
-    let output = Command::new("osascript").arg("-e").arg(script).output();
-
-    let mut windows = Vec::new();
-
-    if let Ok(output) = output {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse the AppleScript output
-            if let Some(parsed) = parse_applescript_output(&stdout) {
-                windows = parsed;
-            }
-        }
-    }
-
-    // Fallback: use CGWindowListCopyWindowInfo via a helper
-    if windows.is_empty() {
-        windows = list_windows_via_cg();
-    }
-
-    windows
+/// List all visible windows on screen using CGWindowListCopyWindowInfo.
+///
+/// This function uses the CG API via Python/PyObjC to ensure consistent window IDs
+/// (CGWindowNumber) that are compatible with system operations like `screencapture -l`.
+///
+/// Returns an error if python3 or PyObjC (Quartz module) is not available.
+pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
+    list_windows_via_cg()
 }
 
-fn parse_applescript_output(output: &str) -> Option<Vec<WindowInfo>> {
-    let mut windows = Vec::new();
-    let trimmed = output.trim();
-
-    if trimmed.is_empty() {
-        return Some(windows);
-    }
-
-    // Parse output format: WINDOW:app|pid|name|x|y|w|h, WINDOW:app|pid|name|x|y|w|h, ...
-    let mut id_counter = 1u32;
-
-    for part in trimmed.split(", WINDOW:") {
-        let item = part.trim_start_matches("WINDOW:");
-        if let Some(window) = parse_window_item(item, id_counter) {
-            windows.push(window);
-            id_counter += 1;
-        }
-    }
-
-    Some(windows)
-}
-
-fn parse_window_item(item: &str, id: u32) -> Option<WindowInfo> {
-    let parts: Vec<&str> = item.split('|').collect();
-    if parts.len() < 7 {
-        return None;
-    }
-
-    let owner_name = parts[0].to_string();
-    let owner_pid = parts[1].parse().ok()?;
-    let name = {
-        let n = parts[2].to_string();
-        if n.is_empty() || n == "missing value" {
-            None
-        } else {
-            Some(n)
-        }
-    };
-    let x = parts[3].parse().ok()?;
-    let y = parts[4].parse().ok()?;
-    let width = parts[5].parse().ok()?;
-    let height = parts[6].parse().ok()?;
-
-    Some(WindowInfo {
-        id,
-        name,
-        owner_name,
-        owner_pid,
-        bounds: WindowBounds {
-            x,
-            y,
-            width,
-            height,
-        },
-        layer: 0,
-        is_on_screen: true,
-    })
-}
-
-/// Fallback: use CGWindowListCopyWindowInfo via Python
-fn list_windows_via_cg() -> Vec<WindowInfo> {
+/// Use CGWindowListCopyWindowInfo via Python to get actual CGWindowNumbers
+fn list_windows_via_cg() -> Result<Vec<WindowInfo>, String> {
     let script = r#"
 import Quartz
 import json
@@ -161,33 +62,41 @@ for w in windows:
 print(json.dumps(result))
 "#;
 
-    let output = Command::new("python3").arg("-c").arg(script).output();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .map_err(|e| format!("Failed to execute python3: {}. Is python3 installed?", e))?;
 
-    if let Ok(output) = output {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(windows) = serde_json::from_str::<Vec<WindowInfo>>(&stdout) {
-                return windows;
-            }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No module named") || stderr.contains("ModuleNotFoundError") {
+            return Err(
+                "PyObjC (Quartz module) not found. Install with: pip3 install pyobjc-framework-Quartz"
+                    .to_string(),
+            );
         }
+        return Err(format!("python3 script failed: {}", stderr));
     }
 
-    Vec::new()
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Vec<WindowInfo>>(&stdout)
+        .map_err(|e| format!("Failed to parse window list: {}", e))
 }
 
 /// Find a window by its ID
-pub fn find_window_by_id(window_id: u32) -> Option<WindowInfo> {
-    list_windows().into_iter().find(|w| w.id == window_id)
+pub fn find_window_by_id(window_id: u32) -> Result<Option<WindowInfo>, String> {
+    Ok(list_windows()?.into_iter().find(|w| w.id == window_id))
 }
 
 /// Find windows by application name
-pub fn find_windows_by_app(app_name: &str) -> Vec<WindowInfo> {
-    list_windows()
+pub fn find_windows_by_app(app_name: &str) -> Result<Vec<WindowInfo>, String> {
+    Ok(list_windows()?
         .into_iter()
         .filter(|w| {
             w.owner_name
                 .to_lowercase()
                 .contains(&app_name.to_lowercase())
         })
-        .collect()
+        .collect())
 }

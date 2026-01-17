@@ -70,7 +70,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 
             // Run OCR if requested
             if params.include_ocr {
-                match macos::ocr_image(&screenshot.png_data) {
+                match macos::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor)) {
                     Ok(matches) => {
                         if !matches.is_empty() {
                             let ocr_text = format_ocr_results(&matches);
@@ -94,10 +94,7 @@ fn format_ocr_results(matches: &[macos::TextMatch]) -> String {
     let mut result = String::from("## OCR Text Detected (click coordinates)\n\n");
 
     for m in matches.iter().filter(|m| m.confidence > 50.0) {
-        result.push_str(&format!(
-            "- \"{}\" at ({:.0}, {:.0})\n",
-            m.text, m.x, m.y
-        ));
+        result.push_str(&format!("- \"{}\" at ({:.0}, {:.0})\n", m.text, m.x, m.y));
     }
 
     result

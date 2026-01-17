@@ -10,9 +10,15 @@ pub struct ListWindowsParams {
 
 pub fn list_windows(params: ListWindowsParams) -> CallToolResult {
     let windows = if let Some(app_name) = params.app_name {
-        macos::find_windows_by_app(&app_name)
+        match macos::find_windows_by_app(&app_name) {
+            Ok(w) => w,
+            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+        }
     } else {
-        macos::list_windows()
+        match macos::list_windows() {
+            Ok(w) => w,
+            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+        }
     };
 
     match serde_json::to_string_pretty(&windows) {
@@ -58,13 +64,15 @@ pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
         macos::activate_app_by_pid(pid)
     } else if let Some(window_id) = params.window_id {
         // For window_id, we need to find the app that owns it and activate that
-        if let Some(window) = macos::find_window_by_id(window_id) {
-            macos::activate_app_by_pid(window.owner_pid as i32)
-        } else {
-            return CallToolResult::error(vec![Content::text(format!(
-                "Window {} not found",
-                window_id
-            ))]);
+        match macos::find_window_by_id(window_id) {
+            Ok(Some(window)) => macos::activate_app_by_pid(window.owner_pid as i32),
+            Ok(None) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Window {} not found",
+                    window_id
+                ))]);
+            }
+            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
         }
     } else {
         return CallToolResult::error(vec![Content::text(

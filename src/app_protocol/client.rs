@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::time::{timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
@@ -12,6 +13,9 @@ use url::Url;
 pub enum ClientError {
     #[error("Failed to parse URL: {0}")]
     UrlParseError(#[from] url::ParseError),
+
+    #[error("Invalid URL scheme: expected 'ws' or 'wss', got '{0}'")]
+    InvalidScheme(String),
 
     #[error("WebSocket connection failed: {0}")]
     ConnectionError(#[from] tokio_tungstenite::tungstenite::Error),
@@ -21,6 +25,9 @@ pub enum ClientError {
 
     #[error("Failed to receive response")]
     ReceiveError,
+
+    #[error("Request timed out after {0} seconds")]
+    Timeout(u64),
 
     #[error("JSON serialization error: {0}")]
     JsonError(#[from] serde_json::Error),
@@ -40,19 +47,27 @@ impl From<ProtocolError> for ClientError {
 
 type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<ProtocolResponse>>>>;
 
+/// Default timeout for requests in seconds
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 /// WebSocket client for connecting to app's debug server
 #[derive(Clone)]
 pub struct AppProtocolClient {
     sender: mpsc::Sender<Message>,
     pending: PendingRequests,
     next_id: Arc<AtomicU64>,
+    request_timeout: Duration,
 }
 
 impl AppProtocolClient {
     /// Connect to an app's debug server
     pub async fn connect(url_str: &str) -> Result<Self, ClientError> {
-        // Validate URL format
-        let _url = Url::parse(url_str)?;
+        // Validate URL format and scheme
+        let url = Url::parse(url_str)?;
+        match url.scheme() {
+            "ws" | "wss" => {}
+            scheme => return Err(ClientError::InvalidScheme(scheme.to_string())),
+        }
         // Pass string directly since tungstenite accepts &str
         let (ws_stream, _) = connect_async(url_str).await?;
         let (mut write, mut read) = ws_stream.split();
@@ -88,6 +103,7 @@ impl AppProtocolClient {
             sender: tx,
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
         })
     }
 
@@ -105,24 +121,31 @@ impl AppProtocolClient {
         };
 
         let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = self.pending.lock().await;
-            pending.insert(id, tx);
-        }
+        self.pending.lock().await.insert(id, tx);
 
         let msg = Message::Text(serde_json::to_string(&request)?);
-        self.sender
-            .send(msg)
-            .await
-            .map_err(|_| ClientError::SendError)?;
-
-        let response = rx.await.map_err(|_| ClientError::ReceiveError)?;
-
-        if let Some(error) = response.error {
-            return Err(error.into());
+        if self.sender.send(msg).await.is_err() {
+            self.pending.lock().await.remove(&id);
+            return Err(ClientError::SendError);
         }
 
-        Ok(response.result.unwrap_or(serde_json::Value::Null))
+        let timeout_secs = self.request_timeout.as_secs();
+        match timeout(self.request_timeout, rx).await {
+            Ok(Ok(response)) => {
+                if let Some(error) = response.error {
+                    return Err(error.into());
+                }
+                Ok(response.result.unwrap_or(serde_json::Value::Null))
+            }
+            Ok(Err(_)) => {
+                self.pending.lock().await.remove(&id);
+                Err(ClientError::ReceiveError)
+            }
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err(ClientError::Timeout(timeout_secs))
+            }
+        }
     }
 
     // MARK: - Convenience Methods
@@ -138,18 +161,11 @@ impl AppProtocolClient {
         depth: Option<i32>,
         root_id: Option<&str>,
     ) -> Result<serde_json::Value, ClientError> {
-        let mut params = serde_json::Map::new();
-        if let Some(d) = depth {
-            params.insert("depth".to_string(), serde_json::Value::Number(d.into()));
-        }
-        if let Some(id) = root_id {
-            params.insert(
-                "rootId".to_string(),
-                serde_json::Value::String(id.to_string()),
-            );
-        }
-        self.call("View.getTree", Some(serde_json::Value::Object(params)))
-            .await
+        let params = serde_json::json!({
+            "depth": depth,
+            "rootId": root_id
+        });
+        self.call("View.getTree", Some(params)).await
     }
 
     /// Query for an element
@@ -197,10 +213,10 @@ impl AppProtocolClient {
         element_id: &str,
         click_count: Option<i32>,
     ) -> Result<serde_json::Value, ClientError> {
-        let mut params = serde_json::json!({ "elementId": element_id });
-        if let Some(count) = click_count {
-            params["clickCount"] = serde_json::Value::Number(count.into());
-        }
+        let params = serde_json::json!({
+            "elementId": element_id,
+            "clickCount": click_count
+        });
         self.call("Input.click", Some(params)).await
     }
 
@@ -211,13 +227,11 @@ impl AppProtocolClient {
         element_id: Option<&str>,
         clear_first: bool,
     ) -> Result<serde_json::Value, ClientError> {
-        let mut params = serde_json::json!({
+        let params = serde_json::json!({
             "text": text,
+            "elementId": element_id,
             "clearFirst": clear_first
         });
-        if let Some(id) = element_id {
-            params["elementId"] = serde_json::Value::String(id.to_string());
-        }
         self.call("Input.type", Some(params)).await
     }
 
@@ -229,10 +243,7 @@ impl AppProtocolClient {
     ) -> Result<serde_json::Value, ClientError> {
         self.call(
             "Input.pressKey",
-            Some(serde_json::json!({
-                "key": key,
-                "modifiers": modifiers
-            })),
+            Some(serde_json::json!({ "key": key, "modifiers": modifiers })),
         )
         .await
     }

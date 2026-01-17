@@ -2,6 +2,18 @@ import AppKit
 import Foundation
 import Network
 
+/// Errors that can occur when starting or running the debug server
+enum DebugServerError: Error, LocalizedError {
+    case invalidPort(UInt16)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPort(let port):
+            return "Invalid port number: \(port). Port must be between 1 and 65535."
+        }
+    }
+}
+
 /// WebSocket-based debug server
 @MainActor
 final class DebugServer {
@@ -19,16 +31,25 @@ final class DebugServer {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
 
+        // Bind to specific host interface for security
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(config.host),
+            port: NWEndpoint.Port(rawValue: config.port) ?? .any
+        )
+
         // Create WebSocket options
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
-        listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: config.port)!)
+        guard let port = NWEndpoint.Port(rawValue: config.port) else {
+            throw DebugServerError.invalidPort(config.port)
+        }
+        listener = try NWListener(using: parameters, on: port)
         listener?.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                print("[AppDebugKit] Listening on port \(self?.config.port ?? 0)")
+                print("[AppDebugKit] Listening on \(self?.config.host ?? "?"):\(self?.config.port ?? 0)")
             case .failed(let error):
                 print("[AppDebugKit] Listener failed: \(error)")
             default:
@@ -60,13 +81,12 @@ final class DebugServer {
 
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             Task { @MainActor in
+                guard let connection = connection else { return }
                 switch state {
                 case .ready:
-                    self?.receiveMessage(on: connection!)
+                    self?.receiveMessage(on: connection)
                 case .failed, .cancelled:
-                    if let conn = connection {
-                        self?.connections.removeAll { $0 === conn }
-                    }
+                    self?.connections.removeAll { $0 === connection }
                     print("[AppDebugKit] Client disconnected")
                 default:
                     break
@@ -195,6 +215,10 @@ final class DebugServer {
     }
 
     private func handleViewGetTree(id: UInt64, params: [String: AnyCodable]) -> ProtocolResponse {
+        // Clean up stale registry entries periodically
+        ViewRegistry.shared.cleanupStaleEntries()
+        WindowRegistry.shared.cleanupStaleEntries()
+
         let depth = (params["depth"]?.value as? Int) ?? 5
         let rootId = params["rootId"]?.value as? String
 
@@ -214,6 +238,9 @@ final class DebugServer {
     }
 
     private func handleViewQuerySelector(id: UInt64, params: [String: AnyCodable]) -> ProtocolResponse {
+        // Clean up stale registry entries
+        ViewRegistry.shared.cleanupStaleEntries()
+
         guard let selector = params["selector"]?.value as? String else {
             return .error(id: id, code: ErrorCode.invalidParams, message: "Missing selector parameter")
         }
@@ -238,6 +265,9 @@ final class DebugServer {
     }
 
     private func handleViewQuerySelectorAll(id: UInt64, params: [String: AnyCodable]) -> ProtocolResponse {
+        // Clean up stale registry entries
+        ViewRegistry.shared.cleanupStaleEntries()
+
         guard let selector = params["selector"]?.value as? String else {
             return .error(id: id, code: ErrorCode.invalidParams, message: "Missing selector parameter")
         }
@@ -316,6 +346,9 @@ final class DebugServer {
     // MARK: - Input Domain
 
     private func handleInputClick(id: UInt64, params: [String: AnyCodable]) -> ProtocolResponse {
+        // Clean up stale registry entries
+        ViewRegistry.shared.cleanupStaleEntries()
+
         guard let elementId = params["elementId"]?.value as? String else {
             return .error(id: id, code: ErrorCode.invalidParams, message: "Missing elementId parameter")
         }
