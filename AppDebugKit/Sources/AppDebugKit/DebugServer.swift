@@ -42,10 +42,9 @@ final class DebugServer {
         wsOptions.autoReplyPing = true
         parameters.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
-        guard let port = NWEndpoint.Port(rawValue: config.port) else {
-            throw DebugServerError.invalidPort(config.port)
-        }
-        listener = try NWListener(using: parameters, on: port)
+        // Note: Don't pass port to NWListener when requiredLocalEndpoint is set
+        // as it would conflict and cause "Invalid argument" error
+        listener = try NWListener(using: parameters)
         listener?.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
