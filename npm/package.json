@@ -1,6 +1,6 @@
 {
   "name": "native-devtools-mcp",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "MCP server for testing native desktop applications",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,7 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.1.0"
+    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.1.6"
   },
   "engines": {
     "node": ">=18"
