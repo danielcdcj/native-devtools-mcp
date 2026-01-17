@@ -114,9 +114,9 @@ This MCP server requires macOS privacy permissions to capture screenshots and si
 3. Add the same app as above (VS Code, Terminal, etc.)
 4. **Quit and restart the app completely**
 
-#### 3. Tesseract OCR (required for `find_text`)
+#### 3. Tesseract OCR (required for `find_text`, and for `take_screenshot` OCR)
 
-The `find_text` tool uses OCR to locate text on screen and return clickable coordinates. This is the **recommended way** to interact with apps when AppDebugKit is not available.
+The `find_text` tool uses OCR to locate text on screen and return clickable coordinates. The `take_screenshot` tool also runs OCR by default (`include_ocr: true`) to return text annotations. This is the **recommended way** to interact with apps when AppDebugKit is not available.
 
 ```bash
 brew install tesseract
@@ -171,11 +171,12 @@ Or if you built from source:
 
 | Tool | Description |
 |------|-------------|
-| `take_screenshot` | Capture screen, window, or region (base64 PNG) |
+| `take_screenshot` | Capture screen, window, or region (base64 PNG). Includes OCR text annotations by default (`include_ocr: true`). |
 | `list_windows` | List visible windows with IDs, titles, bounds |
 | `list_apps` | List running applications |
 | `focus_window` | Bring window/app to front |
 | `get_displays` | Get display info (bounds, scale factors) for coordinate conversion |
+| `find_text` | Find text on screen using OCR; returns screen coordinates for clicking |
 
 ### CGEvent Input Tools (work with any app, require Accessibility permission)
 
@@ -192,7 +193,7 @@ Or if you built from source:
 
 | Tool | Description |
 |------|-------------|
-| `app_connect` | Connect to app's debug server (ws://127.0.0.1:9222) |
+| `app_connect` | Connect to app's debug server (ws://127.0.0.1:9222). Supports `expected_bundle_id` and `expected_app_name` validation. |
 | `app_disconnect` | Disconnect from app |
 | `app_get_info` | Get app metadata (name, bundle ID, version) |
 | `app_get_tree` | Get view hierarchy |
@@ -205,6 +206,13 @@ Or if you built from source:
 | `app_screenshot` | Screenshot element or window |
 | `app_list_windows` | List app's windows |
 | `app_focus_window` | Focus specific window |
+
+Note: app_* tools (except `app_connect`) are only listed after a successful connection. The server emits a tools list change on connect/disconnect, so some clients may need to refresh/re-list tools to see the app_* set.
+
+## How Screenshots and Clicking Work (macOS)
+
+- **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window), written to a temp PNG, and returned as base64. The backing scale factor is tracked for coordinate conversion and OCR annotations.
+- **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc. Window-relative or screenshot-pixel coordinates are converted to screen coordinates using window bounds and display scale.
 
 ## Coordinate Systems and Display Scaling
 
