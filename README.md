@@ -2,6 +2,8 @@
 
 A Model Context Protocol (MCP) server for testing native desktop applications, similar to how Chrome DevTools enables web UI testing.
 
+> **100% Local & Private** - All processing happens on your machine. No data is sent to external servers. Screenshots, UI interactions, and app data never leave your device.
+
 ## Platform Support
 
 | Platform | Status |
@@ -79,7 +81,7 @@ npx native-devtools-mcp
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/native-devtools-mcp
+git clone https://github.com/sh3ll3x3c/native-devtools-mcp
 cd native-devtools-mcp
 
 # Build
@@ -89,15 +91,44 @@ cargo build --release
 ./target/release/native-devtools-mcp
 ```
 
-## Required Permissions
+## Required Permissions (macOS)
 
-### macOS
+This MCP server requires macOS privacy permissions to capture screenshots and simulate input. **These permissions are required for the tools to function.**
 
-Grant these in **System Settings > Privacy & Security**:
-- **Screen Recording** - For screenshots
-- **Accessibility** - For CGEvent input simulation (click, type_text, etc.)
+### Step-by-Step Setup
 
-The permission must be granted to the **app that runs the MCP server** (e.g., Claude Desktop, VS Code, Terminal), not to the server binary itself.
+#### 1. Screen Recording Permission (required for screenshots)
+
+1. Open **System Settings** → **Privacy & Security** → **Screen Recording**
+2. Click the **+** button (you may need to unlock with your password)
+3. Add the app that runs Claude Code:
+   - **VS Code**: `/Applications/Visual Studio Code.app`
+   - **Terminal**: `/Applications/Utilities/Terminal.app`
+   - **iTerm**: `/Applications/iTerm.app`
+4. **Quit and restart the app completely** (not just reload)
+
+#### 2. Accessibility Permission (required for click, type, scroll)
+
+1. Open **System Settings** → **Privacy & Security** → **Accessibility**
+2. Click the **+** button
+3. Add the same app as above (VS Code, Terminal, etc.)
+4. **Quit and restart the app completely**
+
+### Important Notes
+
+- **Grant permissions to the host app** (VS Code, Terminal), not to the MCP server binary itself
+- **Restart is required** - Permissions don't take effect until you fully quit and reopen the app
+- **No popup appears** - macOS won't prompt you; it silently fails if permissions are missing
+- If you see `could not create image from display`, you need Screen Recording permission
+- If clicks don't work, you need Accessibility permission
+
+### Privacy & Security
+
+All data stays on your machine:
+- Screenshots are captured locally and sent directly to Claude via the MCP protocol
+- No data is uploaded to external servers
+- The MCP server runs entirely offline
+- Source code is open for audit
 
 ## MCP Configuration
 
