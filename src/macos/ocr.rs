@@ -107,14 +107,18 @@ pub fn ocr_image(png_data: &[u8], scale: Option<f64>) -> Result<Vec<TextMatch>, 
 /// If `display_id` is provided, captures that specific display and uses its scale factor.
 /// Otherwise, captures the main display.
 pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
-    // Get the target display info
-    let display = match display_id {
-        Some(id) => display::get_displays()?
-            .into_iter()
-            .find(|d| d.id == id)
-            .ok_or_else(|| format!("Display {} not found", id))?,
-        None => display::get_main_display()?,
-    };
+    // Get target display and its 1-based index for screencapture -D
+    let displays = display::get_displays()?;
+    let (display_index, display) = displays
+        .iter()
+        .enumerate()
+        .find(|(_, d)| display_id.map_or(d.is_main, |id| d.id == id))
+        .map(|(i, d)| (i + 1, d.clone()))
+        .ok_or_else(|| {
+            display_id.map_or("No main display found".into(), |id| {
+                format!("Display {} not found", id)
+            })
+        })?;
 
     let scale = display.backing_scale_factor;
 
@@ -125,12 +129,13 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
         .tempfile()
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
 
-    // Use -D flag to capture specific display
+    // Use -D flag with 1-based display index (not the CGDirectDisplayID)
+    // screencapture -D expects 1, 2, 3... not the actual display ID
     let status = Command::new("screencapture")
         .args([
             "-x",
             "-D",
-            &display.id.to_string(),
+            &display_index.to_string(),
             temp_file.path().to_str().unwrap(),
         ])
         .status()
