@@ -1,5 +1,17 @@
+use core_foundation::array::CFArray;
+use core_foundation::base::{CFType, TCFType};
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
+use core_graphics::window::{
+    kCGNullWindowID, kCGWindowBounds, kCGWindowIsOnscreen, kCGWindowLayer,
+    kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowName,
+    kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::ffi::c_void;
+
+type CFDict = CFDictionary<*const c_void, *const c_void>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -12,7 +24,7 @@ pub struct WindowInfo {
     pub is_on_screen: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WindowBounds {
     pub x: f64,
     pub y: f64,
@@ -21,82 +33,98 @@ pub struct WindowBounds {
 }
 
 /// List all visible windows on screen using CGWindowListCopyWindowInfo.
-///
-/// This function uses the CG API via Python/PyObjC to ensure consistent window IDs
-/// (CGWindowNumber) that are compatible with system operations like `screencapture -l`.
-///
-/// Returns an error if python3 or PyObjC (Quartz module) is not available.
 pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
-    list_windows_via_cg()
-}
-
-/// Use CGWindowListCopyWindowInfo via Python to get actual CGWindowNumbers
-fn list_windows_via_cg() -> Result<Vec<WindowInfo>, String> {
-    let script = r#"
-import Quartz
-import json
-
-windows = Quartz.CGWindowListCopyWindowInfo(
-    Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-    Quartz.kCGNullWindowID
-)
-
-result = []
-for w in windows:
-    bounds = w.get('kCGWindowBounds', {})
-    result.append({
-        'id': w.get('kCGWindowNumber', 0),
-        'name': w.get('kCGWindowName'),
-        'owner_name': w.get('kCGWindowOwnerName', ''),
-        'owner_pid': w.get('kCGWindowOwnerPID', 0),
-        'layer': w.get('kCGWindowLayer', 0),
-        'is_on_screen': w.get('kCGWindowIsOnscreen', 0) == 1,
-        'bounds': {
-            'x': bounds.get('X', 0),
-            'y': bounds.get('Y', 0),
-            'width': bounds.get('Width', 0),
-            'height': bounds.get('Height', 0),
-        }
-    })
-
-print(json.dumps(result))
-"#;
-
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(script)
-        .output()
-        .map_err(|e| format!("Failed to execute python3: {}. Is python3 installed?", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("No module named") || stderr.contains("ModuleNotFoundError") {
-            return Err(
-                "PyObjC (Quartz module) not found. Install with: pip3 install pyobjc-framework-Quartz"
-                    .to_string(),
-            );
-        }
-        return Err(format!("python3 script failed: {}", stderr));
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let ptr = unsafe { CGWindowListCopyWindowInfo(options, kCGNullWindowID) };
+    if ptr.is_null() {
+        return Err("CGWindowListCopyWindowInfo failed".to_string());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<Vec<WindowInfo>>(&stdout)
-        .map_err(|e| format!("Failed to parse window list: {}", e))
+    let list: CFArray<*const c_void> = unsafe { CFArray::wrap_under_create_rule(ptr) };
+    let mut windows = Vec::new();
+
+    for i in 0..list.len() {
+        let dict: CFDict =
+            unsafe { CFDictionary::wrap_under_get_rule(*list.get_unchecked(i) as *const _) };
+
+        windows.push(WindowInfo {
+            id: get_i64(&dict, unsafe { kCGWindowNumber }).unwrap_or(0) as u32,
+            name: get_string(&dict, unsafe { kCGWindowName }),
+            owner_name: get_string(&dict, unsafe { kCGWindowOwnerName }).unwrap_or_default(),
+            owner_pid: get_i64(&dict, unsafe { kCGWindowOwnerPID }).unwrap_or(0),
+            layer: get_i64(&dict, unsafe { kCGWindowLayer }).unwrap_or(0),
+            is_on_screen: get_i64(&dict, unsafe { kCGWindowIsOnscreen }).unwrap_or(0) != 0,
+            bounds: get_bounds(&dict, unsafe { kCGWindowBounds }).unwrap_or_default(),
+        });
+    }
+
+    Ok(windows)
 }
 
-/// Find a window by its ID
+/// Find a window by its ID.
 pub fn find_window_by_id(window_id: u32) -> Result<Option<WindowInfo>, String> {
     Ok(list_windows()?.into_iter().find(|w| w.id == window_id))
 }
 
-/// Find windows by application name
+/// Find windows by application name (case-insensitive substring match).
 pub fn find_windows_by_app(app_name: &str) -> Result<Vec<WindowInfo>, String> {
+    let needle = app_name.to_lowercase();
     Ok(list_windows()?
         .into_iter()
-        .filter(|w| {
-            w.owner_name
-                .to_lowercase()
-                .contains(&app_name.to_lowercase())
-        })
+        .filter(|w| w.owner_name.to_lowercase().contains(&needle))
         .collect())
+}
+
+fn get_value(dict: &CFDict, key: *const c_void) -> Option<CFType> {
+    dict.find(key)
+        .map(|v| unsafe { CFType::wrap_under_get_rule(*v as *const _) })
+}
+
+fn get_string(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<String> {
+    get_value(dict, key as *const c_void)?.downcast::<CFString>().map(|s| s.to_string())
+}
+
+fn get_i64(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<i64> {
+    get_value(dict, key as *const c_void)?.downcast::<CFNumber>()?.to_i64()
+}
+
+fn get_bounds(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<WindowBounds> {
+    let bounds: CFDict =
+        unsafe { CFDictionary::wrap_under_get_rule(*dict.find(key as *const c_void)? as *const _) };
+
+    let get_f64 = |k: &str| -> Option<f64> {
+        let cf_key = CFString::new(k);
+        get_value(&bounds, cf_key.as_concrete_TypeRef() as *const c_void)?
+            .downcast::<CFNumber>()?
+            .to_f64()
+    };
+
+    Some(WindowBounds {
+        x: get_f64("X")?,
+        y: get_f64("Y")?,
+        width: get_f64("Width")?,
+        height: get_f64("Height")?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_list_windows() {
+        let windows = list_windows().expect("list_windows should succeed");
+        assert!(!windows.is_empty(), "Should find at least one window");
+        for w in &windows {
+            assert!(!w.owner_name.is_empty(), "Window should have owner_name");
+        }
+    }
+
+    #[test]
+    fn test_find_windows_by_app() {
+        let windows = find_windows_by_app("Finder").expect("find_windows_by_app should succeed");
+        for w in &windows {
+            assert!(w.owner_name.to_lowercase().contains("finder"));
+        }
+    }
 }
