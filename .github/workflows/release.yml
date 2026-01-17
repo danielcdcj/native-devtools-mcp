@@ -112,11 +112,11 @@ jobs:
 
           # Update main package version
           cd npm
-          npm version $VERSION --no-git-tag-version
+          npm version $VERSION --no-git-tag-version --allow-same-version
 
           # Update platform package version
           cd darwin-arm64
-          npm version $VERSION --no-git-tag-version
+          npm version $VERSION --no-git-tag-version --allow-same-version
           cd ..
 
           # Update optionalDependencies version in main package
