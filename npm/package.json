@@ -1,6 +1,6 @@
 {
   "name": "native-devtools-mcp",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "MCP server for testing native desktop applications",
   "license": "MIT",
   "repository": {

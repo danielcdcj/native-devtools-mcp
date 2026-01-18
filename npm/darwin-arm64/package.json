@@ -1,13 +1,19 @@
 {
   "name": "@sh3ll3x3c/native-devtools-mcp-darwin-arm64",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "native-devtools-mcp binary for macOS ARM64",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sh3ll3x3c/native-devtools-mcp.git"
   },
-  "os": ["darwin"],
-  "cpu": ["arm64"],
-  "files": ["bin"]
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin"
+  ]
 }
