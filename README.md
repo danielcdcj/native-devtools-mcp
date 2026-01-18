@@ -4,6 +4,8 @@ A Model Context Protocol (MCP) server for testing native desktop applications, s
 
 > **100% Local & Private** - All processing happens on your machine. No data is sent to external servers. Screenshots, UI interactions, and app data never leave your device.
 
+![Demo](demo.gif)
+
 ## Platform Support
 
 | Platform | Status |
@@ -130,6 +132,14 @@ brew install tesseract
 - If you see `could not create image from display`, you need Screen Recording permission
 - If clicks don't work, you need Accessibility permission
 
+### During Automation (Important)
+
+These tools assume the target window stays focused. If you use the mouse/keyboard, a macOS permission prompt appears, or Claude Code asks to approve a tool call, focus can change and actions may be sent to the wrong app or field.
+
+- Pre-grant Screen Recording and Accessibility permissions before running.
+- Pre-approve Claude Code tool permissions for this MCP server so no prompts appear mid-run.
+- Avoid interacting with the computer while scenarios are executing.
+
 ### Privacy & Security
 
 All data stays on your machine:
@@ -139,6 +149,8 @@ All data stays on your machine:
 - Source code is open for audit
 
 ## MCP Configuration
+
+### Getting started
 
 Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
 
@@ -153,7 +165,9 @@ Add to your Claude Code MCP config (`~/.claude/claude_desktop_config.json`):
 }
 ```
 
-Or if you built from source:
+Note: Use `native-devtools-mcp@latest` if you want to always run the newest version.
+
+### Build from source
 
 ```json
 {
