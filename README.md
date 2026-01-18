@@ -223,6 +223,71 @@ Note: Use `native-devtools-mcp@latest` if you want to always run the newest vers
 
 Note: app_* tools (except `app_connect`) are only listed after a successful connection. The server emits a tools list change on connect/disconnect, so some clients may need to refresh/re-list tools to see the app_* set.
 
+<details>
+<summary><strong>Agent Context (for automated agents)</strong></summary>
+
+This section provides a compact, machine-readable summary for LLM agents. For a dedicated agent-first index, see `agents.md`.
+
+### Capabilities Matrix
+
+| Intent | Tools | Outputs |
+|--------|-------|---------|
+| Capture screen or window | `take_screenshot` | base64 PNG, optional OCR text |
+| Find text and click it | `find_text` → `click` | coordinates, click action |
+| List and focus windows | `list_windows` → `focus_window` | window list, focus action |
+| Element-level UI control | `app_connect` → `app_query` → `app_click` | element IDs, click action |
+
+### Structured Intent (YAML)
+
+```yaml
+intents:
+  - name: capture_screenshot
+    tools: [take_screenshot]
+    inputs:
+      scope: { type: string, enum: [screen, window, region] }
+      window_id: { type: number, optional: true }
+      region: { type: object, optional: true }
+      include_ocr: { type: boolean, default: true }
+    outputs:
+      image_base64: { type: string }
+      ocr: { type: array, optional: true }
+  - name: find_text_and_click
+    tools: [find_text, click]
+    inputs:
+      query: { type: string }
+      window_id: { type: number, optional: true }
+    outputs:
+      matches: { type: array }
+      clicked: { type: boolean }
+  - name: list_and_focus_window
+    tools: [list_windows, focus_window]
+    inputs:
+      app_name: { type: string, optional: true }
+    outputs:
+      windows: { type: array }
+      focused: { type: boolean }
+  - name: element_level_interaction
+    tools: [app_connect, app_query, app_click, app_type]
+    inputs:
+      selector: { type: string }
+      element_id: { type: string, optional: true }
+      text: { type: string, optional: true }
+    outputs:
+      element: { type: object }
+      ok: { type: boolean }
+```
+
+### Prompt -> Tool -> Output Examples
+
+| User prompt | Tool sequence | Expected output |
+|-------------|---------------|-----------------|
+| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, OCR text |
+| "Click the OK button" | `take_screenshot` → (vision) → `click(x,y)` | click action |
+| "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
+| "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
+
+</details>
+
 ## How Screenshots and Clicking Work (macOS)
 
 - **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window with `-o` to exclude shadow), written to a temp PNG, and returned as base64. The backing scale factor is tracked for coordinate conversion. Window screenshots exclude shadows so that pixel coordinates align exactly with `CGWindowBounds`, and OCR coordinates are automatically offset into screen space.
