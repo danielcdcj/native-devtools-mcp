@@ -31,6 +31,7 @@ fn default_include_ocr() -> bool {
 }
 
 pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
+    let mut ocr_offset: Option<(f64, f64)> = None;
     let result = match params.mode.as_str() {
         "screen" => macos::capture_screen(),
         "window" => {
@@ -42,6 +43,12 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
+            if params.include_ocr {
+                ocr_offset = macos::find_window_by_id(window_id)
+                    .ok()
+                    .flatten()
+                    .map(|window| (window.bounds.x, window.bounds.y));
+            }
             macos::capture_window(window_id)
         }
         "region" => {
@@ -53,6 +60,9 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
+            if params.include_ocr {
+                ocr_offset = Some((x, y));
+            }
             macos::capture_region(x, y, w, h)
         }
         _ => {
@@ -71,7 +81,10 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
             // Run OCR if requested
             if params.include_ocr {
                 match macos::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor)) {
-                    Ok(matches) => {
+                    Ok(mut matches) => {
+                        if let Some((offset_x, offset_y)) = ocr_offset {
+                            apply_ocr_offset(&mut matches, offset_x, offset_y);
+                        }
                         if !matches.is_empty() {
                             let ocr_text = format_ocr_results(&matches);
                             contents.push(Content::text(ocr_text));
@@ -86,6 +99,23 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
             CallToolResult::success(contents)
         }
         Err(e) => CallToolResult::error(vec![Content::text(format!("Screenshot failed: {}", e))]),
+    }
+}
+
+/// Convert OCR coordinates from image-relative to screen-absolute.
+///
+/// OCR detects text at pixel positions within the screenshot image. For window
+/// or region screenshots, these positions are relative to the image origin (0,0).
+/// To make the coordinates directly clickable, we add the window/region's screen
+/// position so the LLM can use them with the click tool without further translation.
+fn apply_ocr_offset(matches: &mut [macos::TextMatch], offset_x: f64, offset_y: f64) {
+    if offset_x == 0.0 && offset_y == 0.0 {
+        return;
+    }
+
+    for m in matches {
+        m.x += offset_x;
+        m.y += offset_y;
     }
 }
 

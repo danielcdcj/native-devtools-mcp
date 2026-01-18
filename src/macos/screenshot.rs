@@ -98,8 +98,17 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
     let path_str = path.to_string_lossy().to_string();
 
     // screencapture -l window_id for specific window
+    // -o excludes window shadow so coordinates align with CGWindowBounds
     let output = Command::new("screencapture")
-        .args(["-x", "-l", &window_id.to_string(), "-t", "png", &path_str])
+        .args([
+            "-x",
+            "-o",
+            "-l",
+            &window_id.to_string(),
+            "-t",
+            "png",
+            &path_str,
+        ])
         .output()?;
 
     if !output.status.success() {

@@ -211,7 +211,7 @@ Note: app_* tools (except `app_connect`) are only listed after a successful conn
 
 ## How Screenshots and Clicking Work (macOS)
 
-- **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window), written to a temp PNG, and returned as base64. The backing scale factor is tracked for coordinate conversion and OCR annotations.
+- **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window with `-o` to exclude shadow), written to a temp PNG, and returned as base64. The backing scale factor is tracked for coordinate conversion. Window screenshots exclude shadows so that pixel coordinates align exactly with `CGWindowBounds`, and OCR coordinates are automatically offset into screen space.
 - **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc. Window-relative or screenshot-pixel coordinates are converted to screen coordinates using window bounds and display scale.
 
 ## Coordinate Systems and Display Scaling
