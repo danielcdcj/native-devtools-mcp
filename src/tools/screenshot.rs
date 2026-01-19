@@ -128,15 +128,20 @@ fn apply_ocr_offset(matches: &mut [macos::TextMatch], offset_x: f64, offset_y: f
     for m in matches {
         m.x += offset_x;
         m.y += offset_y;
+        m.bounds.x += offset_x;
+        m.bounds.y += offset_y;
     }
 }
 
-/// Format OCR results as a text summary with clickable coordinates.
+/// Format OCR results as a text summary with clickable coordinates and bounds.
 fn format_ocr_results(matches: &[macos::TextMatch]) -> String {
     let mut result = String::from("## OCR Text Detected (click coordinates)\n\n");
 
-    for m in matches.iter().filter(|m| m.confidence > 50.0) {
-        result.push_str(&format!("- \"{}\" at ({:.0}, {:.0})\n", m.text, m.x, m.y));
+    for m in matches.iter().filter(|m| m.confidence > 0.5) {
+        result.push_str(&format!(
+            "- \"{}\" at ({:.0}, {:.0}) bounds: {{x: {:.0}, y: {:.0}, w: {:.0}, h: {:.0}}}\n",
+            m.text, m.x, m.y, m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height
+        ));
     }
 
     result

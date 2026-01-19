@@ -81,14 +81,21 @@ fn get_value(dict: &CFDict, key: *const c_void) -> Option<CFType> {
 }
 
 fn get_string(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<String> {
-    get_value(dict, key as *const c_void)?.downcast::<CFString>().map(|s| s.to_string())
+    get_value(dict, key as *const c_void)?
+        .downcast::<CFString>()
+        .map(|s| s.to_string())
 }
 
 fn get_i64(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<i64> {
-    get_value(dict, key as *const c_void)?.downcast::<CFNumber>()?.to_i64()
+    get_value(dict, key as *const c_void)?
+        .downcast::<CFNumber>()?
+        .to_i64()
 }
 
-fn get_bounds(dict: &CFDict, key: *const core_foundation::string::__CFString) -> Option<WindowBounds> {
+fn get_bounds(
+    dict: &CFDict,
+    key: *const core_foundation::string::__CFString,
+) -> Option<WindowBounds> {
     let bounds: CFDict =
         unsafe { CFDictionary::wrap_under_get_rule(*dict.find(key as *const c_void)? as *const _) };
 

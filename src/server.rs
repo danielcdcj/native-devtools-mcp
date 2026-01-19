@@ -324,7 +324,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "Find text on screen using OCR. Returns screen coordinates for clicking. Requires: brew install tesseract",
+                "Find text on screen using OCR. Returns screen coordinates for clicking. Requires macOS 10.15+ (uses Vision framework)",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],

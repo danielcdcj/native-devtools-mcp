@@ -116,13 +116,12 @@ This MCP server requires macOS privacy permissions to capture screenshots and si
 3. Add the same app as above (VS Code, Terminal, etc.)
 4. **Quit and restart the app completely**
 
-#### 3. Tesseract OCR (required for `find_text`, and for `take_screenshot` OCR)
+#### 3. macOS Version (for OCR features)
 
-The `find_text` tool uses OCR to locate text on screen and return clickable coordinates. The `take_screenshot` tool also runs OCR by default (`include_ocr: true`) to return text annotations. This is the **recommended way** to interact with apps when AppDebugKit is not available.
+The `find_text` tool and `take_screenshot` OCR feature use Apple's Vision framework for text recognition. This is the **recommended way** to interact with apps when AppDebugKit is not available.
 
-```bash
-brew install tesseract
-```
+- **macOS 10.15+ (Catalina)** required for OCR (`VNRecognizeTextRequest`)
+- No additional software installation needed - Vision is built into macOS
 
 ### Important Notes
 

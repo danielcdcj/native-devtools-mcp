@@ -97,5 +97,5 @@ When clicking, choose the correct coordinate format based on how you obtained th
 ## Operational Notes
 
 - Requires macOS Screen Recording permission for screenshots and Accessibility permission for input.
-- OCR depends on Tesseract when `include_ocr: true`.
+- OCR uses Apple Vision framework (requires macOS 10.15+); no external dependencies needed.
 - Keep the target window focused during automation to avoid misdirected input.

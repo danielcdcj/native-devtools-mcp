@@ -1,10 +1,48 @@
-//! OCR functionality using Tesseract for text detection on screen.
+//! OCR functionality using Apple Vision for text detection on screen.
 
 use super::display;
+use cocoa::base::nil;
+use cocoa::foundation::NSAutoreleasePool;
+use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::data::CFData;
+use objc::runtime::{Class, Object};
+use objc::{msg_send, sel, sel_impl};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::process::Command;
-use tempfile::NamedTempFile;
+use std::ptr;
+
+#[link(name = "ImageIO", kind = "framework")]
+extern "C" {
+    fn CGImageSourceCreateWithData(data: CFTypeRef, options: CFTypeRef) -> *mut std::ffi::c_void;
+    fn CGImageSourceCreateImageAtIndex(
+        source: *mut std::ffi::c_void,
+        index: usize,
+        options: CFTypeRef,
+    ) -> *mut std::ffi::c_void;
+    fn CGImageGetWidth(image: *mut std::ffi::c_void) -> usize;
+    fn CGImageGetHeight(image: *mut std::ffi::c_void) -> usize;
+}
+
+// Link Vision framework to ensure classes are loaded before runtime lookup
+#[link(name = "Vision", kind = "framework")]
+extern "C" {}
+
+#[repr(C)]
+struct CGRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Bounding box in screen coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
 
 /// A text match found by OCR with screen coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,75 +51,10 @@ pub struct TextMatch {
     pub x: f64,
     pub y: f64,
     pub confidence: f64,
-}
-
-/// Run OCR on an image file and return all text with coordinates.
-/// The `scale` parameter is used to convert pixel coordinates to screen coordinates.
-fn run_ocr_on_file(image_path: &Path, scale: f64) -> Result<Vec<TextMatch>, String> {
-    let tsv_base =
-        NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
-    let tsv_base_path = tsv_base.path().to_str().unwrap().to_string();
-
-    let output = Command::new("tesseract")
-        .args([
-            image_path.to_str().unwrap(),
-            &tsv_base_path,
-            "-c",
-            "tessedit_create_tsv=1",
-        ])
-        .output()
-        .map_err(|e| format!("tesseract failed: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Tesseract failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    // Parse TSV
-    let tsv_path = format!("{}.tsv", tsv_base_path);
-    let tsv =
-        std::fs::read_to_string(&tsv_path).map_err(|e| format!("Failed to read TSV: {}", e))?;
-    let _ = std::fs::remove_file(&tsv_path);
-
-    let matches: Vec<TextMatch> = tsv
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 12 {
-                return None;
-            }
-
-            let text = f[11].trim();
-            if text.is_empty() {
-                return None;
-            }
-
-            let left: f64 = f[6].parse().ok()?;
-            let top: f64 = f[7].parse().ok()?;
-            let width: f64 = f[8].parse().ok()?;
-            let height: f64 = f[9].parse().ok()?;
-            let confidence: f64 = f[10].parse().ok()?;
-
-            Some(TextMatch {
-                text: text.to_string(),
-                x: (left + width / 2.0) / scale,
-                y: (top + height / 2.0) / scale,
-                confidence,
-            })
-        })
-        .collect();
-
-    Ok(matches)
+    pub bounds: TextBounds,
 }
 
 /// Run OCR on PNG image data and return all detected text with screen coordinates.
-/// Used by take_screenshot to include OCR annotations.
-///
-/// If `scale` is provided, it will be used to convert pixel coordinates to screen coordinates.
-/// Otherwise, the main display's backing scale factor is used as a fallback.
 pub fn ocr_image(png_data: &[u8], scale: Option<f64>) -> Result<Vec<TextMatch>, String> {
     let scale = scale.unwrap_or_else(|| {
         display::get_main_display()
@@ -89,48 +62,145 @@ pub fn ocr_image(png_data: &[u8], scale: Option<f64>) -> Result<Vec<TextMatch>, 
             .unwrap_or(2.0)
     });
 
-    // Write PNG data to unique temp file (auto-cleaned on drop)
-    let temp_file = tempfile::Builder::new()
-        .prefix("native-devtools-ocr-")
-        .suffix(".png")
-        .tempfile()
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    unsafe { run_vision_ocr(png_data, scale) }
+}
 
-    std::fs::write(temp_file.path(), png_data)
-        .map_err(|e| format!("Failed to write temp image: {}", e))?;
+unsafe fn run_vision_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> {
+    // Check Vision framework availability
+    let handler_class = Class::get("VNImageRequestHandler")
+        .ok_or("Vision framework not available (requires macOS 10.13+)")?;
+    let request_class = Class::get("VNRecognizeTextRequest")
+        .ok_or("VNRecognizeTextRequest not available (requires macOS 10.15+)")?;
+    let dict_class = Class::get("NSDictionary").ok_or("NSDictionary class not available")?;
+    let array_class = Class::get("NSArray").ok_or("NSArray class not available")?;
 
-    run_ocr_on_file(temp_file.path(), scale)
+    // Create autorelease pool to prevent memory leaks from Objective-C objects
+    let pool = NSAutoreleasePool::new(nil);
+
+    // Load image
+    let cf_data = CFData::from_buffer(png_data);
+    let image_source = CGImageSourceCreateWithData(cf_data.as_CFTypeRef(), ptr::null());
+    if image_source.is_null() {
+        let _: () = msg_send![pool, drain];
+        return Err("Failed to create CGImageSource".into());
+    }
+
+    let cg_image = CGImageSourceCreateImageAtIndex(image_source, 0, ptr::null());
+    if cg_image.is_null() {
+        CFRelease(image_source as CFTypeRef);
+        let _: () = msg_send![pool, drain];
+        return Err("Failed to create CGImage".into());
+    }
+
+    let img_w = CGImageGetWidth(cg_image) as f64;
+    let img_h = CGImageGetHeight(cg_image) as f64;
+
+    // Create Vision request handler
+    let handler: *mut Object = msg_send![handler_class, alloc];
+    let empty_dict: *mut Object = msg_send![dict_class, dictionary];
+    let handler: *mut Object = msg_send![handler, initWithCGImage:cg_image options:empty_dict];
+
+    if handler.is_null() {
+        CFRelease(cg_image as CFTypeRef);
+        CFRelease(image_source as CFTypeRef);
+        let _: () = msg_send![pool, drain];
+        return Err("Failed to create VNImageRequestHandler".into());
+    }
+
+    // Create and configure text recognition request
+    let request: *mut Object = msg_send![request_class, new];
+    let _: () = msg_send![request, setRecognitionLevel: 1i64]; // Accurate
+
+    // Execute request
+    let requests: *mut Object = msg_send![array_class, arrayWithObject: request];
+    let mut error: *mut Object = ptr::null_mut();
+    let success: bool = msg_send![handler, performRequests:requests error:&mut error];
+
+    if !success {
+        let desc = if !error.is_null() {
+            nsstring_to_string(msg_send![error, localizedDescription])
+        } else {
+            "Unknown error".into()
+        };
+        let _: () = msg_send![request, release];
+        let _: () = msg_send![handler, release];
+        CFRelease(cg_image as CFTypeRef);
+        CFRelease(image_source as CFTypeRef);
+        let _: () = msg_send![pool, drain];
+        return Err(format!("Vision OCR failed: {}", desc));
+    }
+
+    // Extract results
+    let results: *mut Object = msg_send![request, results];
+    let count: usize = msg_send![results, count];
+    let mut matches = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let obs: *mut Object = msg_send![results, objectAtIndex: i];
+        let candidates: *mut Object = msg_send![obs, topCandidates: 1usize];
+        let candidate_count: usize = msg_send![candidates, count];
+        if candidate_count == 0 {
+            continue;
+        }
+
+        let candidate: *mut Object = msg_send![candidates, objectAtIndex: 0usize];
+        let text = nsstring_to_string(msg_send![candidate, string]);
+        // VNRecognizedText.confidence is Float (f32) in ObjC, read as f32 then cast
+        let confidence: f32 = msg_send![candidate, confidence];
+        let confidence = confidence as f64;
+        let bbox: CGRect = msg_send![obs, boundingBox];
+
+        let (center_x, center_y, bounds) =
+            convert_vision_bbox(bbox.x, bbox.y, bbox.width, bbox.height, img_w, img_h, scale);
+
+        matches.push(TextMatch {
+            text,
+            x: center_x,
+            y: center_y,
+            confidence,
+            bounds,
+        });
+    }
+
+    // Cleanup
+    let _: () = msg_send![request, release];
+    let _: () = msg_send![handler, release];
+    CFRelease(cg_image as CFTypeRef);
+    CFRelease(image_source as CFTypeRef);
+    let _: () = msg_send![pool, drain];
+
+    Ok(matches)
+}
+
+unsafe fn nsstring_to_string(nsstring: *mut Object) -> String {
+    if nsstring.is_null() {
+        return String::new();
+    }
+    let utf8: *const i8 = msg_send![nsstring, UTF8String];
+    if utf8.is_null() {
+        return String::new();
+    }
+    std::ffi::CStr::from_ptr(utf8)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Find text on screen using OCR. Returns screen coordinates for each match.
-///
-/// If `display_id` is provided, captures that specific display and uses its scale factor.
-/// Otherwise, captures the main display.
 pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
-    // Get target display and its 1-based index for screencapture -D
     let displays = display::get_displays()?;
     let (display_index, display) = displays
         .iter()
         .enumerate()
         .find(|(_, d)| display_id.map_or(d.is_main, |id| d.id == id))
         .map(|(i, d)| (i + 1, d.clone()))
-        .ok_or_else(|| {
-            display_id.map_or("No main display found".into(), |id| {
-                format!("Display {} not found", id)
-            })
-        })?;
+        .ok_or("Display not found")?;
 
-    let scale = display.backing_scale_factor;
-
-    // Take screenshot to unique temp file (auto-cleaned on drop)
+    // Capture screen
     let temp_file = tempfile::Builder::new()
-        .prefix("native-devtools-ocr-")
         .suffix(".png")
         .tempfile()
-        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        .map_err(|e| e.to_string())?;
 
-    // Use -D flag with 1-based display index (not the CGDirectDisplayID)
-    // screencapture -D expects 1, 2, 3... not the actual display ID
     let status = Command::new("screencapture")
         .args([
             "-x",
@@ -139,28 +209,127 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
             temp_file.path().to_str().unwrap(),
         ])
         .status()
-        .map_err(|e| format!("screencapture failed: {}", e))?;
+        .map_err(|e| e.to_string())?;
 
     if !status.success() {
-        return Err("screencapture failed".to_string());
+        return Err("screencapture failed".into());
     }
 
-    // Run OCR and adjust coordinates to account for display offset
-    let mut matches = run_ocr_on_file(temp_file.path(), scale)?;
+    let png_data = std::fs::read(temp_file.path()).map_err(|e| e.to_string())?;
+    let mut matches = ocr_image(&png_data, Some(display.backing_scale_factor))?;
 
-    // Offset coordinates by display origin for multi-display setups
+    // Offset for multi-display and filter by search term
+    let search_lower = search.to_lowercase();
     for m in &mut matches {
         m.x += display.bounds.x;
         m.y += display.bounds.y;
+        m.bounds.x += display.bounds.x;
+        m.bounds.y += display.bounds.y;
     }
 
-    // Filter by search term
-    let search_lower = search.to_lowercase();
-    let mut matches: Vec<TextMatch> = matches
-        .into_iter()
-        .filter(|m| m.text.to_lowercase().contains(&search_lower))
-        .collect();
-
+    matches.retain(|m| m.text.to_lowercase().contains(&search_lower));
     matches.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
     Ok(matches)
+}
+
+/// Convert Vision normalized bounding box to screen coordinates.
+///
+/// Vision returns normalized coordinates (0.0-1.0) with origin at bottom-left.
+/// Screen coordinates have origin at top-left and use points (not pixels).
+///
+/// # Arguments
+/// * `norm_x`, `norm_y` - Normalized bbox origin (0.0-1.0, bottom-left origin)
+/// * `norm_w`, `norm_h` - Normalized bbox size (0.0-1.0)
+/// * `img_w`, `img_h` - Image dimensions in pixels
+/// * `scale` - Display backing scale factor (e.g., 2.0 for Retina)
+///
+/// # Returns
+/// (center_x, center_y, bounds) in screen point coordinates
+fn convert_vision_bbox(
+    norm_x: f64,
+    norm_y: f64,
+    norm_w: f64,
+    norm_h: f64,
+    img_w: f64,
+    img_h: f64,
+    scale: f64,
+) -> (f64, f64, TextBounds) {
+    // Convert normalized coords to pixel coords
+    let px = norm_x * img_w;
+    let pw = norm_w * img_w;
+    let ph = norm_h * img_h;
+    // Y-flip: Vision origin is bottom-left, screen origin is top-left
+    let py = (1.0 - norm_y - norm_h) * img_h;
+
+    // Convert pixels to points and calculate center
+    let center_x = (px + pw / 2.0) / scale;
+    let center_y = (py + ph / 2.0) / scale;
+
+    let bounds = TextBounds {
+        x: px / scale,
+        y: py / scale,
+        width: pw / scale,
+        height: ph / scale,
+    };
+
+    (center_x, center_y, bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_vision_bbox_basic() {
+        // Vision bbox at bottom-left corner: (0, 0) with size 0.5x0.25
+        // Image: 1000x800 pixels, scale 2.0
+        let (cx, cy, bounds) = convert_vision_bbox(0.0, 0.0, 0.5, 0.25, 1000.0, 800.0, 2.0);
+
+        // Pixel coords: x=0, w=500, h=200
+        // Y-flip: py = (1.0 - 0.0 - 0.25) * 800 = 600
+        // Points: bounds = (0, 300, 250, 100)
+        // Center: (125, 350)
+        assert_eq!(bounds.x, 0.0);
+        assert_eq!(bounds.y, 300.0);
+        assert_eq!(bounds.width, 250.0);
+        assert_eq!(bounds.height, 100.0);
+        assert_eq!(cx, 125.0);
+        assert_eq!(cy, 350.0);
+    }
+
+    #[test]
+    fn test_convert_vision_bbox_top_right() {
+        // Vision bbox at top-right: (0.5, 0.75) with size 0.5x0.25
+        // Image: 1000x800 pixels, scale 2.0
+        let (cx, cy, bounds) = convert_vision_bbox(0.5, 0.75, 0.5, 0.25, 1000.0, 800.0, 2.0);
+
+        // Pixel coords: x=500, w=500, h=200
+        // Y-flip: py = (1.0 - 0.75 - 0.25) * 800 = 0
+        // Points: bounds = (250, 0, 250, 100)
+        // Center: (375, 50)
+        assert_eq!(bounds.x, 250.0);
+        assert_eq!(bounds.y, 0.0);
+        assert_eq!(bounds.width, 250.0);
+        assert_eq!(bounds.height, 100.0);
+        assert_eq!(cx, 375.0);
+        assert_eq!(cy, 50.0);
+    }
+
+    #[test]
+    fn test_convert_vision_bbox_center() {
+        // Vision bbox centered: (0.25, 0.375) with size 0.5x0.25
+        // Image: 1000x800 pixels, scale 1.0 (non-Retina)
+        let (cx, cy, bounds) = convert_vision_bbox(0.25, 0.375, 0.5, 0.25, 1000.0, 800.0, 1.0);
+
+        // Pixel coords: x=250, w=500, h=200
+        // Y-flip: py = (1.0 - 0.375 - 0.25) * 800 = 300
+        // Points (scale=1): bounds = (250, 300, 500, 200)
+        // Center: (500, 400)
+        assert_eq!(bounds.x, 250.0);
+        assert_eq!(bounds.y, 300.0);
+        assert_eq!(bounds.width, 500.0);
+        assert_eq!(bounds.height, 200.0);
+        assert_eq!(cx, 500.0);
+        assert_eq!(cy, 400.0);
+    }
 }
