@@ -8,6 +8,7 @@ mod tools;
 
 use rmcp::ServiceExt;
 use server::MacOSDevToolsServer;
+use tokio::signal;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[tokio::main]
@@ -26,9 +27,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run as stdio transport
     let service = server.serve(rmcp::transport::stdio()).await?;
 
-    // Wait for shutdown
-    service.waiting().await?;
+    // Wait for shutdown (either from service or SIGINT)
+    tokio::select! {
+        result = service.waiting() => {
+            result?;
+        }
+        _ = signal::ctrl_c() => {
+            tracing::info!("Received SIGINT, shutting down");
+        }
+    }
 
     tracing::info!("Server shut down");
-    Ok(())
+
+    // Force exit to ensure all background tasks terminate
+    std::process::exit(0);
 }
