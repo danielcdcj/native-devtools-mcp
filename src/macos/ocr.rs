@@ -108,8 +108,11 @@ unsafe fn run_vision_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, 
     }
 
     // Create and configure text recognition request
-    let request: *mut Object = msg_send![request_class, new];
-    let _: () = msg_send![request, setRecognitionLevel: 1i64]; // Accurate
+    let request: *mut Object = msg_send![request_class, alloc];
+    let request: *mut Object = msg_send![request, init];
+
+    // VNRequestTextRecognitionLevel: 0 = accurate, 1 = fast (NSInteger)
+    let _: () = msg_send![request, setRecognitionLevel: 0isize];
 
     // Execute request
     let requests: *mut Object = msg_send![array_class, arrayWithObject: request];
@@ -132,7 +135,12 @@ unsafe fn run_vision_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, 
 
     // Extract results
     let results: *mut Object = msg_send![request, results];
-    let count: usize = msg_send![results, count];
+    let count: usize = if results.is_null() {
+        0
+    } else {
+        msg_send![results, count]
+    };
+
     let mut matches = Vec::with_capacity(count);
 
     for i in 0..count {
@@ -278,6 +286,38 @@ fn convert_vision_bbox(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ocr_on_calculator_screenshot() {
+        // Load the Calculator screenshot from test fixtures
+        let png_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/calculator.png");
+        let png_data = std::fs::read(png_path).expect("Failed to read calculator.png fixture");
+
+        let matches = ocr_image(&png_data, Some(2.0)).expect("OCR should succeed");
+
+        println!("Found {} text matches:", matches.len());
+        for m in &matches {
+            println!(
+                "  '{}' at ({:.1}, {:.1}) conf={:.2}",
+                m.text, m.x, m.y, m.confidence
+            );
+        }
+
+        // Should find at least some digits from the calculator
+        assert!(!matches.is_empty(), "OCR should detect text from calculator");
+
+        // Check that we found some expected calculator buttons
+        let texts: Vec<&str> = matches.iter().map(|m| m.text.as_str()).collect();
+        println!("Detected texts: {:?}", texts);
+
+        // Verify we detect expected calculator elements
+        let has_digit = texts.iter().any(|t| t.chars().any(|c| c.is_ascii_digit()));
+        assert!(has_digit, "Should detect at least one digit");
+
+        // The calculator screenshot shows "9×9 = 81", verify we detect this
+        let has_result = texts.iter().any(|t| t.contains("81") || t.contains("9×9"));
+        assert!(has_result, "Should detect the calculation result (81 or 9×9)");
+    }
 
     #[test]
     fn test_convert_vision_bbox_basic() {
