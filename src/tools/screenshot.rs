@@ -1,6 +1,7 @@
 use crate::macos;
 use rmcp::model::{CallToolResult, Content};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::to_string_pretty;
 
 #[derive(Debug, Deserialize)]
 pub struct TakeScreenshotParams {
@@ -30,8 +31,16 @@ fn default_include_ocr() -> bool {
     true
 }
 
+#[derive(Debug, Serialize)]
+struct ScreenshotMetadata {
+    screenshot_origin_x: f64,
+    screenshot_origin_y: f64,
+    screenshot_scale: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screenshot_window_id: Option<u32>,
+}
+
 pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
-    let mut ocr_offset: Option<(f64, f64)> = None;
     let result = match params.mode.as_str() {
         "screen" => macos::capture_screen(),
         "window" => {
@@ -43,12 +52,6 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
-            if params.include_ocr {
-                ocr_offset = macos::find_window_by_id(window_id)
-                    .ok()
-                    .flatten()
-                    .map(|window| (window.bounds.x, window.bounds.y));
-            }
             macos::capture_window(window_id)
         }
         "region" => {
@@ -60,9 +63,6 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
-            if params.include_ocr {
-                ocr_offset = Some((x, y));
-            }
             macos::capture_region(x, y, w, h)
         }
         _ => {
@@ -77,14 +77,26 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
         Ok(screenshot) => {
             let base64_data = screenshot.to_base64();
             let mut contents = vec![Content::image(base64_data, "image/png")];
+            let screenshot_window_id = if params.mode == "window" {
+                params.window_id
+            } else {
+                None
+            };
+            let metadata = ScreenshotMetadata {
+                screenshot_origin_x: screenshot.origin_x,
+                screenshot_origin_y: screenshot.origin_y,
+                screenshot_scale: screenshot.scale_factor,
+                screenshot_window_id,
+            };
+            if let Ok(json) = to_string_pretty(&metadata) {
+                contents.push(Content::text(json));
+            }
 
             // Run OCR if requested
             if params.include_ocr {
                 match macos::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor)) {
                     Ok(mut matches) => {
-                        if let Some((offset_x, offset_y)) = ocr_offset {
-                            apply_ocr_offset(&mut matches, offset_x, offset_y);
-                        }
+                        apply_ocr_offset(&mut matches, screenshot.origin_x, screenshot.origin_y);
                         if !matches.is_empty() {
                             let ocr_text = format_ocr_results(&matches);
                             contents.push(Content::text(ocr_text));
@@ -106,8 +118,8 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 ///
 /// OCR detects text at pixel positions within the screenshot image. For window
 /// or region screenshots, these positions are relative to the image origin (0,0).
-/// To make the coordinates directly clickable, we add the window/region's screen
-/// position so the LLM can use them with the click tool without further translation.
+/// To make the coordinates directly clickable, we add the screenshot's screen
+/// origin so the LLM can use them with the click tool without further translation.
 fn apply_ocr_offset(matches: &mut [macos::TextMatch], offset_x: f64, offset_y: f64) {
     if offset_x == 0.0 && offset_y == 0.0 {
         return;

@@ -185,7 +185,7 @@ Note: Use `native-devtools-mcp@latest` if you want to always run the newest vers
 
 | Tool | Description |
 |------|-------------|
-| `take_screenshot` | Capture screen, window, or region (base64 PNG). Includes OCR text annotations by default (`include_ocr: true`). |
+| `take_screenshot` | Capture screen, window, or region (base64 PNG). Returns screenshot metadata for coordinate conversion and includes OCR text annotations by default (`include_ocr: true`). |
 | `list_windows` | List visible windows with IDs, titles, bounds |
 | `list_apps` | List running applications |
 | `focus_window` | Bring window/app to front |
@@ -196,7 +196,7 @@ Note: Use `native-devtools-mcp@latest` if you want to always run the newest vers
 
 | Tool | Description |
 |------|-------------|
-| `click` | Click at screen/window/screenshot coordinates |
+| `click` | Click at screen/window/screenshot coordinates (supports captured screenshot metadata) |
 | `type_text` | Type text at cursor position |
 | `press_key` | Press key combo (e.g., "return", modifiers: ["command"]) |
 | `scroll` | Scroll at position |
@@ -232,7 +232,7 @@ This section provides a compact, machine-readable summary for LLM agents. For a 
 
 | Intent | Tools | Outputs |
 |--------|-------|---------|
-| Capture screen or window | `take_screenshot` | base64 PNG, optional OCR text |
+| Capture screen or window | `take_screenshot` | base64 PNG, metadata (origin, scale), optional OCR text |
 | Find text and click it | `find_text` → `click` | coordinates, click action |
 | List and focus windows | `list_windows` → `focus_window` | window list, focus action |
 | Element-level UI control | `app_connect` → `app_query` → `app_click` | element IDs, click action |
@@ -250,6 +250,7 @@ intents:
       include_ocr: { type: boolean, default: true }
     outputs:
       image_base64: { type: string }
+      metadata: { type: object, optional: true }
       ocr: { type: array, optional: true }
   - name: find_text_and_click
     tools: [find_text, click]
@@ -281,32 +282,70 @@ intents:
 
 | User prompt | Tool sequence | Expected output |
 |-------------|---------------|-----------------|
-| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, OCR text |
-| "Click the OK button" | `take_screenshot` → (vision) → `click(x,y)` | click action |
+| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, metadata, OCR text |
+| "Click the OK button" | `take_screenshot` → (vision) → `click(screenshot_x/y + metadata)` | click action |
 | "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
 | "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
+
+### Coordinate Usage
+
+| Coordinate source | Click parameters |
+|-------------------|------------------|
+| `find_text` or OCR annotation | `x`, `y` (direct screen coords) |
+| Visual inspection of screenshot | `screenshot_x/y` + metadata from `take_screenshot` |
 
 </details>
 
 ## How Screenshots and Clicking Work (macOS)
 
-- **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window with `-o` to exclude shadow), written to a temp PNG, and returned as base64. The backing scale factor is tracked for coordinate conversion. Window screenshots exclude shadows so that pixel coordinates align exactly with `CGWindowBounds`, and OCR coordinates are automatically offset into screen space.
-- **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc. Window-relative or screenshot-pixel coordinates are converted to screen coordinates using window bounds and display scale.
+- **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window with `-o` to exclude shadow), written to a temp PNG, and returned as base64. Metadata for the screenshot origin and backing scale factor is included for deterministic coordinate conversion. Window screenshots exclude shadows so that pixel coordinates align exactly with `CGWindowBounds`, and OCR coordinates are automatically offset into screen space.
+- **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc. Window-relative or screenshot-pixel coordinates are converted to screen coordinates using captured metadata when available, otherwise window bounds and display scale are looked up at click time.
 
 ## Coordinate Systems and Display Scaling
 
-The `click` tool supports three coordinate input methods to handle macOS display scaling:
+The `click` tool supports multiple coordinate input methods. Choose based on how you obtained the coordinates:
+
+### OCR Coordinates (from `find_text` or `take_screenshot` OCR)
+
+OCR results return **screen-absolute coordinates** that are ready to use directly:
 
 ```json
-// Direct screen coordinates
-{ "x": 500, "y": 300 }
+// OCR returns: "Submit" at (450, 320)
+// Use direct screen coordinates:
+{ "x": 450, "y": 320 }
+```
 
+### Screenshot Pixel Coordinates (from visual inspection)
+
+When you visually identify a click target in a screenshot image, use the pixel coordinates with the screenshot metadata:
+
+```json
+// take_screenshot returns metadata:
+// { "screenshot_origin_x": 50, "screenshot_origin_y": 80, "screenshot_scale": 2.0 }
+//
+// You identify a button at pixel (200, 100) in the image.
+// Pass both the pixel coords and the metadata:
+{ "screenshot_x": 200, "screenshot_y": 100, "screenshot_origin_x": 50, "screenshot_origin_y": 80, "screenshot_scale": 2.0 }
+```
+
+### Other Coordinate Methods
+
+```json
 // Window-relative (converted using window bounds)
 { "window_x": 100, "window_y": 50, "window_id": 1234 }
 
-// Screenshot pixels (converted using backing scale factor)
+// Screenshot pixels (legacy: window lookup at click time - less reliable)
 { "screenshot_x": 200, "screenshot_y": 100, "screenshot_window_id": 1234 }
 ```
+
+### Quick Reference
+
+| Coordinate source | Click parameters |
+|-------------------|------------------|
+| `find_text` result | `x`, `y` (direct) |
+| `take_screenshot` OCR annotation | `x`, `y` (direct) |
+| Visual inspection of screenshot | `screenshot_x`, `screenshot_y` + metadata |
+| Known window-relative position | `window_x`, `window_y`, `window_id` |
 
 Use `get_displays` to understand the display configuration:
 ```json
@@ -326,12 +365,23 @@ Use `get_displays` to understand the display configuration:
 
 ### With CGEvent (any app)
 
+**Option A: Using OCR (recommended for text elements)**
 ```
 User: Click the Submit button in the app
 
-Claude: [calls take_screenshot]
-        [analyzes screenshot, finds Submit button at approximately x=450, y=320]
+Claude: [calls find_text with text="Submit"]
+        [receives: {"text": "Submit", "x": 450, "y": 320}]
         [calls click with x=450, y=320]
+```
+
+**Option B: Using screenshot metadata (for any visual element)**
+```
+User: Click the icon next to Settings
+
+Claude: [calls take_screenshot]
+        [receives image + metadata: {"screenshot_origin_x": 0, "screenshot_origin_y": 0, "screenshot_scale": 2.0}]
+        [visually identifies icon at pixel (300, 150) in the image]
+        [calls click with screenshot_x=300, screenshot_y=150, screenshot_origin_x=0, screenshot_origin_y=0, screenshot_scale=2.0]
 ```
 
 ### With AppDebugKit (embedded app)

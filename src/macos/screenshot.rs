@@ -19,6 +19,9 @@ pub struct Screenshot {
     /// The backing scale factor of the display this screenshot was taken from.
     /// Used for converting pixel coordinates to screen coordinates in OCR.
     pub scale_factor: f64,
+    /// Screen-space origin of the screenshot (top-left), in points.
+    pub origin_x: f64,
+    pub origin_y: f64,
 }
 
 impl Screenshot {
@@ -43,14 +46,18 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
         ));
     }
 
-    let scale_factor = display::get_main_display()
-        .map(|d| d.backing_scale_factor)
-        .unwrap_or(2.0);
+    let display = display::get_main_display().ok();
+    let (scale_factor, origin_x, origin_y) = match display {
+        Some(info) => (info.backing_scale_factor, info.bounds.x, info.bounds.y),
+        None => (2.0, 0.0, 0.0),
+    };
 
     let png_data = std::fs::read(&path)?;
     Ok(Screenshot {
         png_data,
         scale_factor,
+        origin_x,
+        origin_y,
     })
 }
 
@@ -88,6 +95,8 @@ pub fn capture_region(
     Ok(Screenshot {
         png_data,
         scale_factor,
+        origin_x: x,
+        origin_y: y,
     })
 }
 
@@ -115,21 +124,22 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
         return Err(ScreenshotError::WindowNotFound(window_id));
     }
 
+    let window = super::find_window_by_id(window_id)
+        .ok()
+        .flatten()
+        .ok_or(ScreenshotError::WindowNotFound(window_id))?;
+    let scale_factor = display::backing_scale_for_point(window.bounds.x, window.bounds.y);
+
     let png_data = std::fs::read(&path)?;
 
     if png_data.is_empty() {
         return Err(ScreenshotError::WindowNotFound(window_id));
     }
 
-    // Determine scale factor based on window position
-    let scale_factor = super::find_window_by_id(window_id)
-        .ok()
-        .flatten()
-        .map(|w| display::backing_scale_for_point(w.bounds.x, w.bounds.y))
-        .unwrap_or(2.0);
-
     Ok(Screenshot {
         png_data,
         scale_factor,
+        origin_x: window.bounds.x,
+        origin_y: window.bounds.y,
     })
 }

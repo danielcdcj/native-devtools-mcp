@@ -57,6 +57,12 @@ pub struct ClickParams {
     pub screenshot_x: Option<f64>,
     /// Screenshot pixel Y coordinate
     pub screenshot_y: Option<f64>,
+    /// Screenshot origin X coordinate in screen space
+    pub screenshot_origin_x: Option<f64>,
+    /// Screenshot origin Y coordinate in screen space
+    pub screenshot_origin_y: Option<f64>,
+    /// Backing scale factor used for the screenshot
+    pub screenshot_scale: Option<f64>,
     /// Window ID that the screenshot was taken from (for scaling)
     pub screenshot_window_id: Option<u32>,
 
@@ -109,12 +115,25 @@ pub async fn click(params: ClickParams) -> CallToolResult {
             y: window.bounds.y,
         };
         display::window_to_screen(&bounds, wx, wy)
+    } else if let (Some(px), Some(py), Some(origin_x), Some(origin_y), Some(scale)) = (
+        params.screenshot_x,
+        params.screenshot_y,
+        params.screenshot_origin_x,
+        params.screenshot_origin_y,
+        params.screenshot_scale,
+    ) {
+        // Screenshot pixel coordinates with captured origin + scale
+        let bounds = display::WindowBounds {
+            x: origin_x,
+            y: origin_y,
+        };
+        display::screenshot_to_screen(&bounds, scale, px, py)
     } else if let (Some(px), Some(py), Some(window_id)) = (
         params.screenshot_x,
         params.screenshot_y,
         params.screenshot_window_id,
     ) {
-        // Screenshot pixel coordinates
+        // Screenshot pixel coordinates (legacy: lookup window at click time)
         let window = match crate::macos::find_window_by_id(window_id) {
             Ok(Some(w)) => w,
             Ok(None) => {
@@ -139,7 +158,8 @@ pub async fn click(params: ClickParams) -> CallToolResult {
             "Provide coordinates in one of these formats:\n\
              - Screen coordinates: x, y\n\
              - Window-relative: window_x, window_y, window_id\n\
-             - Screenshot pixels: screenshot_x, screenshot_y, screenshot_window_id",
+             - Screenshot pixels: screenshot_x, screenshot_y, screenshot_origin_x, screenshot_origin_y, screenshot_scale\n\
+             - Screenshot pixels (legacy): screenshot_x, screenshot_y, screenshot_window_id",
         )]);
     };
 

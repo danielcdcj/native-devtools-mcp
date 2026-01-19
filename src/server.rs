@@ -60,7 +60,7 @@ impl MacOSDevToolsServer {
         vec![
             Tool::new(
                 "take_screenshot",
-                "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded PNG image with OCR text annotations including clickable coordinates.",
+                "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded PNG image, JSON metadata for coordinate conversion, and OCR text annotations including clickable coordinates.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -143,7 +143,7 @@ impl MacOSDevToolsServer {
             // System-level input tools (CGEvent-based, works with any app)
             Tool::new(
                 "click",
-                "Click at screen coordinates using CGEvent. Works with any app (egui, Electron, etc.). Requires Accessibility permission.",
+                "Click at screen coordinates using CGEvent. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -169,15 +169,27 @@ impl MacOSDevToolsServer {
                         },
                         "screenshot_x": {
                             "type": "number",
-                            "description": "X pixel coordinate from screenshot (use with screenshot_window_id)"
+                            "description": "X pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
                         },
                         "screenshot_y": {
                             "type": "number",
-                            "description": "Y pixel coordinate from screenshot (use with screenshot_window_id)"
+                            "description": "Y pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
+                        },
+                        "screenshot_origin_x": {
+                            "type": "number",
+                            "description": "Screenshot origin X (from take_screenshot metadata)"
+                        },
+                        "screenshot_origin_y": {
+                            "type": "number",
+                            "description": "Screenshot origin Y (from take_screenshot metadata)"
+                        },
+                        "screenshot_scale": {
+                            "type": "number",
+                            "description": "Screenshot scale factor (from take_screenshot metadata)"
                         },
                         "screenshot_window_id": {
                             "type": "integer",
-                            "description": "Window ID the screenshot was taken from (for coordinate scaling)"
+                            "description": "Window ID the screenshot was taken from (legacy: lookup window at click time)"
                         },
                         "button": {
                             "type": "string",

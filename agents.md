@@ -6,7 +6,7 @@ Purpose: MCP server for native desktop app automation using screenshots, OCR, wi
 
 | Intent | Tools | Outputs |
 |--------|-------|---------|
-| Capture screen or window | `take_screenshot` | base64 PNG, optional OCR text |
+| Capture screen or window | `take_screenshot` | base64 PNG, screenshot metadata (origin, scale), optional OCR text |
 | Find text and click it | `find_text` → `click` | coordinates, click action |
 | List and focus windows | `list_windows` → `focus_window` | window list, focus action |
 | Element-level UI control | `app_connect` → `app_query` → `app_click` | element IDs, click action |
@@ -27,6 +27,7 @@ Purpose: MCP server for native desktop app automation using screenshots, OCR, wi
       },
       "outputs": {
         "image_base64": { "type": "string" },
+        "metadata": { "type": "object", "optional": true },
         "ocr": { "type": "array", "optional": true }
       }
     },
@@ -74,10 +75,24 @@ Purpose: MCP server for native desktop app automation using screenshots, OCR, wi
 
 | User prompt | Tool sequence | Expected output |
 |-------------|---------------|-----------------|
-| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, OCR text |
+| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, metadata, OCR text |
 | "Click the OK button" | `take_screenshot` → (vision) → `click(x,y)` | click action |
 | "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
 | "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
+
+## Coordinate Usage Guide
+
+When clicking, choose the correct coordinate format based on how you obtained the target position:
+
+| Coordinate source | Click parameters | Example |
+|-------------------|------------------|---------|
+| `find_text` result | `x`, `y` (direct) | `{"x": 450, "y": 320}` |
+| `take_screenshot` OCR annotation | `x`, `y` (direct) | `{"x": 450, "y": 320}` |
+| Visual inspection of screenshot | `screenshot_x/y` + metadata | `{"screenshot_x": 200, "screenshot_y": 100, "screenshot_origin_x": 0, "screenshot_origin_y": 0, "screenshot_scale": 2.0}` |
+
+**Key distinction:**
+- **OCR coordinates** (from `find_text` or `take_screenshot` OCR) are already screen-absolute → use `x`, `y` directly
+- **Screenshot pixel coordinates** (from visually inspecting the image) need transformation → use `screenshot_x/y` with the metadata returned by `take_screenshot`
 
 ## Operational Notes
 
