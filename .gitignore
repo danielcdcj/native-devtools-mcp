@@ -1,6 +1,7 @@
 # Rust
 /target
 /data
+/bin
 
 # Swift
 .build/
