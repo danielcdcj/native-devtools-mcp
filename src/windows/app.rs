@@ -301,17 +301,19 @@ fn focus_hwnd(hwnd: HWND) {
         let current_thread = GetCurrentThreadId();
 
         // Attach to foreground thread to bypass focus-stealing prevention
-        let attached_to_foreground = if foreground_thread != current_thread && foreground_thread != 0 {
-            AttachThreadInput(current_thread, foreground_thread, true).as_bool()
-        } else {
-            false
-        };
+        let attached_to_foreground =
+            if foreground_thread != current_thread && foreground_thread != 0 {
+                AttachThreadInput(current_thread, foreground_thread, true).as_bool()
+            } else {
+                false
+            };
 
-        let attached_to_target = if target_thread != current_thread && target_thread != foreground_thread {
-            AttachThreadInput(current_thread, target_thread, true).as_bool()
-        } else {
-            false
-        };
+        let attached_to_target =
+            if target_thread != current_thread && target_thread != foreground_thread {
+                AttachThreadInput(current_thread, target_thread, true).as_bool()
+            } else {
+                false
+            };
 
         // Restore if minimized
         if IsIconic(hwnd).as_bool() {
