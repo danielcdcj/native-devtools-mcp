@@ -4,10 +4,10 @@
 mod app_protocol;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
 mod server;
 mod tools;
+#[cfg(target_os = "windows")]
+mod windows;
 
 // Re-export platform module for unified access
 #[cfg(target_os = "macos")]

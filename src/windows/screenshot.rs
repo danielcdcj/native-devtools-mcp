@@ -6,12 +6,12 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::mem;
 use thiserror::Error;
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
     SRCCOPY,
 };
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
 #[derive(Error, Debug)]
@@ -132,7 +132,12 @@ fn get_window_bounds_for_capture(hwnd: HWND) -> WindowBounds {
 }
 
 /// Capture a region of the screen using BitBlt.
-fn capture_region_to_png(x: i32, y: i32, width: i32, height: i32) -> Result<Vec<u8>, ScreenshotError> {
+fn capture_region_to_png(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<Vec<u8>, ScreenshotError> {
     unsafe {
         let screen_dc = GetDC(HWND::default());
         if screen_dc.is_invalid() {
@@ -158,13 +163,17 @@ fn capture_dc_region_to_png(
     unsafe {
         let mem_dc = CreateCompatibleDC(source_dc);
         if mem_dc.is_invalid() {
-            return Err(ScreenshotError::CaptureError("CreateCompatibleDC failed".to_string()));
+            return Err(ScreenshotError::CaptureError(
+                "CreateCompatibleDC failed".to_string(),
+            ));
         }
 
         let bitmap = CreateCompatibleBitmap(source_dc, width, height);
         if bitmap.is_invalid() {
             let _ = DeleteDC(mem_dc);
-            return Err(ScreenshotError::CaptureError("CreateCompatibleBitmap failed".to_string()));
+            return Err(ScreenshotError::CaptureError(
+                "CreateCompatibleBitmap failed".to_string(),
+            ));
         }
 
         let old_bitmap = SelectObject(mem_dc, bitmap);
@@ -224,7 +233,9 @@ fn extract_bitmap_to_png(
         );
 
         if result == 0 {
-            return Err(ScreenshotError::CaptureError("GetDIBits failed".to_string()));
+            return Err(ScreenshotError::CaptureError(
+                "GetDIBits failed".to_string(),
+            ));
         }
 
         // Convert BGRA to RGBA
@@ -245,18 +256,19 @@ fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, S
     let mut output = Vec::new();
 
     // PNG signature
-    output.write_all(&[137, 80, 78, 71, 13, 10, 26, 10])
+    output
+        .write_all(&[137, 80, 78, 71, 13, 10, 26, 10])
         .map_err(|e| ScreenshotError::CaptureError(e.to_string()))?;
 
     // IHDR chunk
     let mut ihdr_data = Vec::new();
     ihdr_data.extend_from_slice(&width.to_be_bytes());
     ihdr_data.extend_from_slice(&height.to_be_bytes());
-    ihdr_data.push(8);  // bit depth
-    ihdr_data.push(6);  // color type (RGBA)
-    ihdr_data.push(0);  // compression method
-    ihdr_data.push(0);  // filter method
-    ihdr_data.push(0);  // interlace method
+    ihdr_data.push(8); // bit depth
+    ihdr_data.push(6); // color type (RGBA)
+    ihdr_data.push(0); // compression method
+    ihdr_data.push(0); // filter method
+    ihdr_data.push(0); // interlace method
     write_chunk(&mut output, b"IHDR", &ihdr_data)?;
 
     // Prepare image data with filter bytes
@@ -279,15 +291,22 @@ fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, S
     Ok(output)
 }
 
-fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) -> Result<(), ScreenshotError> {
+fn write_chunk(
+    output: &mut Vec<u8>,
+    chunk_type: &[u8; 4],
+    data: &[u8],
+) -> Result<(), ScreenshotError> {
     use std::io::Write;
 
     let length = data.len() as u32;
-    output.write_all(&length.to_be_bytes())
+    output
+        .write_all(&length.to_be_bytes())
         .map_err(|e| ScreenshotError::CaptureError(e.to_string()))?;
-    output.write_all(chunk_type)
+    output
+        .write_all(chunk_type)
         .map_err(|e| ScreenshotError::CaptureError(e.to_string()))?;
-    output.write_all(data)
+    output
+        .write_all(data)
         .map_err(|e| ScreenshotError::CaptureError(e.to_string()))?;
 
     // CRC32 of chunk type + data
@@ -295,7 +314,8 @@ fn write_chunk(output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) -> Resul
     crc_data.extend_from_slice(chunk_type);
     crc_data.extend_from_slice(data);
     let crc = crc32(&crc_data);
-    output.write_all(&crc.to_be_bytes())
+    output
+        .write_all(&crc.to_be_bytes())
         .map_err(|e| ScreenshotError::CaptureError(e.to_string()))?;
 
     Ok(())

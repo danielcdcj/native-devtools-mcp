@@ -68,11 +68,15 @@ impl MacOSDevToolsServer {
                             "type": "string",
                             "enum": ["screen", "window", "region"],
                             "description": "Capture mode: 'screen' for full screen, 'window' for specific window, 'region' for rectangular area",
-                            "default": "screen"
+                            "default": "window"
                         },
                         "window_id": {
                             "type": "integer",
                             "description": "Window ID to capture (required for mode='window')"
+                        },
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to capture (for mode='window', alternative to window_id)"
                         },
                         "x": {
                             "type": "number",

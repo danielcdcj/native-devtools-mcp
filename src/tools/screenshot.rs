@@ -9,8 +9,11 @@ pub struct TakeScreenshotParams {
     #[serde(default = "default_mode")]
     pub mode: String,
 
-    /// Window ID (required for mode="window")
+    /// Window ID (for mode="window")
     pub window_id: Option<u32>,
+
+    /// Application name to capture (for mode="window", alternative to window_id)
+    pub app_name: Option<String>,
 
     /// Region coordinates (required for mode="region")
     pub x: Option<f64>,
@@ -24,7 +27,7 @@ pub struct TakeScreenshotParams {
 }
 
 fn default_mode() -> String {
-    "screen".to_string()
+    "window".to_string()
 }
 
 fn default_include_ocr() -> bool {
@@ -44,11 +47,26 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
     let result = match params.mode.as_str() {
         "screen" => platform::capture_screen(),
         "window" => {
-            let window_id = match params.window_id {
-                Some(id) => id,
-                None => {
+            let window_id = match (params.window_id, &params.app_name) {
+                (Some(id), _) => id,
+                (None, Some(app_name)) => match platform::find_windows_by_app(app_name) {
+                    Ok(windows) if !windows.is_empty() => windows[0].id,
+                    Ok(_) => {
+                        return CallToolResult::error(vec![Content::text(format!(
+                            "No window found for app '{}'",
+                            app_name
+                        ))]);
+                    }
+                    Err(e) => {
+                        return CallToolResult::error(vec![Content::text(format!(
+                            "Failed to find window: {}",
+                            e
+                        ))]);
+                    }
+                },
+                (None, None) => {
                     return CallToolResult::error(vec![Content::text(
-                        "window_id is required for mode='window'",
+                        "window_id or app_name is required for mode='window'",
                     )]);
                 }
             };

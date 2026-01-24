@@ -304,7 +304,10 @@ mod tests {
         }
 
         // Should find at least some digits from the calculator
-        assert!(!matches.is_empty(), "OCR should detect text from calculator");
+        assert!(
+            !matches.is_empty(),
+            "OCR should detect text from calculator"
+        );
 
         // Check that we found some expected calculator buttons
         let texts: Vec<&str> = matches.iter().map(|m| m.text.as_str()).collect();
@@ -316,7 +319,10 @@ mod tests {
 
         // The calculator screenshot shows "9×9 = 81", verify we detect this
         let has_result = texts.iter().any(|t| t.contains("81") || t.contains("9×9"));
-        assert!(has_result, "Should detect the calculation result (81 or 9×9)");
+        assert!(
+            has_result,
+            "Should detect the calculation result (81 or 9×9)"
+        );
     }
 
     #[test]

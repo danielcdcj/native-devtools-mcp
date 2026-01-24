@@ -4,10 +4,10 @@
 pub mod app_protocol;
 #[cfg(target_os = "macos")]
 pub mod macos;
-#[cfg(target_os = "windows")]
-pub mod windows;
 pub mod server;
 pub mod tools;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 // Re-export platform module as `platform` for unified access
 #[cfg(target_os = "macos")]

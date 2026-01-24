@@ -15,7 +15,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_RCONTROL,
     VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+};
 
 /// Mouse button types for click operations.
 #[derive(Debug, Clone, Copy, Default)]
@@ -319,17 +321,17 @@ fn key_name_to_vk(key: &str) -> Option<VIRTUAL_KEY> {
         "insert" => VK_INSERT,
 
         // Punctuation - use OEM codes
-        "-" | "_" => VIRTUAL_KEY(0xBD),      // VK_OEM_MINUS
-        "=" | "+" => VIRTUAL_KEY(0xBB),      // VK_OEM_PLUS
-        "[" | "{" => VIRTUAL_KEY(0xDB),      // VK_OEM_4
-        "]" | "}" => VIRTUAL_KEY(0xDD),      // VK_OEM_6
-        "\\" | "|" => VIRTUAL_KEY(0xDC),     // VK_OEM_5
-        ";" | ":" => VIRTUAL_KEY(0xBA),      // VK_OEM_1
-        "'" | "\"" => VIRTUAL_KEY(0xDE),     // VK_OEM_7
-        "," | "<" => VIRTUAL_KEY(0xBC),      // VK_OEM_COMMA
-        "." | ">" => VIRTUAL_KEY(0xBE),      // VK_OEM_PERIOD
-        "/" | "?" => VIRTUAL_KEY(0xBF),      // VK_OEM_2
-        "`" | "~" => VIRTUAL_KEY(0xC0),      // VK_OEM_3
+        "-" | "_" => VIRTUAL_KEY(0xBD),  // VK_OEM_MINUS
+        "=" | "+" => VIRTUAL_KEY(0xBB),  // VK_OEM_PLUS
+        "[" | "{" => VIRTUAL_KEY(0xDB),  // VK_OEM_4
+        "]" | "}" => VIRTUAL_KEY(0xDD),  // VK_OEM_6
+        "\\" | "|" => VIRTUAL_KEY(0xDC), // VK_OEM_5
+        ";" | ":" => VIRTUAL_KEY(0xBA),  // VK_OEM_1
+        "'" | "\"" => VIRTUAL_KEY(0xDE), // VK_OEM_7
+        "," | "<" => VIRTUAL_KEY(0xBC),  // VK_OEM_COMMA
+        "." | ">" => VIRTUAL_KEY(0xBE),  // VK_OEM_PERIOD
+        "/" | "?" => VIRTUAL_KEY(0xBF),  // VK_OEM_2
+        "`" | "~" => VIRTUAL_KEY(0xC0),  // VK_OEM_3
 
         _ => return None,
     })

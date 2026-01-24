@@ -53,7 +53,10 @@ pub fn list_apps() -> Vec<AppInfo> {
     };
 
     unsafe {
-        let _ = EnumWindows(Some(app_enum_callback), LPARAM(&mut data as *mut _ as isize));
+        let _ = EnumWindows(
+            Some(app_enum_callback),
+            LPARAM(&mut data as *mut _ as isize),
+        );
     }
 
     data.apps.into_values().collect()

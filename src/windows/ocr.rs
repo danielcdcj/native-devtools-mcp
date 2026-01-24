@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use windows::core::Interface;
 use windows::Graphics::Imaging::{BitmapDecoder, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
-use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream, IRandomAccessStream};
+use windows::Storage::Streams::{DataWriter, IRandomAccessStream, InMemoryRandomAccessStream};
 
 /// Bounding box in screen coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,7 +56,9 @@ fn run_winrt_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> 
         .get()
         .map_err(|e| format!("OCR async failed: {}", e))?;
 
-    let lines = result.Lines().map_err(|e| format!("Failed to get OCR lines: {}", e))?;
+    let lines = result
+        .Lines()
+        .map_err(|e| format!("Failed to get OCR lines: {}", e))?;
 
     let mut matches = Vec::new();
 
@@ -94,36 +96,42 @@ fn run_winrt_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> 
 
 fn load_png_to_software_bitmap(png_data: &[u8]) -> Result<SoftwareBitmap, String> {
     // Create an in-memory stream
-    let stream = InMemoryRandomAccessStream::new()
-        .map_err(|e| format!("Failed to create stream: {}", e))?;
+    let stream =
+        InMemoryRandomAccessStream::new().map_err(|e| format!("Failed to create stream: {}", e))?;
 
     // Write PNG data to stream
     let writer = DataWriter::CreateDataWriter(&stream)
         .map_err(|e| format!("Failed to create writer: {}", e))?;
 
-    writer.WriteBytes(png_data)
+    writer
+        .WriteBytes(png_data)
         .map_err(|e| format!("Failed to write bytes: {}", e))?;
 
-    writer.StoreAsync()
+    writer
+        .StoreAsync()
         .map_err(|e| format!("Failed to store: {}", e))?
         .get()
         .map_err(|e| format!("Store async failed: {}", e))?;
 
-    writer.FlushAsync()
+    writer
+        .FlushAsync()
         .map_err(|e| format!("Failed to flush: {}", e))?
         .get()
         .map_err(|e| format!("Flush async failed: {}", e))?;
 
     // Detach stream from writer
-    writer.DetachStream()
+    writer
+        .DetachStream()
         .map_err(|e| format!("Failed to detach stream: {}", e))?;
 
     // Reset stream position to beginning
-    stream.Seek(0)
+    stream
+        .Seek(0)
         .map_err(|e| format!("Failed to seek: {}", e))?;
 
     // Create decoder
-    let stream_ref: IRandomAccessStream = stream.cast()
+    let stream_ref: IRandomAccessStream = stream
+        .cast()
         .map_err(|e| format!("Failed to cast stream: {}", e))?;
 
     let decoder = BitmapDecoder::CreateAsync(&stream_ref)
@@ -132,7 +140,8 @@ fn load_png_to_software_bitmap(png_data: &[u8]) -> Result<SoftwareBitmap, String
         .map_err(|e| format!("Decoder async failed: {}", e))?;
 
     // Get software bitmap
-    let bitmap = decoder.GetSoftwareBitmapAsync()
+    let bitmap = decoder
+        .GetSoftwareBitmapAsync()
         .map_err(|e| format!("Failed to get bitmap: {}", e))?
         .get()
         .map_err(|e| format!("Bitmap async failed: {}", e))?;
@@ -151,8 +160,7 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
 
     // Capture the display
     // For now, capture the full virtual screen and filter by display bounds
-    let screenshot = capture_screen()
-        .map_err(|e| format!("Screenshot failed: {}", e))?;
+    let screenshot = capture_screen().map_err(|e| format!("Screenshot failed: {}", e))?;
 
     let mut matches = ocr_image(&screenshot.png_data, Some(display.backing_scale_factor))?;
 
