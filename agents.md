@@ -20,8 +20,9 @@ Purpose: MCP server for native desktop app automation using screenshots, OCR, wi
       "name": "capture_screenshot",
       "tools": ["take_screenshot"],
       "inputs": {
-        "scope": { "type": "string", "enum": ["screen", "window", "region"] },
+        "scope": { "type": "string", "enum": ["screen", "window", "region"], "default": "window" },
         "window_id": { "type": "number", "optional": true },
+        "app_name": { "type": "string", "optional": true },
         "region": { "type": "object", "optional": true },
         "include_ocr": { "type": "boolean", "default": true }
       },
@@ -75,8 +76,8 @@ Purpose: MCP server for native desktop app automation using screenshots, OCR, wi
 
 | User prompt | Tool sequence | Expected output |
 |-------------|---------------|-----------------|
-| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, metadata, OCR text |
-| "Click the OK button" | `take_screenshot` → (vision) → `click(x,y)` | click action |
+| "Take a screenshot of the Settings window" | `take_screenshot(app_name="Settings")` | base64 PNG, metadata, OCR text |
+| "Click the OK button" | `take_screenshot(app_name="YourApp")` → (vision) → `click(x,y)` | click action |
 | "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
 | "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
 

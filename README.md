@@ -29,7 +29,7 @@ This server provides **two distinct approaches** for interacting with applicatio
 
 ### 1. AppDebugKit (`app_*` tools) - Element-Level Precision
 
-For applications that embed [AppDebugKit](./AppDebugKit/), you get:
+For applications that embed [AppDebugKit](./AppDebugKit/) (macOS only), you get:
 - **Element targeting by ID** - Click buttons, fill text fields by element reference
 - **CSS-like selectors** - Query elements with `#id`, `.ClassName`, `[title=Save]`
 - **View hierarchy inspection** - Traverse the UI tree programmatically
@@ -51,7 +51,7 @@ For **any application** regardless of framework:
 **Best for:** Third-party apps, egui/Electron/Qt apps, when AppDebugKit isn't available.
 
 ```
-take_screenshot → (analyze visually) → click(x=500, y=300)
+take_screenshot(app_name="YourApp") → (analyze visually) → click(x=500, y=300)
 ```
 
 ### Why Two Approaches?
@@ -213,12 +213,14 @@ Note: Use `native-devtools-mcp@latest` if you want to always run the newest vers
 
 | Tool | Description |
 |------|-------------|
-| `take_screenshot` | Capture screen, window, or region (base64 PNG). Returns screenshot metadata for coordinate conversion and includes OCR text annotations by default (`include_ocr: true`). |
+| `take_screenshot` | Capture screen, window, or region (default: window). For window mode, pass `app_name` (preferred) or `window_id`. Returns screenshot metadata for coordinate conversion and includes OCR text annotations by default (`include_ocr: true`). |
 | `list_windows` | List visible windows with IDs, titles, bounds |
 | `list_apps` | List running applications |
 | `focus_window` | Bring window/app to front |
 | `get_displays` | Get display info (bounds, scale factors) for coordinate conversion |
 | `find_text` | Find text on screen using OCR; returns screen coordinates for clicking |
+
+Tip: Prefer `take_screenshot` with `app_name` (or `window_id`) to capture a single window; use `mode: "screen"` only when you need multiple windows or the desktop.
 
 ### Native Input Tools (work with any app)
 
@@ -272,8 +274,9 @@ intents:
   - name: capture_screenshot
     tools: [take_screenshot]
     inputs:
-      scope: { type: string, enum: [screen, window, region] }
+      scope: { type: string, enum: [screen, window, region], default: window }
       window_id: { type: number, optional: true }
+      app_name: { type: string, optional: true }
       region: { type: object, optional: true }
       include_ocr: { type: boolean, default: true }
     outputs:
@@ -310,8 +313,8 @@ intents:
 
 | User prompt | Tool sequence | Expected output |
 |-------------|---------------|-----------------|
-| "Take a screenshot of the Settings window" | `list_windows` → `take_screenshot(window_id)` | base64 PNG, metadata, OCR text |
-| "Click the OK button" | `take_screenshot` → (vision) → `click(screenshot_x/y + metadata)` | click action |
+| "Take a screenshot of the Settings window" | `take_screenshot(app_name="Settings")` | base64 PNG, metadata, OCR text |
+| "Click the OK button" | `take_screenshot(app_name="YourApp")` → (vision) → `click(screenshot_x/y + metadata)` | click action |
 | "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
 | "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
 
@@ -333,7 +336,7 @@ intents:
 
 ### Windows
 
-- **Screenshots** are captured via GDI BitBlt from the desktop DC. For window captures, DWM extended frame bounds are used to exclude invisible borders. The raw bitmap is encoded to PNG in-memory and returned as base64 with metadata for coordinate conversion.
+- **Screenshots** are captured via GDI BitBlt from the desktop DC. For window captures, DWM extended frame bounds are used to exclude invisible borders. The raw bitmap is encoded to PNG in-memory and returned as base64 with metadata for coordinate conversion. On Windows, captures are in logical coordinates so `screenshot_scale` is always 1.0.
 - **Clicks/inputs** use the SendInput API with `INPUT_MOUSE` and `INPUT_KEYBOARD` structures. Text input uses `KEYEVENTF_UNICODE` for direct Unicode character injection, bypassing keyboard layout issues. This works across Win32, WPF, UWP, Electron, and most UI frameworks.
 
 ### Coordinate Conversion
@@ -417,7 +420,7 @@ Claude: [calls find_text with text="Submit"]
 ```
 User: Click the icon next to Settings
 
-Claude: [calls take_screenshot]
+Claude: [calls take_screenshot with app_name="YourApp"]
         [receives image + metadata: {"screenshot_origin_x": 0, "screenshot_origin_y": 0, "screenshot_scale": 2.0}]
         [visually identifies icon at pixel (300, 150) in the image]
         [calls click with screenshot_x=300, screenshot_y=150, screenshot_origin_x=0, screenshot_origin_y=0, screenshot_scale=2.0]
