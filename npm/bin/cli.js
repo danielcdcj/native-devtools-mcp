@@ -6,6 +6,7 @@ const fs = require("fs");
 
 const PLATFORMS = {
   "darwin-arm64": "@sh3ll3x3c/native-devtools-mcp-darwin-arm64",
+  "win32-x64": "@sh3ll3x3c/native-devtools-mcp-win32-x64",
 };
 
 function getPlatformPackage() {
@@ -16,7 +17,9 @@ function getPlatformPackage() {
   const pkg = PLATFORMS[key];
   if (!pkg) {
     console.error(`Unsupported platform: ${platform}-${arch}`);
-    console.error("native-devtools-mcp supports: darwin-arm64 (Apple Silicon)");
+    console.error(
+      "native-devtools-mcp supports: darwin-arm64 (Apple Silicon), win32-x64 (Windows x64)"
+    );
     process.exit(1);
   }
 
@@ -29,16 +32,20 @@ function findBinary() {
   const platformDir = `${platform}-${arch}`;
   const pkg = getPlatformPackage();
 
+  // Binary name differs by platform
+  const binaryName =
+    platform === "win32" ? "native-devtools-mcp.exe" : "native-devtools-mcp";
+
   // Try to find the platform-specific package
   const possiblePaths = [
     // Local development (binary in sibling directory)
-    path.join(__dirname, "..", platformDir, "bin", "native-devtools-mcp"),
+    path.join(__dirname, "..", platformDir, "bin", binaryName),
     // When installed as a dependency
-    path.join(__dirname, "..", "node_modules", pkg, "bin", "native-devtools-mcp"),
+    path.join(__dirname, "..", "node_modules", pkg, "bin", binaryName),
     // When installed globally or via npx
-    path.join(__dirname, "..", "..", pkg, "bin", "native-devtools-mcp"),
+    path.join(__dirname, "..", "..", pkg, "bin", binaryName),
     // Hoisted in node_modules
-    path.join(__dirname, "..", "..", "..", pkg, "bin", "native-devtools-mcp"),
+    path.join(__dirname, "..", "..", "..", pkg, "bin", binaryName),
   ];
 
   for (const binPath of possiblePaths) {

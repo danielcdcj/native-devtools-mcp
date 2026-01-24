@@ -19,6 +19,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             npm_dir: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            npm_dir: win32-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -31,22 +34,46 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary for GitHub Release
+      - name: Package binary for GitHub Release (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar -czvf ../../../native-devtools-mcp-${{ matrix.target }}.tar.gz native-devtools-mcp
 
-      - name: Prepare npm package
+      - name: Package binary for GitHub Release (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path native-devtools-mcp.exe -DestinationPath ../../../native-devtools-mcp-${{ matrix.target }}.zip
+        shell: pwsh
+
+      - name: Prepare npm package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p npm/${{ matrix.npm_dir }}/bin
           cp target/${{ matrix.target }}/release/native-devtools-mcp npm/${{ matrix.npm_dir }}/bin/
           chmod +x npm/${{ matrix.npm_dir }}/bin/native-devtools-mcp
 
-      - name: Upload GitHub Release artifact
+      - name: Prepare npm package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path npm/${{ matrix.npm_dir }}/bin
+          Copy-Item target/${{ matrix.target }}/release/native-devtools-mcp.exe npm/${{ matrix.npm_dir }}/bin/
+        shell: pwsh
+
+      - name: Upload GitHub Release artifact (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: native-devtools-mcp-${{ matrix.target }}
           path: native-devtools-mcp-${{ matrix.target }}.tar.gz
+
+      - name: Upload GitHub Release artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-devtools-mcp-${{ matrix.target }}
+          path: native-devtools-mcp-${{ matrix.target }}.zip
 
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v4
@@ -69,7 +96,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/native-devtools-mcp-*/*.tar.gz
+          files: |
+            artifacts/native-devtools-mcp-*/*.tar.gz
+            artifacts/native-devtools-mcp-*/*.zip
           generate_release_notes: true
 
   publish-npm:
@@ -96,11 +125,16 @@ jobs:
       - name: Update npm to latest
         run: npm install -g npm@latest && npm -v
 
-      - name: Copy binary to npm package
+      - name: Copy binaries to npm packages
         run: |
+          # Copy macOS binary
           mkdir -p npm/darwin-arm64/bin
           cp artifacts/npm-darwin-arm64/bin/native-devtools-mcp npm/darwin-arm64/bin/
           chmod +x npm/darwin-arm64/bin/native-devtools-mcp
+
+          # Copy Windows binary
+          mkdir -p npm/win32-x64/bin
+          cp artifacts/npm-win32-x64/bin/native-devtools-mcp.exe npm/win32-x64/bin/
 
       - name: Copy README to npm package
         run: cp README.md npm/
@@ -114,17 +148,24 @@ jobs:
           cd npm
           npm version $VERSION --no-git-tag-version --allow-same-version
 
-          # Update platform package version
+          # Update platform package versions
           cd darwin-arm64
+          npm version $VERSION --no-git-tag-version --allow-same-version
+          cd ../win32-x64
           npm version $VERSION --no-git-tag-version --allow-same-version
           cd ..
 
-          # Update optionalDependencies version in main package
+          # Update optionalDependencies versions in main package
           sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-darwin-arm64\": \"$VERSION\"/" package.json
+          sed -i "s/\"@sh3ll3x3c\/native-devtools-mcp-win32-x64\": \".*\"/\"@sh3ll3x3c\/native-devtools-mcp-win32-x64\": \"$VERSION\"/" package.json
 
       - name: Publish darwin-arm64 package
         run: npm publish --provenance --access public
         working-directory: npm/darwin-arm64
+
+      - name: Publish win32-x64 package
+        run: npm publish --provenance --access public
+        working-directory: npm/win32-x64
 
       - name: Wait for npm registry to update
         run: sleep 30

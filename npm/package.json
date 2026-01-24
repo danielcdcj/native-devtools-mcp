@@ -15,7 +15,8 @@
     "desktop",
     "testing",
     "automation",
-    "macos"
+    "macos",
+    "windows"
   ],
   "bin": {
     "native-devtools-mcp": "bin/cli.js"
@@ -24,7 +25,8 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.1.6"
+    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.1.6",
+    "@sh3ll3x3c/native-devtools-mcp-win32-x64": "0.1.6"
   },
   "engines": {
     "node": ">=18"
