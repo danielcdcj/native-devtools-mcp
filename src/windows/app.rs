@@ -7,12 +7,14 @@ use std::os::windows::ffi::OsStringExt;
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, TRUE};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
-    ShowWindow, GW_OWNER, SW_RESTORE,
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, GW_OWNER,
+    SW_RESTORE, SW_SHOW,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,18 +294,44 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
 /// Windows restricts SetForegroundWindow in certain conditions.
 fn focus_hwnd(hwnd: HWND) {
     unsafe {
-        // Allow this process to set foreground window
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let _ = AllowSetForegroundWindow(pid);
+        // Get thread IDs for attachment
+        let foreground_hwnd = GetForegroundWindow();
+        let foreground_thread = GetWindowThreadProcessId(foreground_hwnd, None);
+        let target_thread = GetWindowThreadProcessId(hwnd, None);
+        let current_thread = GetCurrentThreadId();
+
+        // Attach to foreground thread to bypass focus-stealing prevention
+        let attached_to_foreground = if foreground_thread != current_thread && foreground_thread != 0 {
+            AttachThreadInput(current_thread, foreground_thread, true).as_bool()
+        } else {
+            false
+        };
+
+        let attached_to_target = if target_thread != current_thread && target_thread != foreground_thread {
+            AttachThreadInput(current_thread, target_thread, true).as_bool()
+        } else {
+            false
+        };
 
         // Restore if minimized
-        let _ = ShowWindow(hwnd, SW_RESTORE);
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            // Ensure window is visible
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
 
-        // Try SetForegroundWindow first
-        if !SetForegroundWindow(hwnd).as_bool() {
-            // Fallback: bring to top
-            let _ = BringWindowToTop(hwnd);
+        // Bring to top and set foreground
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(hwnd);
+
+        // Detach threads
+        if attached_to_target {
+            let _ = AttachThreadInput(current_thread, target_thread, false);
+        }
+        if attached_to_foreground {
+            let _ = AttachThreadInput(current_thread, foreground_thread, false);
         }
     }
 }
