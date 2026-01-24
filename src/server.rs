@@ -67,7 +67,7 @@ impl MacOSDevToolsServer {
                         "mode": {
                             "type": "string",
                             "enum": ["screen", "window", "region"],
-                            "description": "Capture mode: 'screen' for full screen, 'window' for specific window, 'region' for rectangular area",
+                            "description": "Capture mode (default: 'window'). Prefer 'window' with app_name for focused screenshots. Only use 'screen' when you need to see multiple windows or the desktop.",
                             "default": "window"
                         },
                         "window_id": {
@@ -144,10 +144,10 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-            // System-level input tools (CGEvent-based, works with any app)
+            // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
-                "Click at screen coordinates using CGEvent. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission.",
+                "Click at screen coordinates. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -210,7 +210,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "move_mouse",
-                "Move mouse cursor to screen coordinates. Requires Accessibility permission.",
+                "Move mouse cursor to screen coordinates. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["x", "y"],
@@ -228,7 +228,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "drag",
-                "Drag from one point to another. Requires Accessibility permission.",
+                "Drag from one point to another. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["start_x", "start_y", "end_x", "end_y"],
@@ -259,7 +259,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "scroll",
-                "Scroll at a position. Requires Accessibility permission.",
+                "Scroll at a position. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["x", "y", "delta_y"],
@@ -286,7 +286,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "type_text",
-                "Type text at the current cursor position using CGEvent. Works with any app. Requires Accessibility permission.",
+                "Type text at the current cursor position. Works with any app. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
@@ -300,7 +300,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "press_key",
-                "Press a key combination using CGEvent. Works with any app. Requires Accessibility permission.",
+                "Press a key combination. Works with any app. Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["key"],
@@ -328,7 +328,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "Find text on screen using OCR. Returns screen coordinates for clicking. Requires macOS 10.15+ (uses Vision framework)",
+                "Find text on screen using OCR. Returns screen coordinates for clicking. Requires macOS 10.15+ or Windows 10 1903+.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
@@ -571,12 +571,14 @@ impl ServerHandler for MacOSDevToolsServer {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             instructions: Some(
-                "macOS DevTools MCP server for testing native applications.\n\n\
+                "Native DevTools MCP server for testing native applications on macOS and Windows.\n\n\
                  Two approaches for UI interaction:\n\
-                 1. AppDebugKit (app_* tools): For apps with AppDebugKit embedded. \
+                 1. AppDebugKit (app_* tools): For apps with AppDebugKit embedded (macOS only). \
                     Use app_connect first, then app_click, app_type, etc. for element-level precision.\n\
-                 2. CGEvent (click, type_text, etc.): For any app (egui, Electron, etc.). \
-                    Use take_screenshot to see UI, then click at coordinates. Requires Accessibility permission.\n\n\
+                 2. CGEvent/SendInput (click, type_text, etc.): For any app (egui, Electron, etc.). \
+                    Use take_screenshot to see UI, then click at coordinates. Requires Accessibility permission on macOS.\n\n\
+                 Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code' for VSCode) \
+                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n\
                  Use get_displays to understand screen layout and coordinate systems."
                     .to_string(),
             ),
@@ -685,7 +687,7 @@ impl ServerHandler for MacOSDevToolsServer {
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(app_tools::app_focus_window(params, self.app_client.clone()).await)
             }
-            // System-level input tools (CGEvent-based)
+            // System-level input tools
             "click" => {
                 let params: input_tools::ClickParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
