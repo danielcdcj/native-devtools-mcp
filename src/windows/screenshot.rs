@@ -43,14 +43,13 @@ impl Screenshot {
 pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
     let (vx, vy, vw, vh) = display::get_virtual_screen_bounds();
 
-    let display = display::get_main_display().ok();
-    let scale_factor = display.map(|d| d.backing_scale_factor).unwrap_or(1.0);
-
     let png_data = capture_region_to_png(vx, vy, vw, vh)?;
 
+    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
+    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
     Ok(Screenshot {
         png_data,
-        scale_factor,
+        scale_factor: 1.0,
         origin_x: vx as f64,
         origin_y: vy as f64,
     })
@@ -63,13 +62,13 @@ pub fn capture_region(
     width: f64,
     height: f64,
 ) -> Result<Screenshot, ScreenshotError> {
-    let scale_factor = display::backing_scale_for_point(x, y);
-
     let png_data = capture_region_to_png(x as i32, y as i32, width as i32, height as i32)?;
 
+    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
+    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
     Ok(Screenshot {
         png_data,
-        scale_factor,
+        scale_factor: 1.0,
         origin_x: x,
         origin_y: y,
     })
@@ -77,7 +76,8 @@ pub fn capture_region(
 
 /// Capture a specific window by its ID.
 pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
-    let window = find_window_by_id(window_id)
+    // Verify window exists
+    let _window = find_window_by_id(window_id)
         .map_err(ScreenshotError::CaptureError)?
         .ok_or(ScreenshotError::WindowNotFound(window_id))?;
 
@@ -94,13 +94,14 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
     // Use BitBlt to capture the window's screen region
     let png_data = capture_region_to_png(bounds.x as i32, bounds.y as i32, width, height)?;
 
-    let scale_factor = display::backing_scale_for_point(window.bounds.x, window.bounds.y);
-
+    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
+    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
+    // Also use the same bounds for origin as used for capture to ensure consistency.
     Ok(Screenshot {
         png_data,
-        scale_factor,
-        origin_x: window.bounds.x,
-        origin_y: window.bounds.y,
+        scale_factor: 1.0,
+        origin_x: bounds.x,
+        origin_y: bounds.y,
     })
 }
 

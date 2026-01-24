@@ -120,23 +120,6 @@ pub fn get_main_display() -> Result<DisplayInfo, String> {
         .ok_or_else(|| "No main display found".to_string())
 }
 
-/// Get the backing scale factor for a point on screen.
-/// Returns the DPI scale of the monitor containing that point.
-pub fn backing_scale_for_point(x: f64, y: f64) -> f64 {
-    get_displays()
-        .ok()
-        .and_then(|displays| {
-            displays.into_iter().find(|d| {
-                x >= d.bounds.x
-                    && x < d.bounds.x + d.bounds.width
-                    && y >= d.bounds.y
-                    && y < d.bounds.y + d.bounds.height
-            })
-        })
-        .map(|d| d.backing_scale_factor)
-        .unwrap_or(1.0)
-}
-
 #[derive(Debug, Clone)]
 pub struct WindowBounds {
     pub x: f64,

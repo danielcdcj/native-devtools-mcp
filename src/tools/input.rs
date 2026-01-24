@@ -156,8 +156,13 @@ pub async fn click(params: ClickParams) -> CallToolResult {
             y: window.bounds.y,
         };
 
-        // Get backing scale factor for this window's location
+        // macOS: screencapture captures in physical (Retina) pixels, need scale factor
+        // Windows: BitBlt captures in logical coordinates, scale is always 1.0
+        #[cfg(target_os = "macos")]
         let scale = display::backing_scale_for_point(window.bounds.x, window.bounds.y);
+        #[cfg(target_os = "windows")]
+        let scale = 1.0;
+
         display::screenshot_to_screen(&bounds, scale, px, py)
     } else {
         return CallToolResult::error(vec![Content::text(

@@ -95,7 +95,10 @@ pub fn move_mouse(x: f64, y: f64) -> Result<(), String> {
 
 /// Click at the specified screen coordinates.
 pub fn click(x: f64, y: f64, button: MouseButton, click_count: u32) -> Result<(), String> {
-    let (abs_x, abs_y) = to_absolute_coords(x, y);
+    // First move the cursor to the click position - many applications require
+    // the cursor to actually be at the click location to receive the event
+    move_mouse(x, y)?;
+    thread::sleep(Duration::from_millis(10));
 
     let (down_flag, up_flag) = match button {
         MouseButton::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
@@ -103,16 +106,12 @@ pub fn click(x: f64, y: f64, button: MouseButton, click_count: u32) -> Result<()
         MouseButton::Center => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
     };
 
-    let base_flags = (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK).0;
-
     for _ in 0..click_count {
-        let inputs = [
-            make_mouse_input(abs_x, abs_y, base_flags | down_flag.0, 0),
-            make_mouse_input(abs_x, abs_y, base_flags | up_flag.0, 0),
-        ];
+        let down = make_mouse_input(0, 0, down_flag.0, 0);
+        let up = make_mouse_input(0, 0, up_flag.0, 0);
 
         unsafe {
-            let result = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+            let result = SendInput(&[down, up], std::mem::size_of::<INPUT>() as i32);
             if result == 0 {
                 return Err("SendInput failed for click".to_string());
             }
