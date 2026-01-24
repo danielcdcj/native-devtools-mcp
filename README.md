@@ -8,13 +8,13 @@ A Model Context Protocol (MCP) server for testing native desktop applications, s
 
 ## Platform Support
 
-| Platform | Status |
-|----------|--------|
-| **macOS** | Supported |
-| **Windows** | Planned |
-| **Linux** | Planned |
+| Platform | Status | Requirements |
+|----------|--------|--------------|
+| **macOS** | Supported | macOS 10.15+ (Catalina) |
+| **Windows** | Supported | Windows 10 1903+ |
+| **Linux** | Planned | - |
 
-> Windows and Linux support will be added in future releases with platform-specific backends.
+> Linux support will be added in a future release with platform-specific backends.
 
 ## Overview
 
@@ -41,12 +41,12 @@ For applications that embed [AppDebugKit](./AppDebugKit/), you get:
 app_connect → app_get_tree → app_query(".NSButton") → app_click(element_id)
 ```
 
-### 2. CGEvent (`click`, `type_text`, etc.) - Universal Compatibility
+### 2. Native Input (`click`, `type_text`, etc.) - Universal Compatibility
 
 For **any application** regardless of framework:
 - **Screen coordinate targeting** - Click at (x, y) positions
 - **Works with any UI framework** - egui, Electron, Qt, games, anything
-- **No app modification required** - Just needs Accessibility permission
+- **No app modification required** - Just needs Accessibility permission (macOS) or standard permissions (Windows)
 
 **Best for:** Third-party apps, egui/Electron/Qt apps, when AppDebugKit isn't available.
 
@@ -61,9 +61,9 @@ The LLM needs to choose the right approach based on what it observes:
 | Scenario | Recommended Approach |
 |----------|---------------------|
 | App with AppDebugKit embedded | `app_*` tools - reliable element IDs |
-| egui/Electron/Qt app | CGEvent tools - coordinate-based |
-| Unknown app | Try `app_connect`, fall back to CGEvent |
-| App with poor view hierarchy | CGEvent even if AppDebugKit connected |
+| egui/Electron/Qt app | Native input tools - coordinate-based |
+| Unknown app | Try `app_connect`, fall back to native input |
+| App with poor view hierarchy | Native input even if AppDebugKit connected |
 
 Merging them into auto-fallback would hide important context from the LLM and reduce its ability to make informed decisions.
 
@@ -89,9 +89,14 @@ cd native-devtools-mcp
 # Build
 cargo build --release
 
-# Binary location
+# Binary location (macOS/Linux)
 ./target/release/native-devtools-mcp
+
+# Binary location (Windows)
+.\target\release\native-devtools-mcp.exe
 ```
+
+> **Note (Windows):** Building from source requires Rust 1.88+ due to the `rmcp` crate requiring edition 2024. Use `rustup install 1.88.0` if needed.
 
 ## Required Permissions (macOS)
 
@@ -147,6 +152,30 @@ All data stays on your machine:
 - The MCP server runs entirely offline
 - Source code is open for audit
 
+## Requirements (Windows)
+
+Windows support requires Windows 10 version 1903 (May 2019 Update) or later.
+
+### Permissions
+
+Unlike macOS, Windows does not require explicit permission grants for most functionality:
+- **Screenshots** - Work out of the box using GDI BitBlt
+- **Input simulation** - Works via SendInput API
+- **OCR** - Uses built-in Windows.Media.Ocr (WinRT)
+
+### Limitations
+
+- **Elevated processes** - Cannot capture screenshots of or send input to applications running as Administrator unless the MCP server is also elevated
+- **DirectComposition/DXGI apps** - Some modern apps using hardware-accelerated rendering may appear as black rectangles in screenshots
+- **UWP apps** - May have restrictions on input simulation
+
+### OCR Requirements
+
+The `find_text` tool uses Windows.Media.Ocr which is built into Windows 10 1903+:
+- No additional installation required
+- Automatically uses the system's language packs
+- For best results, ensure your target language is installed in Windows Settings → Time & Language → Language
+
 ## MCP Configuration
 
 ### Getting started
@@ -191,7 +220,7 @@ Note: Use `native-devtools-mcp@latest` if you want to always run the newest vers
 | `get_displays` | Get display info (bounds, scale factors) for coordinate conversion |
 | `find_text` | Find text on screen using OCR; returns screen coordinates for clicking |
 
-### CGEvent Input Tools (work with any app, require Accessibility permission)
+### Native Input Tools (work with any app)
 
 | Tool | Description |
 |------|-------------|
@@ -295,10 +324,21 @@ intents:
 
 </details>
 
-## How Screenshots and Clicking Work (macOS)
+## How Screenshots and Clicking Work
+
+### macOS
 
 - **Screenshots** are captured via the system `screencapture` utility (`-x` silent, `-C` include cursor, `-R` region, `-l` window with `-o` to exclude shadow), written to a temp PNG, and returned as base64. Metadata for the screenshot origin and backing scale factor is included for deterministic coordinate conversion. Window screenshots exclude shadows so that pixel coordinates align exactly with `CGWindowBounds`, and OCR coordinates are automatically offset into screen space.
-- **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc. Window-relative or screenshot-pixel coordinates are converted to screen coordinates using captured metadata when available, otherwise window bounds and display scale are looked up at click time.
+- **Clicks/inputs** use CoreGraphics CGEvent injection (HID event tap). This requires Accessibility permission and works across AppKit, SwiftUI, Electron, egui, etc.
+
+### Windows
+
+- **Screenshots** are captured via GDI BitBlt from the desktop DC. For window captures, DWM extended frame bounds are used to exclude invisible borders. The raw bitmap is encoded to PNG in-memory and returned as base64 with metadata for coordinate conversion.
+- **Clicks/inputs** use the SendInput API with `INPUT_MOUSE` and `INPUT_KEYBOARD` structures. Text input uses `KEYEVENTF_UNICODE` for direct Unicode character injection, bypassing keyboard layout issues. This works across Win32, WPF, UWP, Electron, and most UI frameworks.
+
+### Coordinate Conversion
+
+On both platforms, window-relative or screenshot-pixel coordinates are converted to screen coordinates using captured metadata when available, otherwise window bounds and display scale are looked up at click time.
 
 ## Coordinate Systems and Display Scaling
 
@@ -362,7 +402,7 @@ Use `get_displays` to understand the display configuration:
 
 ## Example Usage
 
-### With CGEvent (any app)
+### With Native Input (any app)
 
 **Option A: Using OCR (recommended for text elements)**
 ```
@@ -406,18 +446,26 @@ Claude: [calls app_connect with url="ws://127.0.0.1:9222"]
                           │                        │                        │
                           ▼                        ▼                        ▼
                    ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
-                   │  AppDebugKit │          │   CGEvent   │          │   System    │
+                   │  AppDebugKit │          │   Native    │          │   System    │
                    │  (WebSocket) │          │   Input     │          │   APIs      │
                    │              │          │             │          │             │
-                   │ Element-level│          │ Coordinate  │          │ Screenshots │
-                   │ interaction  │          │ based input │          │ Window enum │
-                   └─────────────┘          └─────────────┘          └─────────────┘
-                         │                        │
-                         ▼                        ▼
-                   ┌─────────────┐          ┌─────────────┐
-                   │ Apps with   │          │  Any app    │
-                   │ AppDebugKit │          │ (egui, etc) │
-                   └─────────────┘          └─────────────┘
+                   │ Element-level│          │ macOS:      │          │ Screenshots │
+                   │ interaction  │          │  CGEvent    │          │ Window enum │
+                   └─────────────┘          │ Windows:    │          │ OCR         │
+                         │                  │  SendInput  │          └─────────────┘
+                         │                  └─────────────┘
+                         ▼                        │
+                   ┌─────────────┐                ▼
+                   │ Apps with   │          ┌─────────────┐
+                   │ AppDebugKit │          │  Any app    │
+                   └─────────────┘          │ (egui, etc) │
+                                            └─────────────┘
+
+Platform Backends:
+┌──────────────────────────────────────────────────────────────────────┐
+│ macOS: CGEvent, screencapture, Vision OCR, CGWindowList              │
+│ Windows: SendInput, GDI BitBlt, Windows.Media.Ocr, EnumWindows       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## License

@@ -16,12 +16,6 @@ base64 = "0.22"
 # Temp files for screenshots
 tempfile = "3"
 
-# macOS frameworks
-core-graphics = "0.24"
-core-foundation = "0.10"
-cocoa = "0.26"
-objc = "0.2"
-
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -33,6 +27,34 @@ thiserror = "2"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2.5"
+
+# macOS frameworks
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24"
+core-foundation = "0.10"
+cocoa = "0.26"
+objc = "0.2"
+
+# Windows dependencies
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemServices",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Foundation",
+    "Foundation_Collections",
+]}
 
 [lints.rust]
 # Suppress cfg warnings from objc crate macros

@@ -1,4 +1,4 @@
-use crate::macos;
+use crate::platform;
 use rmcp::model::{CallToolResult, Content};
 use serde::Deserialize;
 
@@ -10,12 +10,12 @@ pub struct ListWindowsParams {
 
 pub fn list_windows(params: ListWindowsParams) -> CallToolResult {
     let windows = if let Some(app_name) = params.app_name {
-        match macos::find_windows_by_app(&app_name) {
+        match platform::find_windows_by_app(&app_name) {
             Ok(w) => w,
             Err(e) => return CallToolResult::error(vec![Content::text(e)]),
         }
     } else {
-        match macos::list_windows() {
+        match platform::list_windows() {
             Ok(w) => w,
             Err(e) => return CallToolResult::error(vec![Content::text(e)]),
         }
@@ -34,7 +34,7 @@ pub fn list_windows(params: ListWindowsParams) -> CallToolResult {
 pub struct ListAppsParams {}
 
 pub fn list_apps(_params: ListAppsParams) -> CallToolResult {
-    let apps = macos::list_apps();
+    let apps = platform::list_apps();
 
     match serde_json::to_string_pretty(&apps) {
         Ok(json) => CallToolResult::success(vec![Content::text(json)]),
@@ -59,13 +59,13 @@ pub struct FocusWindowParams {
 
 pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
     let success = if let Some(app_name) = params.app_name {
-        macos::activate_app(&app_name)
+        platform::activate_app(&app_name)
     } else if let Some(pid) = params.pid {
-        macos::activate_app_by_pid(pid)
+        platform::activate_app_by_pid(pid)
     } else if let Some(window_id) = params.window_id {
         // For window_id, we need to find the app that owns it and activate that
-        match macos::find_window_by_id(window_id) {
-            Ok(Some(window)) => macos::activate_app_by_pid(window.owner_pid as i32),
+        match platform::find_window_by_id(window_id) {
+            Ok(Some(window)) => platform::activate_app_by_pid(window.owner_pid as i32),
             Ok(None) => {
                 return CallToolResult::error(vec![Content::text(format!(
                     "Window {} not found",

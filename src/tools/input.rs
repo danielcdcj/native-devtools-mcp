@@ -1,22 +1,28 @@
 //! Input tools for system-level mouse and keyboard simulation.
 //!
-//! These tools wrap CGEvent-based input operations in `spawn_blocking` to avoid
-//! blocking the tokio runtime, since CGEvent operations use `thread::sleep`.
+//! These tools wrap input operations in `spawn_blocking` to avoid
+//! blocking the tokio runtime, since input operations use `thread::sleep`.
 
-use crate::macos::{display, input, ocr};
+use crate::platform::{display, input, ocr};
 use rmcp::model::{CallToolResult, Content};
 use serde::Deserialize;
 
 /// Check accessibility permission and return appropriate error if not granted.
 fn check_permission() -> Option<CallToolResult> {
     if !input::check_accessibility_permission() {
-        return Some(CallToolResult::error(vec![Content::text(
-            "Accessibility permission required.\n\n\
+        #[cfg(target_os = "macos")]
+        let msg = "Accessibility permission required.\n\n\
              Grant permission to your MCP client (e.g., Claude Desktop, VS Code, Terminal) in:\n\
              System Settings → Privacy & Security → Accessibility\n\n\
              The permission must be granted to the app that runs this MCP server, \
-             not to the server binary itself.",
-        )]));
+             not to the server binary itself.";
+
+        #[cfg(target_os = "windows")]
+        let msg = "Input injection permission denied.\n\n\
+             This typically occurs when targeting elevated (admin) windows \
+             from a non-elevated process, or when targeting secure desktops.";
+
+        return Some(CallToolResult::error(vec![Content::text(msg)]));
     }
     None
 }
@@ -99,7 +105,7 @@ pub async fn click(params: ClickParams) -> CallToolResult {
         (params.window_x, params.window_y, params.window_id)
     {
         // Window-relative coordinates
-        let window = match crate::macos::find_window_by_id(window_id) {
+        let window = match crate::platform::find_window_by_id(window_id) {
             Ok(Some(w)) => w,
             Ok(None) => {
                 return CallToolResult::error(vec![Content::text(format!(
@@ -134,7 +140,7 @@ pub async fn click(params: ClickParams) -> CallToolResult {
         params.screenshot_window_id,
     ) {
         // Screenshot pixel coordinates (legacy: lookup window at click time)
-        let window = match crate::macos::find_window_by_id(window_id) {
+        let window = match crate::platform::find_window_by_id(window_id) {
             Ok(Some(w)) => w,
             Ok(None) => {
                 return CallToolResult::error(vec![Content::text(format!(

@@ -1,4 +1,4 @@
-use crate::macos;
+use crate::platform;
 use rmcp::model::{CallToolResult, Content};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
@@ -42,7 +42,7 @@ struct ScreenshotMetadata {
 
 pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
     let result = match params.mode.as_str() {
-        "screen" => macos::capture_screen(),
+        "screen" => platform::capture_screen(),
         "window" => {
             let window_id = match params.window_id {
                 Some(id) => id,
@@ -52,7 +52,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
-            macos::capture_window(window_id)
+            platform::capture_window(window_id)
         }
         "region" => {
             let (x, y, w, h) = match (params.x, params.y, params.width, params.height) {
@@ -63,7 +63,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
-            macos::capture_region(x, y, w, h)
+            platform::capture_region(x, y, w, h)
         }
         _ => {
             return CallToolResult::error(vec![Content::text(format!(
@@ -94,7 +94,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 
             // Run OCR if requested
             if params.include_ocr {
-                match macos::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor)) {
+                match platform::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor)) {
                     Ok(mut matches) => {
                         apply_ocr_offset(&mut matches, screenshot.origin_x, screenshot.origin_y);
                         if !matches.is_empty() {
@@ -120,7 +120,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 /// or region screenshots, these positions are relative to the image origin (0,0).
 /// To make the coordinates directly clickable, we add the screenshot's screen
 /// origin so the LLM can use them with the click tool without further translation.
-fn apply_ocr_offset(matches: &mut [macos::TextMatch], offset_x: f64, offset_y: f64) {
+fn apply_ocr_offset(matches: &mut [platform::TextMatch], offset_x: f64, offset_y: f64) {
     if offset_x == 0.0 && offset_y == 0.0 {
         return;
     }
@@ -134,7 +134,7 @@ fn apply_ocr_offset(matches: &mut [macos::TextMatch], offset_x: f64, offset_y: f
 }
 
 /// Format OCR results as a text summary with clickable coordinates and bounds.
-fn format_ocr_results(matches: &[macos::TextMatch]) -> String {
+fn format_ocr_results(matches: &[platform::TextMatch]) -> String {
     let mut result = String::from("## OCR Text Detected (click coordinates)\n\n");
 
     for m in matches.iter().filter(|m| m.confidence > 0.5) {
