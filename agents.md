@@ -1,102 +1,132 @@
 # Agent Context: native-devtools-mcp
 
-Purpose: MCP server for native desktop app automation using screenshots, OCR, window enumeration, and input injection. Optional AppDebugKit enables element-level control.
+**Role:** You are an agent equipped with "Computer Use" capabilities. You can see the screen, type, move the mouse, and interact with native desktop applications.
 
-## Capabilities Matrix
+**Constraint:** You are operating a real machine. Actions are permanent. Ensure you verify the state of the screen before and after actions.
 
-| Intent | Tools | Outputs |
-|--------|-------|---------|
-| Capture screen or window | `take_screenshot` | base64 PNG, screenshot metadata (origin, scale), optional OCR text |
-| Find text and click it | `find_text` → `click` | coordinates, click action |
-| List and focus windows | `list_windows` → `focus_window` | window list, focus action |
-| Element-level UI control | `app_connect` → `app_query` → `app_click` | element IDs, click action |
+## 🧠 Core Reasoning Loop
 
-## Intent Spec (JSON)
+For robust automation, follow this "Visual Feedback Loop":
 
-```json
-{
-  "intents": [
-    {
-      "name": "capture_screenshot",
-      "tools": ["take_screenshot"],
-      "inputs": {
-        "scope": { "type": "string", "enum": ["screen", "window", "region"], "default": "window" },
-        "window_id": { "type": "number", "optional": true },
-        "app_name": { "type": "string", "optional": true },
-        "region": { "type": "object", "optional": true },
-        "include_ocr": { "type": "boolean", "default": true }
-      },
-      "outputs": {
-        "image_base64": { "type": "string" },
-        "metadata": { "type": "object", "optional": true },
-        "ocr": { "type": "array", "optional": true }
-      }
-    },
-    {
-      "name": "find_text_and_click",
-      "tools": ["find_text", "click"],
-      "inputs": {
-        "query": { "type": "string" },
-        "window_id": { "type": "number", "optional": true }
-      },
-      "outputs": {
-        "matches": { "type": "array" },
-        "clicked": { "type": "boolean" }
-      }
-    },
-    {
-      "name": "list_and_focus_window",
-      "tools": ["list_windows", "focus_window"],
-      "inputs": {
-        "app_name": { "type": "string", "optional": true }
-      },
-      "outputs": {
-        "windows": { "type": "array" },
-        "focused": { "type": "boolean" }
-      }
-    },
-    {
-      "name": "element_level_interaction",
-      "tools": ["app_connect", "app_query", "app_click", "app_type"],
-      "inputs": {
-        "selector": { "type": "string" },
-        "element_id": { "type": "string", "optional": true },
-        "text": { "type": "string", "optional": true }
-      },
-      "outputs": {
-        "element": { "type": "object" },
-        "ok": { "type": "boolean" }
-      }
-    }
-  ]
-}
-```
+1.  **OBSERVE:** Call `take_screenshot(app_name="TargetApp")` to see the current state.
+2.  **LOCATE:** Analyze the image or use the OCR summary text in the response to find coordinates.
+3.  **ACT:** Call `click()`, `type_text()`, or `scroll()` using those coordinates.
+4.  **VERIFY:** Call `take_screenshot` again to confirm the action had the intended effect.
 
-## Prompt -> Tool -> Output Mappings
+---
 
-| User prompt | Tool sequence | Expected output |
-|-------------|---------------|-----------------|
-| "Take a screenshot of the Settings window" | `take_screenshot(app_name="Settings")` | base64 PNG, metadata, OCR text |
-| "Click the OK button" | `take_screenshot(app_name="YourApp")` → (vision) → `click(x,y)` | click action |
-| "Find text 'Submit' and click it" | `find_text(query)` → `click(x,y)` | coordinates, click action |
-| "Click the Save button in the AppDebugKit app" | `app_connect` → `app_query("[title=Save]")` → `app_click(element_id)` | element ID, click action |
+## 🗺️ Capabilities Matrix (Strategy Guide)
 
-## Coordinate Usage Guide
+Use this table to choose the right tool sequence for the user's goal.
 
-When clicking, choose the correct coordinate format based on how you obtained the target position:
+| User Goal | Tool Sequence | Why? |
+|-----------|---------------|------|
+| "Click the 'Submit' button" | `find_text(text="Submit")` → `click(x, y)` | Fastest. No visual analysis needed if text is known. |
+| "Click the red icon" | `take_screenshot()` → (Analyze Image) → `click(screenshot_x=..., screenshot_y=..., screenshot_origin_x=..., screenshot_origin_y=..., screenshot_scale=...)` | Visual features require full screenshot analysis. |
+| "Type into the search bar" | `find_text(text="Search")` → `click(x, y)` → `type_text("hello")` | Must click to focus before typing. |
+| "Scroll down" | `scroll(x=500, y=500, delta_y=200)` | Positive `delta_y` scrolls down. |
+| "Find an open window" | `list_windows()` → `focus_window(window_id=...)` | Don't guess window names; list them first. |
 
-| Coordinate source | Click parameters | Example |
-|-------------------|------------------|---------|
-| `find_text` result | `x`, `y` (direct) | `{"x": 450, "y": 320}` |
-| `take_screenshot` OCR annotation | `x`, `y` (direct) | `{"x": 450, "y": 320}` |
-| Visual inspection of screenshot | `screenshot_x/y` + metadata | `{"screenshot_x": 200, "screenshot_y": 100, "screenshot_origin_x": 0, "screenshot_origin_y": 0, "screenshot_scale": 2.0}` |
+---
 
-**Key distinction:**
-- **OCR coordinates** (from `find_text` or `take_screenshot` OCR) are already screen-absolute → use `x`, `y` directly
-- **Screenshot pixel coordinates** (from visually inspecting the image) need transformation → use `screenshot_x/y` with the metadata returned by `take_screenshot`
+## 🛠️ Tool Definitions & Schemas
 
-## Operational Notes
+### 1. Vision & Perception (The "Eyes")
 
-- Requires macOS Screen Recording permission for screenshots and Accessibility permission for input.
-- OCR uses Apple Vision framework (requires macOS 10.15+); no external dependencies needed.
-- Keep the target window focused during automation to avoid misdirected input.
+#### `take_screenshot`
+Captures pixel data and layout.
+*   **Inputs:**
+    *   `mode` (string, default `"window"`): `"screen"`, `"window"`, or `"region"`.
+    *   `app_name` (string, optional): Capture this app's window (for mode `"window"`).
+    *   `window_id` (number, optional): Window ID (for mode `"window"`).
+    *   `x`, `y`, `width`, `height` (numbers): Region bounds (for mode `"region"`).
+    *   `include_ocr` (boolean, default `true`): Include OCR summary text with coordinates.
+*   **Returns (content list):**
+    ```json
+    [
+      { "type": "image", "mime": "image/jpeg", "data": "..." },
+      { "type": "text", "text": "{ \"screenshot_origin_x\": 0, \"screenshot_origin_y\": 0, \"screenshot_scale\": 2.0 }" },
+      { "type": "text", "text": "## OCR Text Detected (click coordinates)\n- \"File\" at (10, 10) bounds: {x: 0, y: 0, w: 50, h: 20}" }
+    ]
+    ```
+
+#### `find_text`
+Fast-path to get coordinates without image analysis.
+*   **Inputs:** `text` (string), `display_id` (number, optional).
+*   **Returns (JSON array):**
+    ```json
+    [
+      { "text": "Save", "x": 500, "y": 300, "confidence": 0.94, "bounds": { "x": 480, "y": 290, "width": 40, "height": 20 } }
+    ]
+    ```
+
+### 2. Input & Interaction (The "Hands")
+
+#### `click`
+Simulates a mouse click.
+*   **Inputs:**
+    *   **Method A (Screen Absolute):** `x` (number), `y` (number). Use with `find_text` results.
+    *   **Method B (Window Relative):** `window_x`, `window_y`, `window_id`.
+    *   **Method C (Screenshot Relative):** `screenshot_x`, `screenshot_y`, `screenshot_origin_x`, `screenshot_origin_y`, `screenshot_scale`. Use with `take_screenshot` visual analysis.
+    *   `button`: "left" (default), "right", "center".
+    *   `click_count`: 1 (default), 2 (double-click).
+
+#### `type_text`
+Types text at the *current* cursor position.
+*   **Inputs:** `text` (string).
+*   **Warning:** Always `click()` the input field first to ensure focus!
+
+#### `scroll`
+Scrolls at a specific screen position.
+*   **Inputs:** `x` (number), `y` (number), `delta_y` (integer), `delta_x` (integer, optional).
+*   **Direction:** Positive `delta_y` scrolls down; negative scrolls up.
+
+### 3. Window Management
+
+*   `list_windows`: Returns array of `{ id, title, bounds, app_name }`.
+*   `focus_window`: Accepts `{ window_id: 123 }`, `{ app_name: "Code" }`, or `{ pid: 999 }`.
+
+---
+
+## 📐 Coordinate Systems & Best Practices
+
+**CRITICAL:** There are two ways to target clicks. Choose ONE based on your data source.
+
+### Method A: Absolute Screen Coordinates (Recommended)
+Use this when you have data from `find_text` OR `take_screenshot` (OCR results).
+*   **Source:** `find_text` returns `{ "x": 500, "y": 300 }`.
+*   **Action:** `click(x=500, y=300)`.
+*   **Why:** These are already global screen coordinates.
+
+### Method B: Relative Screenshot Coordinates
+Use this when you (the model) look at the *image* from `take_screenshot` and estimate positions (e.g., "The icon is at 50% width").
+*   **Source:** `take_screenshot` returns metadata `{ "screenshot_origin_x": 100, "screenshot_origin_y": 100, "screenshot_scale": 2.0 }`.
+*   **Your Vision:** You see a button at pixel `(x=50, y=50)` inside the image.
+*   **Action:** `click(screenshot_x=50, screenshot_y=50, screenshot_origin_x=100, screenshot_origin_y=100, screenshot_scale=2.0)`.
+*   **Why:** The tool handles the math to convert image-pixels to screen-pixels.
+
+**Manual conversion (for tools that only accept screen coordinates, e.g. `drag`):**
+*   `screen_x = screenshot_origin_x + (screenshot_x / screenshot_scale)`
+*   `screen_y = screenshot_origin_y + (screenshot_y / screenshot_scale)`
+
+---
+
+## ⚡ Intent Examples (Chain of Thought)
+
+### "Click the 'Save' button in Notepad"
+1.  **Thought:** I need to find the text "Save" in the app "Notepad".
+2.  **Call:** `focus_window(app_name="Notepad")`
+3.  **Call:** `find_text(text="Save")` -> Returns `[{"text":"Save","x":200,"y":400,...}]`
+4.  **Call:** `click(x=200, y=400)`
+
+### "Draw a circle in Paint"
+1.  **Thought:** Text search won't work for a canvas. I need to see the screen.
+2.  **Call:** `take_screenshot(app_name="Paint")`
+3.  **Analysis:** I see the canvas center at pixel (500, 500) in the image.
+4.  **Compute:** `start_x = screenshot_origin_x + 500 / screenshot_scale`, `start_y = screenshot_origin_y + 500 / screenshot_scale`
+5.  **Call:** `drag(start_x=..., start_y=..., end_x=..., end_y=...)`
+
+### "Copy text from this window"
+1.  **Thought:** I can read text directly from the screenshot OCR data without using the clipboard.
+2.  **Call:** `take_screenshot(include_ocr=true)`
+3.  **Action:** Read the OCR summary text in the response (lines include clickable coordinates).
