@@ -1,5 +1,4 @@
 use super::display;
-use base64::{engine::general_purpose::STANDARD, Engine};
 use std::process::Command;
 use tempfile::tempdir;
 use thiserror::Error;
@@ -22,12 +21,6 @@ pub struct Screenshot {
     /// Screen-space origin of the screenshot (top-left), in points.
     pub origin_x: f64,
     pub origin_y: f64,
-}
-
-impl Screenshot {
-    pub fn to_base64(&self) -> String {
-        STANDARD.encode(&self.png_data)
-    }
 }
 
 /// Capture the entire screen (main display) using screencapture

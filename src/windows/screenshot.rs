@@ -2,7 +2,6 @@
 
 use super::display;
 use super::window::{find_window_by_id, hwnd_from_id, WindowBounds};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use std::mem;
 use thiserror::Error;
 use windows::Win32::Foundation::{HWND, RECT};
@@ -31,12 +30,6 @@ pub struct Screenshot {
     /// Screen-space origin of the screenshot (top-left).
     pub origin_x: f64,
     pub origin_y: f64,
-}
-
-impl Screenshot {
-    pub fn to_base64(&self) -> String {
-        STANDARD.encode(&self.png_data)
-    }
 }
 
 /// Capture the entire virtual screen (all monitors).

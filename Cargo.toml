@@ -12,6 +12,7 @@ serde_json = "1"
 
 # Image encoding
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Temp files for screenshots
 tempfile = "3"

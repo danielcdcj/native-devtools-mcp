@@ -1,7 +1,10 @@
 use crate::platform;
+use base64::Engine;
+use image::ImageReader;
 use rmcp::model::{CallToolResult, Content};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
+use std::io::Cursor;
 
 #[derive(Debug, Deserialize)]
 pub struct TakeScreenshotParams {
@@ -32,6 +35,24 @@ fn default_mode() -> String {
 
 fn default_include_ocr() -> bool {
     true
+}
+
+const JPEG_QUALITY: u8 = 80;
+
+/// Convert PNG data to JPEG.
+fn png_to_jpeg(png_data: &[u8]) -> Result<Vec<u8>, String> {
+    let img = ImageReader::new(Cursor::new(png_data))
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to read image: {}", e))?
+        .decode()
+        .map_err(|e| format!("Failed to decode PNG: {}", e))?;
+
+    let mut jpeg_data = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_data, JPEG_QUALITY);
+    img.write_with_encoder(encoder)
+        .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
+
+    Ok(jpeg_data)
 }
 
 #[derive(Debug, Serialize)]
@@ -93,8 +114,18 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 
     match result {
         Ok(screenshot) => {
-            let base64_data = screenshot.to_base64();
-            let mut contents = vec![Content::image(base64_data, "image/png")];
+            // Convert to JPEG for smaller payload size
+            let (image_data, mime_type) = match png_to_jpeg(&screenshot.png_data) {
+                Ok(jpeg_data) => (jpeg_data, "image/jpeg"),
+                Err(e) => {
+                    // Fall back to PNG if JPEG conversion fails
+                    tracing::warn!("JPEG conversion failed, using PNG: {}", e);
+                    (screenshot.png_data.clone(), "image/png")
+                }
+            };
+
+            let base64_data = base64::engine::general_purpose::STANDARD.encode(&image_data);
+            let mut contents = vec![Content::image(base64_data, mime_type)];
             let screenshot_window_id = if params.mode == "window" {
                 params.window_id
             } else {
