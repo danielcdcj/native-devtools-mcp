@@ -11,7 +11,7 @@
 
 A Model Context Protocol (MCP) server that provides **Computer Use** capabilities: screenshots, OCR, input simulation, and window management.
 
-[Features](#features) • [Installation](#installation) • [For AI Agents](#for-ai-agents-llms) • [Permissions](#required-permissions-macos)
+[Features](#-features) • [Installation](#-installation) • [For AI Agents](#-for-ai-agents-llms) • [Permissions](#-required-permissions-macos)
 
 ![Demo](demo.gif)
 
