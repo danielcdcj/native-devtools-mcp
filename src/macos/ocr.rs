@@ -195,7 +195,7 @@ unsafe fn nsstring_to_string(nsstring: *mut Object) -> String {
 
 /// Find text on screen using OCR. Returns screen coordinates for each match.
 pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
-    let displays = display::get_displays()?;
+    let displays = display::get_displays().map_err(|e| format!("get_displays failed: {}", e))?;
     let (display_index, display) = displays
         .iter()
         .enumerate()
@@ -203,27 +203,38 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
         .map(|(i, d)| (i + 1, d.clone()))
         .ok_or("Display not found")?;
 
-    // Capture screen
-    let temp_file = tempfile::Builder::new()
-        .suffix(".png")
-        .tempfile()
-        .map_err(|e| e.to_string())?;
+    // Capture screen using a temp directory path (not NamedTempFile which can be deleted)
+    let temp_dir = std::env::temp_dir();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = temp_dir.join(format!(
+        "native_devtools_ocr_{}_{}.png",
+        std::process::id(),
+        timestamp
+    ));
+    let temp_path_str = temp_path
+        .to_str()
+        .ok_or("tempfile path is not valid UTF-8")?;
 
-    let status = Command::new("screencapture")
-        .args([
-            "-x",
-            "-D",
-            &display_index.to_string(),
-            temp_file.path().to_str().unwrap(),
-        ])
+    let status = Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-D", &display_index.to_string(), temp_path_str])
         .status()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("screencapture command failed: {}", e))?;
 
     if !status.success() {
-        return Err("screencapture failed".into());
+        return Err(format!(
+            "screencapture exited with status: {:?}",
+            status.code()
+        ));
     }
 
-    let png_data = std::fs::read(temp_file.path()).map_err(|e| e.to_string())?;
+    let png_data = std::fs::read(&temp_path)
+        .map_err(|e| format!("failed to read screenshot file: {}", e))?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_path);
     let mut matches = ocr_image(&png_data, Some(display.backing_scale_factor))?;
 
     // Offset for multi-display and filter by search term

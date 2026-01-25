@@ -328,7 +328,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "Find text on screen using OCR. Returns screen coordinates for clicking. Requires macOS 10.15+ or Windows 10 1903+.",
+                "PREFERRED for clicking buttons/labels by name. Finds text on screen using OCR and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Requires macOS 10.15+ or Windows 10 1903+.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
@@ -576,10 +576,18 @@ impl ServerHandler for MacOSDevToolsServer {
                  1. AppDebugKit (app_* tools): For apps with AppDebugKit embedded (macOS only). \
                     Use app_connect first, then app_click, app_type, etc. for element-level precision.\n\
                  2. CGEvent/SendInput (click, type_text, etc.): For any app (egui, Electron, etc.). \
-                    Use take_screenshot to see UI, then click at coordinates. Requires Accessibility permission on macOS.\n\n\
+                    Requires Accessibility permission on macOS.\n\n\
+                 CLICKING BY TEXT (PREFERRED): When asked to click a button or UI element by name, \
+                 use find_text first to get accurate screen coordinates, then click at those coordinates. \
+                 Example: find_text(text='Submit') returns coordinates, then click(x=..., y=...). \
+                 This is more reliable than visually estimating coordinates from screenshots.\n\n\
+                 CLICKING BY VISUAL POSITION: When you need to click at a specific visual location \
+                 (not identified by text), use take_screenshot with include_ocr=true. The OCR results \
+                 include screen coordinates you can click directly. For positions not covered by OCR, \
+                 use the screenshot metadata (origin_x, origin_y, scale) to convert pixel positions.\n\n\
+                 IMPORTANT: Always use focus_window before clicking to ensure the target window receives the click.\n\n\
                  Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code' for VSCode) \
-                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n\
-                 Use get_displays to understand screen layout and coordinate systems."
+                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows."
                     .to_string(),
             ),
         }
