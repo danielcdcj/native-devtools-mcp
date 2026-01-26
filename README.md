@@ -40,23 +40,23 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
 3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately.
 
-## 📦 Installation
+## 📦 Installation (macOS + Windows)
 
-### Option 1: Run with `npx` (No install needed)
+The install steps are identical on macOS and Windows.
 
-The easiest way to use this with Claude Desktop or other MCP clients.
+### Option 1: Run with `npx` (no install needed)
 
 ```bash
 npx -y native-devtools-mcp
 ```
 
-### Option 2: Global Install
+### Option 2: Global install
 
 ```bash
 npm install -g native-devtools-mcp
 ```
 
-### Option 3: Build from Source (Rust)
+### Option 3: Build from source (Rust)
 
 <details>
 <summary>Click to expand build instructions</summary>
@@ -71,10 +71,19 @@ cargo build --release
 
 ## ⚙️ Configuration
 
-Add this to your **Claude Desktop** configuration file:
+### macOS Configuration
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+**Claude Desktop config file:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+> **⚠️ macOS Note:** Claude Desktop currently cannot use this MCP server due to macOS Gatekeeper restrictions on unsigned CLI binaries. A signed app bundle is coming soon. In the meantime, use **Claude Code** (CLI) which works without issues.
+
+### Windows Configuration
+
+**Claude Desktop config file:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+### Configuration JSON (macOS + Windows)
+
+Same JSON on both platforms:
 
 ```json
 {
@@ -171,7 +180,7 @@ On macOS, you must grant permissions to the **host application** (e.g., Terminal
 
 > **Restart Required:** After granting permissions, you must fully quit and restart the host application.
 
-## 🪟 Windows Support
+## 🪟 Windows Notes
 
 Works out of the box on **Windows 10/11**.
 *   Uses standard Win32 APIs (GDI, SendInput).
