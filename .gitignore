@@ -2,6 +2,7 @@
 /target
 /data
 /bin
+/dist
 
 # Swift
 .build/

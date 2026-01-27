@@ -75,15 +75,33 @@ cargo build --release
 
 **Claude Desktop config file:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-> **⚠️ macOS Note:** Claude Desktop currently cannot use this MCP server due to macOS Gatekeeper restrictions on unsigned CLI binaries. A signed app bundle is coming soon. In the meantime, use **Claude Code** (CLI) which works without issues.
+**Claude Desktop requires the signed app bundle** (npx/npm will not work due to Gatekeeper):
+
+1. Download `NativeDevtools-X.X.X.dmg` from [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases)
+2. Open the DMG and drag `NativeDevtools.app` to `/Applications`
+3. Configure Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "native-devtools": {
+      "command": "/Applications/NativeDevtools.app/Contents/MacOS/native-devtools-mcp"
+    }
+  }
+}
+```
+
+4. Restart Claude Desktop - it will prompt for Screen Recording and Accessibility permissions for NativeDevtools
+
+> **Note:** Claude Code (CLI) can use either the signed app or npx - both work.
 
 ### Windows Configuration
 
 **Claude Desktop config file:** `%APPDATA%\Claude\claude_desktop_config.json`
 
-### Configuration JSON (macOS + Windows)
+### Configuration JSON (Windows and macOS CLI)
 
-Same JSON on both platforms:
+For Windows (or macOS with Claude Code CLI):
 
 ```json
 {

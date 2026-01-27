@@ -81,9 +81,79 @@ jobs:
           name: npm-${{ matrix.npm_dir }}
           path: npm/${{ matrix.npm_dir }}
 
+  build-macos-app:
+    name: Build macOS App (Signed + Notarized)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Import signing certificate
+        env:
+          MACOS_SIGN_CERT_BASE64: ${{ secrets.MACOS_SIGN_CERT_BASE64 }}
+          MACOS_SIGN_CERT_PASSWORD: ${{ secrets.MACOS_SIGN_CERT_PASSWORD }}
+        run: |
+          # Decode certificate
+          echo "$MACOS_SIGN_CERT_BASE64" | base64 --decode > signing.p12
+
+          # Create temporary keychain
+          security create-keychain -p "temppass" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "temppass" build.keychain
+
+          # Import certificate
+          security import signing.p12 -k build.keychain -P "$MACOS_SIGN_CERT_PASSWORD" -T /usr/bin/codesign
+
+          # Set key partition list (required for codesign to access the key)
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "temppass" build.keychain
+
+          # Add to search list
+          security list-keychains -d user -s build.keychain login.keychain
+
+          # Clean up
+          rm signing.p12
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build macOS app bundle
+        env:
+          TARGET: aarch64-apple-darwin
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: ./scripts/build-macos-app.sh
+
+      - name: Notarize and create DMG
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          # Write API key to file
+          echo "$APPSTORE_API_PRIVATE_KEY" > AuthKey.p8
+
+          # Run notarization script
+          NOTARY_API_KEY=AuthKey.p8 ./scripts/notarize-macos-app.sh
+
+          # Clean up
+          rm AuthKey.p8
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-dmg
+          path: dist/*.dmg
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-macos-app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +169,7 @@ jobs:
           files: |
             artifacts/native-devtools-mcp-*/*.tar.gz
             artifacts/native-devtools-mcp-*/*.zip
+            artifacts/macos-app-dmg/*.dmg
           generate_release_notes: true
 
   publish-npm:
