@@ -173,6 +173,25 @@ graph TD
 | | Input | `SendInput` (Win32) |
 | | OCR | `Windows.Media.Ocr` (WinRT) |
 
+### Screenshot Coordinate Precision
+
+Screenshots include metadata for accurate coordinate conversion:
+
+- `screenshot_origin_x/y`: Screen-space origin of the captured area (in points)
+- `screenshot_scale`: Display scale factor (e.g., 2.0 for Retina displays)
+- `screenshot_pixel_width/height`: Actual pixel dimensions of the image
+- `screenshot_window_id`: Window ID (for window captures)
+
+**Coordinate conversion:**
+```
+screen_x = screenshot_origin_x + (pixel_x / screenshot_scale)
+screen_y = screenshot_origin_y + (pixel_y / screenshot_scale)
+```
+
+**Implementation notes:**
+- **Window captures** (macOS): Uses `screencapture -o` which excludes window shadow. The captured image dimensions match `kCGWindowBounds × scale` exactly, ensuring click coordinates derived from screenshots land on intended UI elements.
+- **Region captures**: Origin coordinates are aligned to integers to match the actual captured area.
+
 </details>
 
 ## 🛡️ Privacy, Safety & Best Practices
