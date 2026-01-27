@@ -1,7 +1,18 @@
 use super::display;
+use std::io::Cursor;
 use std::process::Command;
 use tempfile::tempdir;
 use thiserror::Error;
+
+/// Extract pixel dimensions from PNG data by reading the IHDR chunk.
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    use image::ImageReader;
+    let reader = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()?;
+    let dims = reader.into_dimensions().ok()?;
+    Some(dims)
+}
 
 #[derive(Error, Debug)]
 pub enum ScreenshotError {
@@ -13,6 +24,7 @@ pub enum ScreenshotError {
     WindowNotFound(u32),
 }
 
+#[non_exhaustive]
 pub struct Screenshot {
     pub png_data: Vec<u8>,
     /// The backing scale factor of the display this screenshot was taken from.
@@ -21,6 +33,9 @@ pub struct Screenshot {
     /// Screen-space origin of the screenshot (top-left), in points.
     pub origin_x: f64,
     pub origin_y: f64,
+    /// Pixel dimensions of the screenshot image.
+    pub pixel_width: u32,
+    pub pixel_height: u32,
 }
 
 /// Capture the entire screen (main display) using screencapture
@@ -46,11 +61,14 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
     };
 
     let png_data = std::fs::read(&path)?;
+    let (pixel_width, pixel_height) = png_dimensions(&png_data).unwrap_or((0, 0));
     Ok(Screenshot {
         png_data,
         scale_factor,
         origin_x,
         origin_y,
+        pixel_width,
+        pixel_height,
     })
 }
 
@@ -65,11 +83,15 @@ pub fn capture_region(
     let path = temp_dir.path().join("screenshot.png");
     let path_str = path.to_string_lossy().to_string();
 
+    // Round coordinates to integers to match what screencapture actually captures.
+    // This ensures origin_x/y align with the captured region.
+    let x_int = x as i32;
+    let y_int = y as i32;
+    let w_int = width as i32;
+    let h_int = height as i32;
+
     // screencapture -R x,y,w,h for region
-    let region = format!(
-        "{},{},{},{}",
-        x as i32, y as i32, width as i32, height as i32
-    );
+    let region = format!("{},{},{},{}", x_int, y_int, w_int, h_int);
 
     let output = Command::new("screencapture")
         .args(["-x", "-R", &region, "-t", "png", &path_str])
@@ -81,15 +103,22 @@ pub fn capture_region(
         ));
     }
 
+    // Use the integer-aligned origin to match the captured region exactly
+    let origin_x = f64::from(x_int);
+    let origin_y = f64::from(y_int);
+
     // Determine scale factor based on which display the region is on
-    let scale_factor = display::backing_scale_for_point(x, y);
+    let scale_factor = display::backing_scale_for_point(origin_x, origin_y);
 
     let png_data = std::fs::read(&path)?;
+    let (pixel_width, pixel_height) = png_dimensions(&png_data).unwrap_or((0, 0));
     Ok(Screenshot {
         png_data,
         scale_factor,
-        origin_x: x,
-        origin_y: y,
+        origin_x,
+        origin_y,
+        pixel_width,
+        pixel_height,
     })
 }
 
@@ -129,10 +158,13 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
         return Err(ScreenshotError::WindowNotFound(window_id));
     }
 
+    let (pixel_width, pixel_height) = png_dimensions(&png_data).unwrap_or((0, 0));
     Ok(Screenshot {
         png_data,
         scale_factor,
         origin_x: window.bounds.x,
         origin_y: window.bounds.y,
+        pixel_width,
+        pixel_height,
     })
 }

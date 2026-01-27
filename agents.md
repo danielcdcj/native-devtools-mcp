@@ -45,10 +45,15 @@ Captures pixel data and layout.
     ```json
     [
       { "type": "image", "mime": "image/jpeg", "data": "..." },
-      { "type": "text", "text": "{ \"screenshot_origin_x\": 0, \"screenshot_origin_y\": 0, \"screenshot_scale\": 2.0 }" },
+      { "type": "text", "text": "{ \"screenshot_origin_x\": 0, \"screenshot_origin_y\": 0, \"screenshot_scale\": 2.0, \"screenshot_window_id\": 1234, \"screenshot_pixel_width\": 1920, \"screenshot_pixel_height\": 1080 }" },
       { "type": "text", "text": "## OCR Text Detected (click coordinates)\n- \"File\" at (10, 10) bounds: {x: 0, y: 0, w: 50, h: 20}" }
     ]
     ```
+    *   **Metadata fields:**
+        *   `screenshot_origin_x`, `screenshot_origin_y`: Screen-space origin of the screenshot (top-left corner), in points.
+        *   `screenshot_scale`: Display scale factor (e.g., 2.0 for Retina).
+        *   `screenshot_window_id`: Window ID (only for mode `"window"`). Present even when using `app_name`.
+        *   `screenshot_pixel_width`, `screenshot_pixel_height`: Actual pixel dimensions of the captured image.
 
 #### `find_text`
 Fast-path to get coordinates without image analysis.
@@ -100,7 +105,7 @@ Use this when you have data from `find_text` OR `take_screenshot` (OCR results).
 
 ### Method B: Relative Screenshot Coordinates
 Use this when you (the model) look at the *image* from `take_screenshot` and estimate positions (e.g., "The icon is at 50% width").
-*   **Source:** `take_screenshot` returns metadata `{ "screenshot_origin_x": 100, "screenshot_origin_y": 100, "screenshot_scale": 2.0 }`.
+*   **Source:** `take_screenshot` returns metadata `{ "screenshot_origin_x": 100, "screenshot_origin_y": 100, "screenshot_scale": 2.0, "screenshot_pixel_width": 1920, "screenshot_pixel_height": 1080 }`.
 *   **Your Vision:** You see a button at pixel `(x=50, y=50)` inside the image.
 *   **Action:** `click(screenshot_x=50, screenshot_y=50, screenshot_origin_x=100, screenshot_origin_y=100, screenshot_scale=2.0)`.
 *   **Why:** The tool handles the math to convert image-pixels to screen-pixels.

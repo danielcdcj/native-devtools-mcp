@@ -230,8 +230,8 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
         ));
     }
 
-    let png_data = std::fs::read(&temp_path)
-        .map_err(|e| format!("failed to read screenshot file: {}", e))?;
+    let png_data =
+        std::fs::read(&temp_path).map_err(|e| format!("failed to read screenshot file: {}", e))?;
 
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_path);

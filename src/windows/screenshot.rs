@@ -13,6 +13,20 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
+/// Extract pixel dimensions from PNG data by reading the IHDR chunk.
+/// Returns the dimensions from the PNG if readable, otherwise falls back to provided values.
+fn png_dimensions_or(data: &[u8], fallback_w: u32, fallback_h: u32) -> (u32, u32) {
+    // PNG IHDR chunk: bytes 16-19 = width (big endian), bytes 20-23 = height (big endian)
+    // PNG signature is 8 bytes, then IHDR length (4) + "IHDR" (4) = 16 bytes before width
+    if data.len() >= 24 && &data[0..8] == b"\x89PNG\r\n\x1a\n" {
+        let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+        let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+        (width, height)
+    } else {
+        (fallback_w, fallback_h)
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum ScreenshotError {
     #[error("Failed to capture screenshot: {0}")]
@@ -23,6 +37,7 @@ pub enum ScreenshotError {
     WindowNotFound(u32),
 }
 
+#[non_exhaustive]
 pub struct Screenshot {
     pub png_data: Vec<u8>,
     /// The backing scale factor of the display this screenshot was taken from.
@@ -30,6 +45,9 @@ pub struct Screenshot {
     /// Screen-space origin of the screenshot (top-left).
     pub origin_x: f64,
     pub origin_y: f64,
+    /// Pixel dimensions of the screenshot image.
+    pub pixel_width: u32,
+    pub pixel_height: u32,
 }
 
 /// Capture the entire virtual screen (all monitors).
@@ -37,6 +55,7 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
     let (vx, vy, vw, vh) = display::get_virtual_screen_bounds();
 
     let png_data = capture_region_to_png(vx, vy, vw, vh)?;
+    let (pixel_width, pixel_height) = png_dimensions_or(&png_data, vw as u32, vh as u32);
 
     // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
     // so scale_factor should be 1.0 (no conversion needed for click coordinates).
@@ -45,6 +64,8 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
         scale_factor: 1.0,
         origin_x: vx as f64,
         origin_y: vy as f64,
+        pixel_width,
+        pixel_height,
     })
 }
 
@@ -55,15 +76,25 @@ pub fn capture_region(
     width: f64,
     height: f64,
 ) -> Result<Screenshot, ScreenshotError> {
-    let png_data = capture_region_to_png(x as i32, y as i32, width as i32, height as i32)?;
+    // Round to integers to match what's actually captured
+    let x_int = x as i32;
+    let y_int = y as i32;
+    let w_int = width as i32;
+    let h_int = height as i32;
+
+    let png_data = capture_region_to_png(x_int, y_int, w_int, h_int)?;
+    let (pixel_width, pixel_height) = png_dimensions_or(&png_data, w_int as u32, h_int as u32);
 
     // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
     // so scale_factor should be 1.0 (no conversion needed for click coordinates).
+    // Use integer-aligned origin to match the captured region exactly.
     Ok(Screenshot {
         png_data,
         scale_factor: 1.0,
-        origin_x: x,
-        origin_y: y,
+        origin_x: f64::from(x_int),
+        origin_y: f64::from(y_int),
+        pixel_width,
+        pixel_height,
     })
 }
 
@@ -86,6 +117,7 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
 
     // Use BitBlt to capture the window's screen region
     let png_data = capture_region_to_png(bounds.x as i32, bounds.y as i32, width, height)?;
+    let (pixel_width, pixel_height) = png_dimensions_or(&png_data, width as u32, height as u32);
 
     // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
     // so scale_factor should be 1.0 (no conversion needed for click coordinates).
@@ -95,6 +127,8 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
         scale_factor: 1.0,
         origin_x: bounds.x,
         origin_y: bounds.y,
+        pixel_width,
+        pixel_height,
     })
 }
 

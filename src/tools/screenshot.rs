@@ -62,9 +62,16 @@ struct ScreenshotMetadata {
     screenshot_scale: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     screenshot_window_id: Option<u32>,
+    /// Pixel width of the screenshot image.
+    screenshot_pixel_width: u32,
+    /// Pixel height of the screenshot image.
+    screenshot_pixel_height: u32,
 }
 
 pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
+    // Track resolved window_id for metadata (important when using app_name)
+    let mut resolved_window_id: Option<u32> = None;
+
     let result = match params.mode.as_str() {
         "screen" => platform::capture_screen(),
         "window" => {
@@ -91,6 +98,8 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
                     )]);
                 }
             };
+            // Store the resolved window_id for metadata
+            resolved_window_id = Some(window_id);
             platform::capture_window(window_id)
         }
         "region" => {
@@ -126,16 +135,13 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 
             let base64_data = base64::engine::general_purpose::STANDARD.encode(&image_data);
             let mut contents = vec![Content::image(base64_data, mime_type)];
-            let screenshot_window_id = if params.mode == "window" {
-                params.window_id
-            } else {
-                None
-            };
             let metadata = ScreenshotMetadata {
                 screenshot_origin_x: screenshot.origin_x,
                 screenshot_origin_y: screenshot.origin_y,
                 screenshot_scale: screenshot.scale_factor,
-                screenshot_window_id,
+                screenshot_window_id: resolved_window_id,
+                screenshot_pixel_width: screenshot.pixel_width,
+                screenshot_pixel_height: screenshot.pixel_height,
             };
             if let Ok(json) = to_string_pretty(&metadata) {
                 contents.push(Content::text(json));
