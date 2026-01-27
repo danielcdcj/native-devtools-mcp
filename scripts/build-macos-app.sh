@@ -45,6 +45,9 @@ echo "Assembling app bundle..."
 rm -rf "$APP_BUNDLE"
 cp -R "$PROJECT_ROOT/packaging/macos/$APP_NAME.app" "$APP_BUNDLE"
 
+# Ensure MacOS directory exists (git doesn't track empty directories)
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+
 # Copy binary into app bundle
 cp "$PROJECT_ROOT/target/$TARGET/release/$BINARY_NAME" "$APP_BUNDLE/Contents/MacOS/"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$BINARY_NAME"
