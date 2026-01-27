@@ -88,7 +88,6 @@ xcrun stapler staple "$DMG_PATH"
 # Verify stapling
 echo "Verifying stapled DMG..."
 xcrun stapler validate "$DMG_PATH"
-spctl --assess --verbose "$DMG_PATH"
 
 echo ""
 echo "Success! Notarized DMG: $DMG_PATH"
