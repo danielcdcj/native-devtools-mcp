@@ -1,5 +1,8 @@
 use crate::app_protocol::AppProtocolClient;
-use crate::tools::{app_protocol as app_tools, input as input_tools, navigation, screenshot};
+use crate::tools::{
+    app_protocol as app_tools, find_image, input as input_tools, navigation, screenshot,
+    screenshot_cache::ScreenshotCache,
+};
 use rmcp::{
     handler::server::ServerHandler,
     model::{
@@ -23,6 +26,7 @@ fn json_to_object(value: Value) -> rmcp::model::JsonObject {
 #[derive(Clone)]
 pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
+    screenshot_cache: Arc<RwLock<ScreenshotCache>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -35,6 +39,7 @@ impl MacOSDevToolsServer {
     pub fn new() -> Self {
         Self {
             app_client: Arc::new(RwLock::new(None)),
+            screenshot_cache: Arc::new(RwLock::new(ScreenshotCache::default())),
         }
     }
 
@@ -344,6 +349,79 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "find_image",
+                "Find a template image within a screenshot using template matching. Returns precise click coordinates for non-text UI elements like icons and shapes. Use screenshot_id from take_screenshot or provide screenshot_image_base64.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["template_image_base64"],
+                    "properties": {
+                        "screenshot_id": {
+                            "type": "string",
+                            "description": "Screenshot ID from a previous take_screenshot call (preferred)"
+                        },
+                        "screenshot_image_base64": {
+                            "type": "string",
+                            "description": "Base64-encoded screenshot image (used if no screenshot_id)"
+                        },
+                        "template_image_base64": {
+                            "type": "string",
+                            "description": "Base64-encoded template image to find (required)"
+                        },
+                        "mask_image_base64": {
+                            "type": "string",
+                            "description": "Base64-encoded mask image (optional; white=match, black=ignore)"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["fast", "accurate"],
+                            "description": "Matching mode: 'fast' (default) for quick searches, 'accurate' for thorough matching",
+                            "default": "fast"
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "description": "Minimum match score 0.0-1.0 (default: 0.88 fast, 0.85 accurate)"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum matches to return (default: 3 fast, 5 accurate)"
+                        },
+                        "scales": {
+                            "type": "object",
+                            "description": "Scale search range {min, max, step}",
+                            "properties": {
+                                "min": { "type": "number", "default": 0.8 },
+                                "max": { "type": "number", "default": 1.2 },
+                                "step": { "type": "number", "default": 0.1 }
+                            }
+                        },
+                        "search_region": {
+                            "type": "object",
+                            "description": "Limit search to region {x, y, w, h} in screenshot pixels",
+                            "properties": {
+                                "x": { "type": "integer" },
+                                "y": { "type": "integer" },
+                                "w": { "type": "integer" },
+                                "h": { "type": "integer" }
+                            }
+                        },
+                        "stride": {
+                            "type": "integer",
+                            "description": "Search step size (default: 2 fast, 1 accurate)"
+                        },
+                        "rotations": {
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "description": "Rotations to try in degrees (only 0, 90, 180, 270 supported)"
+                        },
+                        "return_screen_coords": {
+                            "type": "boolean",
+                            "description": "Include screen coordinates for clicking (default: true)",
+                            "default": true
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 
@@ -619,7 +697,7 @@ impl ServerHandler for MacOSDevToolsServer {
             "take_screenshot" => {
                 let params: screenshot::TakeScreenshotParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(screenshot::take_screenshot(params))
+                Ok(screenshot::take_screenshot(params, Some(self.screenshot_cache.clone())).await)
             }
             "list_windows" => {
                 let params: navigation::ListWindowsParams = serde_json::from_value(args)
@@ -735,6 +813,11 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: input_tools::FindTextParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(input_tools::find_text(params))
+            }
+            "find_image" => {
+                let params: find_image::FindImageParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(find_image::find_image(params, self.screenshot_cache.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),

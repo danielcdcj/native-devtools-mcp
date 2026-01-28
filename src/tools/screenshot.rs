@@ -1,10 +1,13 @@
 use crate::platform;
+use crate::tools::screenshot_cache::{ScreenshotCache, ScreenshotMetadata as CacheMetadata};
 use base64::Engine;
 use image::ImageReader;
 use rmcp::model::{CallToolResult, Content};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use std::io::Cursor;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Deserialize)]
 pub struct TakeScreenshotParams {
@@ -57,6 +60,9 @@ fn png_to_jpeg(png_data: &[u8]) -> Result<Vec<u8>, String> {
 
 #[derive(Debug, Serialize)]
 struct ScreenshotMetadata {
+    /// Unique ID for referencing this screenshot in subsequent tool calls (e.g., find_image).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screenshot_id: Option<String>,
     screenshot_origin_x: f64,
     screenshot_origin_y: f64,
     screenshot_scale: f64,
@@ -68,7 +74,14 @@ struct ScreenshotMetadata {
     screenshot_pixel_height: u32,
 }
 
-pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
+/// Take a screenshot, optionally caching it for later use with find_image.
+///
+/// If a cache is provided, the screenshot PNG is stored and a `screenshot_id`
+/// is included in the response metadata.
+pub async fn take_screenshot(
+    params: TakeScreenshotParams,
+    cache: Option<Arc<RwLock<ScreenshotCache>>>,
+) -> CallToolResult {
     // Track resolved window_id for metadata (important when using app_name)
     let mut resolved_window_id: Option<u32> = None;
 
@@ -123,6 +136,25 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
 
     match result {
         Ok(screenshot) => {
+            // Store in cache if provided (store raw PNG for accuracy)
+            let screenshot_id = if let Some(cache) = cache {
+                let cache_metadata = CacheMetadata {
+                    origin_x: screenshot.origin_x,
+                    origin_y: screenshot.origin_y,
+                    scale: screenshot.scale_factor,
+                    window_id: resolved_window_id,
+                    pixel_width: screenshot.pixel_width,
+                    pixel_height: screenshot.pixel_height,
+                };
+                let id = cache
+                    .write()
+                    .await
+                    .store(screenshot.png_data.clone(), cache_metadata);
+                Some(id)
+            } else {
+                None
+            };
+
             // Convert to JPEG for smaller payload size
             let (image_data, mime_type) = match png_to_jpeg(&screenshot.png_data) {
                 Ok(jpeg_data) => (jpeg_data, "image/jpeg"),
@@ -136,6 +168,7 @@ pub fn take_screenshot(params: TakeScreenshotParams) -> CallToolResult {
             let base64_data = base64::engine::general_purpose::STANDARD.encode(&image_data);
             let mut contents = vec![Content::image(base64_data, mime_type)];
             let metadata = ScreenshotMetadata {
+                screenshot_id,
                 screenshot_origin_x: screenshot.origin_x,
                 screenshot_origin_y: screenshot.origin_y,
                 screenshot_scale: screenshot.scale_factor,
