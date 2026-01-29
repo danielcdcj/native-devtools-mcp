@@ -11,6 +11,8 @@
 
 A Model Context Protocol (MCP) server that provides **Computer Use** capabilities: screenshots, OCR, input simulation, and window management.
 
+[//]: # "Search keywords: MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, mouse, keyboard, screen reading, macOS, Windows, native-devtools-mcp"
+
 [Features](#-features) • [Installation](#-installation) • [For AI Agents](#-for-ai-agents-llms) • [Permissions](#-required-permissions-macos)
 
 ![Demo](demo.gif)
@@ -18,6 +20,10 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 </div>
 
 ---
+
+## 🔍 Search Keywords
+
+MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, screen reading, mouse, keyboard, macOS, Windows, native-devtools-mcp.
 
 ## 🚀 Features
 
@@ -33,7 +39,7 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 
 This MCP server is designed to be **highly discoverable and usable** by AI models (Claude, Gemini, GPT).
 
-- **[📄 Read `agents.md`](./agents.md):** A compact, token-optimized technical reference designed specifically for ingestion by LLMs. It contains intent definitions, schema examples, and reasoning patterns.
+- **[📄 Read `AGENTS.md`](./AGENTS.md):** A compact, token-optimized technical reference designed specifically for ingestion by LLMs. It contains intent definitions, schema examples, and reasoning patterns.
 
 **Core Capabilities for System Prompts:**
 1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).

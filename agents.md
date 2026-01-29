@@ -1,5 +1,9 @@
 # Agent Context: native-devtools-mcp
 
+**About:** This is the AGENTS.md for **native-devtools-mcp**, an MCP (Model Context Protocol) server that enables **computer use** / **desktop automation** on macOS and Windows: screenshots, OCR, mouse/keyboard input, and window management.
+
+**Search keywords:** MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, screen reading, mouse, keyboard, macOS, Windows, native-devtools-mcp.
+
 **Role:** You are an agent equipped with "Computer Use" capabilities. You can see the screen, type, move the mouse, and interact with native desktop applications.
 
 **Constraint:** You are operating a real machine. Actions are permanent. Ensure you verify the state of the screen before and after actions.
