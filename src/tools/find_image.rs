@@ -326,11 +326,17 @@ pub async fn find_image(
     // Lock is now released
 
     // Resolve template data from image cache
+    // Use write lock to update LRU access order via get()
     let template_png_data = {
         if let Some(id) = &params.template_id {
-            let cache_guard = image_cache.read().await;
-            if let Some(cached) = cache_guard.peek(id) {
+            let mut cache_guard = image_cache.write().await;
+            if let Some(cached) = cache_guard.get(id) {
                 Some(cached.png_data.clone())
+            } else if params.template_image_base64.is_some() {
+                // ID not found but base64 fallback available - warn and continue
+                let msg = format!("Template ID '{}' not found in cache, using base64 fallback", id);
+                warning = Some(warning.map_or(msg.clone(), |w| format!("{}; {}", w, msg)));
+                None
             } else {
                 return CallToolResult::error(vec![Content::text(format!(
                     "Template ID '{}' not found in image cache",
@@ -343,11 +349,17 @@ pub async fn find_image(
     };
 
     // Resolve mask data from image cache
+    // Use write lock to update LRU access order via get()
     let mask_png_data = {
         if let Some(id) = &params.mask_id {
-            let cache_guard = image_cache.read().await;
-            if let Some(cached) = cache_guard.peek(id) {
+            let mut cache_guard = image_cache.write().await;
+            if let Some(cached) = cache_guard.get(id) {
                 Some(cached.png_data.clone())
+            } else if params.mask_image_base64.is_some() {
+                // ID not found but base64 fallback available - warn and continue
+                let msg = format!("Mask ID '{}' not found in cache, using base64 fallback", id);
+                warning = Some(warning.map_or(msg.clone(), |w| format!("{}; {}", w, msg)));
+                None
             } else {
                 return CallToolResult::error(vec![Content::text(format!(
                     "Mask ID '{}' not found in image cache",
@@ -460,6 +472,20 @@ fn run_matching(input: MatchingInput) -> MatchingResult {
     } else {
         None
     };
+
+    // Validate mask dimensions match template
+    if let Some(mask_img) = &mask {
+        if mask_img.width() != template_gray.width() || mask_img.height() != template_gray.height()
+        {
+            return MatchingResult::Error(format!(
+                "Mask dimensions ({}x{}) must match template dimensions ({}x{})",
+                mask_img.width(),
+                mask_img.height(),
+                template_gray.width(),
+                template_gray.height()
+            ));
+        }
+    }
 
     // Extract search region if specified
     let search_img = if let Some(region) = &input.search_region {
@@ -1578,5 +1604,157 @@ mod tests {
             !result.is_error.unwrap_or(true),
             "Should succeed using template_id"
         );
+    }
+
+    #[tokio::test]
+    async fn test_find_image_stale_template_id_falls_back_to_base64() {
+        let screenshot_cache = Arc::new(RwLock::new(ScreenshotCache::default()));
+        let image_cache = Arc::new(RwLock::new(ImageCache::default()));
+
+        // Provide a stale template_id but valid base64 fallback
+        let params = FindImageParams {
+            screenshot_id: None,
+            screenshot_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(50, 50)),
+            ),
+            template_id: Some("stale-id-not-in-cache".to_string()),
+            template_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(8, 8)),
+            ),
+            mask_id: None,
+            mask_image_base64: None,
+            mode: "fast".to_string(),
+            threshold: Some(0.5),
+            max_results: None,
+            scales: Some(ScaleRange {
+                min: 1.0,
+                max: 1.0,
+                step: 0.1,
+            }),
+            rotations: None,
+            search_region: None,
+            stride: None,
+            return_screen_coords: false,
+        };
+
+        // Should succeed using base64 fallback with a warning
+        let result = find_image(params, screenshot_cache, image_cache).await;
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Should succeed using base64 fallback"
+        );
+
+        // Verify warning is present
+        if let rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text }) =
+            &result.content[0].raw
+        {
+            let response: FindImageResponse = serde_json::from_str(text).unwrap();
+            assert!(response.warning.is_some(), "Should have warning about stale ID");
+            assert!(
+                response.warning.as_ref().unwrap().contains("not found in cache"),
+                "Warning should mention cache miss"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_find_image_stale_mask_id_falls_back_to_base64() {
+        let screenshot_cache = Arc::new(RwLock::new(ScreenshotCache::default()));
+        let image_cache = Arc::new(RwLock::new(ImageCache::default()));
+
+        // Provide valid template but stale mask_id with base64 fallback
+        let params = FindImageParams {
+            screenshot_id: None,
+            screenshot_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(50, 50)),
+            ),
+            template_id: None,
+            template_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(8, 8)),
+            ),
+            mask_id: Some("stale-mask-id".to_string()),
+            mask_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(8, 8)),
+            ),
+            mode: "fast".to_string(),
+            threshold: Some(0.5),
+            max_results: None,
+            scales: Some(ScaleRange {
+                min: 1.0,
+                max: 1.0,
+                step: 0.1,
+            }),
+            rotations: None,
+            search_region: None,
+            stride: None,
+            return_screen_coords: false,
+        };
+
+        // Should succeed using base64 fallback
+        let result = find_image(params, screenshot_cache, image_cache).await;
+        assert!(
+            !result.is_error.unwrap_or(true),
+            "Should succeed using mask base64 fallback"
+        );
+
+        // Verify warning is present
+        if let rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text }) =
+            &result.content[0].raw
+        {
+            let response: FindImageResponse = serde_json::from_str(text).unwrap();
+            assert!(response.warning.is_some(), "Should have warning about stale mask ID");
+            assert!(
+                response.warning.as_ref().unwrap().contains("Mask ID"),
+                "Warning should mention mask"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_find_image_mask_dimension_mismatch_errors() {
+        let screenshot_cache = Arc::new(RwLock::new(ScreenshotCache::default()));
+        let image_cache = Arc::new(RwLock::new(ImageCache::default()));
+
+        // Template is 10x10, mask is 8x8 - dimension mismatch
+        let params = FindImageParams {
+            screenshot_id: None,
+            screenshot_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(50, 50)),
+            ),
+            template_id: None,
+            template_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(10, 10)),
+            ),
+            mask_id: None,
+            mask_image_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(8, 8)),
+            ),
+            mode: "fast".to_string(),
+            threshold: None,
+            max_results: None,
+            scales: Some(ScaleRange {
+                min: 1.0,
+                max: 1.0,
+                step: 0.1,
+            }),
+            rotations: None,
+            search_region: None,
+            stride: None,
+            return_screen_coords: false,
+        };
+
+        let result = find_image(params, screenshot_cache, image_cache).await;
+        assert!(result.is_error.unwrap_or(false), "Should error on mask dimension mismatch");
+
+        // Verify error message mentions dimension mismatch
+        if let rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text }) =
+            &result.content[0].raw
+        {
+            assert!(
+                text.contains("Mask dimensions") && text.contains("must match"),
+                "Error should mention mask dimension mismatch, got: {}",
+                text
+            );
+        }
     }
 }

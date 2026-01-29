@@ -65,8 +65,7 @@ pub struct LoadImageResponse {
 
 /// Input data for the blocking image processing operation.
 struct ProcessingInput {
-    file_bytes: Vec<u8>,
-    source_path: String,
+    path: String,
     max_width: Option<u32>,
     max_height: Option<u32>,
     as_mask: bool,
@@ -83,56 +82,21 @@ struct ProcessingResult {
 
 /// Execute the load_image tool.
 pub async fn load_image(params: LoadImageParams, cache: Arc<RwLock<ImageCache>>) -> CallToolResult {
-    // Validate path exists and is a file
-    let path = Path::new(&params.path);
-
-    if !path.exists() {
-        return CallToolResult::error(vec![Content::text(format!(
-            "File not found: {}",
-            params.path
-        ))]);
+    // Validate max_width/max_height are positive if provided
+    if let Some(0) = params.max_width {
+        return CallToolResult::error(vec![Content::text(
+            "max_width must be greater than 0".to_string(),
+        )]);
+    }
+    if let Some(0) = params.max_height {
+        return CallToolResult::error(vec![Content::text(
+            "max_height must be greater than 0".to_string(),
+        )]);
     }
 
-    if !path.is_file() {
-        return CallToolResult::error(vec![Content::text(format!(
-            "Path is not a file: {}",
-            params.path
-        ))]);
-    }
-
-    // Check file size
-    let file_size = match fs::metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(e) => {
-            return CallToolResult::error(vec![Content::text(format!(
-                "Failed to read file metadata: {}",
-                e
-            ))]);
-        }
-    };
-
-    if file_size > MAX_IMAGE_FILE_SIZE {
-        return CallToolResult::error(vec![Content::text(format!(
-            "File too large: {} bytes (max {} bytes)",
-            file_size, MAX_IMAGE_FILE_SIZE
-        ))]);
-    }
-
-    // Read file bytes
-    let file_bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return CallToolResult::error(vec![Content::text(format!(
-                "Failed to read file: {}",
-                e
-            ))]);
-        }
-    };
-
-    // Prepare input for blocking operation
+    // Prepare input for blocking operation (all file I/O happens in spawn_blocking)
     let input = ProcessingInput {
-        file_bytes,
-        source_path: params.path.clone(),
+        path: params.path.clone(),
         max_width: params.max_width,
         max_height: params.max_height,
         as_mask: params.as_mask,
@@ -179,30 +143,63 @@ pub async fn load_image(params: LoadImageParams, cache: Arc<RwLock<ImageCache>>)
 }
 
 /// CPU-intensive image processing logic, runs on a blocking thread.
+/// All file I/O is performed here to avoid blocking the async runtime.
 fn process_image(input: ProcessingInput) -> Result<ProcessingResult, String> {
+    let path = Path::new(&input.path);
+
+    // Validate path exists and is a file
+    if !path.exists() {
+        return Err(format!("File not found: {}", input.path));
+    }
+    if !path.is_file() {
+        return Err(format!("Path is not a file: {}", input.path));
+    }
+
+    // Check file size before reading
+    let file_size = fs::metadata(path)
+        .map_err(|e| format!("Failed to read file metadata: {}", e))?
+        .len();
+
+    if file_size > MAX_IMAGE_FILE_SIZE {
+        return Err(format!(
+            "File too large: {} bytes (max {} bytes)",
+            file_size, MAX_IMAGE_FILE_SIZE
+        ));
+    }
+
+    // Read file bytes
+    let file_bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
     // Compute SHA-256 of original file
     let sha256 = {
         let mut hasher = Sha256::new();
-        hasher.update(&input.file_bytes);
+        hasher.update(&file_bytes);
         format!("{:x}", hasher.finalize())
     };
 
-    // Decode image
-    let img = ImageReader::new(Cursor::new(&input.file_bytes))
+    // Check dimensions BEFORE full decode to avoid memory exhaustion
+    let reader = ImageReader::new(Cursor::new(&file_bytes))
         .with_guessed_format()
-        .map_err(|e| format!("Failed to detect image format: {}", e))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image: {}", e))?;
+        .map_err(|e| format!("Failed to detect image format: {}", e))?;
 
-    let (orig_width, orig_height) = img.dimensions();
+    let (orig_width, orig_height) = reader
+        .into_dimensions()
+        .map_err(|e| format!("Failed to read image dimensions: {}", e))?;
 
-    // Validate dimensions
+    // Validate dimensions before decoding
     if orig_width > MAX_IMAGE_DIMENSION || orig_height > MAX_IMAGE_DIMENSION {
         return Err(format!(
             "Image dimensions too large: {}x{} (max {}x{})",
             orig_width, orig_height, MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION
         ));
     }
+
+    // Now decode the full image (dimensions are safe)
+    let img = ImageReader::new(Cursor::new(&file_bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to detect image format: {}", e))?
+        .decode()
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
 
     // Apply optional downscaling
     let img = apply_max_dimensions(img, input.max_width, input.max_height);
@@ -243,7 +240,7 @@ fn process_image(input: ProcessingInput) -> Result<ProcessingResult, String> {
     };
 
     let metadata = ImageMetadata {
-        source_path: Some(input.source_path),
+        source_path: Some(input.path),
         width,
         height,
         channels,
@@ -360,11 +357,9 @@ mod tests {
     #[test]
     fn test_process_image_basic() {
         let file = create_test_png(64, 64);
-        let file_bytes = fs::read(file.path()).unwrap();
 
         let input = ProcessingInput {
-            file_bytes,
-            source_path: file.path().to_string_lossy().to_string(),
+            path: file.path().to_string_lossy().to_string(),
             max_width: None,
             max_height: None,
             as_mask: false,
@@ -385,11 +380,9 @@ mod tests {
     #[test]
     fn test_process_image_with_base64() {
         let file = create_test_png(32, 32);
-        let file_bytes = fs::read(file.path()).unwrap();
 
         let input = ProcessingInput {
-            file_bytes,
-            source_path: file.path().to_string_lossy().to_string(),
+            path: file.path().to_string_lossy().to_string(),
             max_width: None,
             max_height: None,
             as_mask: false,
@@ -410,11 +403,9 @@ mod tests {
     #[test]
     fn test_process_image_as_mask() {
         let file = create_test_png(48, 48);
-        let file_bytes = fs::read(file.path()).unwrap();
 
         let input = ProcessingInput {
-            file_bytes,
-            source_path: file.path().to_string_lossy().to_string(),
+            path: file.path().to_string_lossy().to_string(),
             max_width: None,
             max_height: None,
             as_mask: true,
@@ -430,11 +421,9 @@ mod tests {
     #[test]
     fn test_process_image_with_downscale() {
         let file = create_test_png(200, 100);
-        let file_bytes = fs::read(file.path()).unwrap();
 
         let input = ProcessingInput {
-            file_bytes,
-            source_path: file.path().to_string_lossy().to_string(),
+            path: file.path().to_string_lossy().to_string(),
             max_width: Some(100),
             max_height: Some(100),
             as_mask: false,
@@ -450,12 +439,12 @@ mod tests {
 
     #[test]
     fn test_process_image_sha256_deterministic() {
+        // Use the same file for both inputs to verify SHA256 is deterministic
         let file = create_test_png(16, 16);
-        let file_bytes = fs::read(file.path()).unwrap();
+        let path = file.path().to_string_lossy().to_string();
 
         let input1 = ProcessingInput {
-            file_bytes: file_bytes.clone(),
-            source_path: "test1.png".to_string(),
+            path: path.clone(),
             max_width: None,
             max_height: None,
             as_mask: false,
@@ -463,8 +452,7 @@ mod tests {
         };
 
         let input2 = ProcessingInput {
-            file_bytes,
-            source_path: "test2.png".to_string(), // Different path, same content
+            path,
             max_width: None,
             max_height: None,
             as_mask: false,
@@ -536,6 +524,40 @@ mod tests {
             id_prefix: None,
             max_width: None,
             max_height: None,
+            as_mask: false,
+            return_base64: false,
+        };
+
+        let result = load_image(params, cache).await;
+        assert!(result.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_load_image_zero_max_width() {
+        let cache = Arc::new(RwLock::new(ImageCache::default()));
+
+        let params = LoadImageParams {
+            path: "/some/path.png".to_string(),
+            id_prefix: None,
+            max_width: Some(0),
+            max_height: None,
+            as_mask: false,
+            return_base64: false,
+        };
+
+        let result = load_image(params, cache).await;
+        assert!(result.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_load_image_zero_max_height() {
+        let cache = Arc::new(RwLock::new(ImageCache::default()));
+
+        let params = LoadImageParams {
+            path: "/some/path.png".to_string(),
+            id_prefix: None,
+            max_width: None,
+            max_height: Some(0),
             as_mask: false,
             return_base64: false,
         };
