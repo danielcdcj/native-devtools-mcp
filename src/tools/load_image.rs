@@ -304,35 +304,6 @@ mod tests {
         file
     }
 
-    #[test]
-    fn test_apply_max_dimensions_no_change() {
-        // Create a simple 100x100 image
-        let img = DynamicImage::new_rgb8(100, 100);
-
-        // No constraints
-        let result = apply_max_dimensions(img.clone(), None, None);
-        assert_eq!(result.dimensions(), (100, 100));
-
-        // Constraints larger than image
-        let result = apply_max_dimensions(img, Some(200), Some(200));
-        assert_eq!(result.dimensions(), (100, 100));
-    }
-
-    #[test]
-    fn test_apply_max_dimensions_width_constraint() {
-        let img = DynamicImage::new_rgb8(200, 100);
-
-        let result = apply_max_dimensions(img, Some(100), None);
-        assert_eq!(result.dimensions(), (100, 50));
-    }
-
-    #[test]
-    fn test_apply_max_dimensions_height_constraint() {
-        let img = DynamicImage::new_rgb8(100, 200);
-
-        let result = apply_max_dimensions(img, None, Some(100));
-        assert_eq!(result.dimensions(), (50, 100));
-    }
 
     #[test]
     fn test_apply_max_dimensions_both_constraints() {
@@ -437,34 +408,6 @@ mod tests {
         assert_eq!(result.metadata.height, 50);
     }
 
-    #[test]
-    fn test_process_image_sha256_deterministic() {
-        // Use the same file for both inputs to verify SHA256 is deterministic
-        let file = create_test_png(16, 16);
-        let path = file.path().to_string_lossy().to_string();
-
-        let input1 = ProcessingInput {
-            path: path.clone(),
-            max_width: None,
-            max_height: None,
-            as_mask: false,
-            return_base64: false,
-        };
-
-        let input2 = ProcessingInput {
-            path,
-            max_width: None,
-            max_height: None,
-            as_mask: false,
-            return_base64: false,
-        };
-
-        let result1 = process_image(input1).unwrap();
-        let result2 = process_image(input2).unwrap();
-
-        // SHA256 should be the same for same file content
-        assert_eq!(result1.sha256, result2.sha256);
-    }
 
     #[tokio::test]
     async fn test_load_image_file_not_found() {

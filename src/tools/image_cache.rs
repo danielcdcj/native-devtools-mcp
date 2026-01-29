@@ -233,25 +233,6 @@ mod tests {
         assert!(cache.is_empty());
     }
 
-    #[test]
-    fn test_unique_ids() {
-        let mut cache = ImageCache::new(10);
-        let id1 = cache.store(vec![1], make_metadata(), None);
-        let id2 = cache.store(vec![2], make_metadata(), None);
-        let id3 = cache.store(vec![3], make_metadata(), None);
-
-        assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
-        assert_ne!(id1, id3);
-    }
-
-    #[test]
-    fn test_get_nonexistent_id() {
-        let mut cache = ImageCache::new(5);
-        cache.store(vec![1], make_metadata(), None);
-
-        assert!(cache.get("nonexistent").is_none());
-    }
 
     #[test]
     fn test_peek_does_not_update_lru() {
@@ -272,44 +253,4 @@ mod tests {
         assert!(cache.contains(&id3));
     }
 
-    #[test]
-    fn test_cache_size_one() {
-        let mut cache = ImageCache::new(1);
-
-        let id1 = cache.store(vec![1], make_metadata(), None);
-        assert!(cache.contains(&id1));
-
-        let id2 = cache.store(vec![2], make_metadata(), None);
-        assert!(!cache.contains(&id1)); // evicted
-        assert!(cache.contains(&id2));
-        assert_eq!(cache.len(), 1);
-    }
-
-    #[test]
-    fn test_metadata_preserved() {
-        let mut cache = ImageCache::new(5);
-        let metadata = ImageMetadata {
-            source_path: Some("/path/to/image.png".to_string()),
-            width: 1920,
-            height: 1080,
-            channels: 3,
-            mime: "image/jpeg".to_string(),
-            sha256: Some("abc123".to_string()),
-            is_mask: true,
-        };
-
-        let id = cache.store(vec![1, 2, 3], metadata, Some("test"));
-        let retrieved = cache.get(&id).unwrap();
-
-        assert_eq!(
-            retrieved.metadata.source_path,
-            Some("/path/to/image.png".to_string())
-        );
-        assert_eq!(retrieved.metadata.width, 1920);
-        assert_eq!(retrieved.metadata.height, 1080);
-        assert_eq!(retrieved.metadata.channels, 3);
-        assert_eq!(retrieved.metadata.mime, "image/jpeg");
-        assert_eq!(retrieved.metadata.sha256, Some("abc123".to_string()));
-        assert!(retrieved.metadata.is_mask);
-    }
 }

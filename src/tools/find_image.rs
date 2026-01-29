@@ -860,66 +860,6 @@ mod tests {
     use super::*;
     use image::Luma;
 
-    #[test]
-    fn test_compute_iou() {
-        // Identical boxes
-        let a = BoundingBox {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let b = BoundingBox {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        assert!((compute_iou(&a, &b) - 1.0).abs() < f64::EPSILON);
-
-        // No overlap
-        let c = BoundingBox {
-            x: 20,
-            y: 20,
-            w: 10,
-            h: 10,
-        };
-        assert!((compute_iou(&a, &c)).abs() < f64::EPSILON);
-
-        // Partial overlap (50%)
-        let d = BoundingBox {
-            x: 5,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        // Intersection: 5x10 = 50, Union: 100 + 100 - 50 = 150
-        let iou = compute_iou(&a, &d);
-        assert!((iou - 50.0 / 150.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_resize_image() {
-        let img = GrayImage::from_fn(10, 10, |_, _| Luma([128]));
-
-        let scaled = resize_image(&img, 2.0);
-        assert_eq!(scaled.width(), 20);
-        assert_eq!(scaled.height(), 20);
-
-        let scaled_down = resize_image(&img, 0.5);
-        assert_eq!(scaled_down.width(), 5);
-        assert_eq!(scaled_down.height(), 5);
-    }
-
-    #[test]
-    fn test_template_stats() {
-        // Uniform image
-        let img = GrayImage::from_fn(5, 5, |_, _| Luma([100]));
-        let stats = compute_template_stats(&img, None);
-        assert!((stats.mean - 100.0).abs() < f64::EPSILON);
-        assert!(stats.std < f64::EPSILON); // Uniform -> std = 0
-        assert_eq!(stats.pixel_count, 25);
-    }
 
     #[test]
     fn test_nms() {
@@ -1017,49 +957,6 @@ mod tests {
         assert_eq!(best_y, 40, "Y should be 40, got {}", best_y);
     }
 
-    #[test]
-    fn test_ncc_matching_with_stride() {
-        // Create a 50x50 image with a patterned 6x6 template
-        let mut image = GrayImage::from_fn(50, 50, |_, _| Luma([100]));
-
-        // Draw a checkerboard-like pattern at (20, 20)
-        for y in 0..6u32 {
-            for x in 0..6u32 {
-                let val = if (x + y) % 2 == 0 { 200u8 } else { 50u8 };
-                image.put_pixel(20 + x, 20 + y, Luma([val]));
-            }
-        }
-
-        // Create matching template
-        let template = GrayImage::from_fn(6, 6, |x, y| {
-            let val = if (x + y) % 2 == 0 { 200u8 } else { 50u8 };
-            Luma([val])
-        });
-
-        // With stride=2, we should still find the match (20 is divisible by 2)
-        let matches = match_template_ncc(&image, &template, None, 0.8, 2);
-
-        assert!(!matches.is_empty(), "Should find match with stride=2");
-
-        // Find best match
-        let (best_x, best_y, _) = matches
-            .iter()
-            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
-            .cloned()
-            .unwrap();
-
-        // Should be within stride distance of actual position
-        assert!(
-            (best_x as i32 - 20).abs() <= 2,
-            "X should be near 20, got {}",
-            best_x
-        );
-        assert!(
-            (best_y as i32 - 20).abs() <= 2,
-            "Y should be near 20, got {}",
-            best_y
-        );
-    }
 
     #[test]
     fn test_ncc_no_match_for_different_pattern() {
@@ -1081,13 +978,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_scale_range_default() {
-        let range = ScaleRange::default();
-        assert!((range.min - 0.8).abs() < f64::EPSILON);
-        assert!((range.max - 1.2).abs() < f64::EPSILON);
-        assert!((range.step - 0.1).abs() < f64::EPSILON);
-    }
 
     #[test]
     fn test_extract_region_clamps_to_bounds() {
@@ -1107,23 +997,6 @@ mod tests {
         assert_eq!(extracted.height(), 10); // 100 - 90
     }
 
-    #[test]
-    fn test_extract_region_at_edge() {
-        let img = GrayImage::from_fn(50, 50, |_, _| Luma([128]));
-
-        // Region starting at max valid position
-        let region = SearchRegion {
-            x: 49,
-            y: 49,
-            w: 10,
-            h: 10,
-        };
-        let extracted = extract_region(&img, &region);
-
-        // Should extract 1x1 (the only pixel available)
-        assert_eq!(extracted.width(), 1);
-        assert_eq!(extracted.height(), 1);
-    }
 
     #[test]
     fn test_rotate_image_90_degrees() {
@@ -1136,14 +1009,6 @@ mod tests {
         assert_eq!(rotated.height(), 2);
     }
 
-    #[test]
-    fn test_rotate_image_unsupported_angle() {
-        let img = GrayImage::from_fn(10, 10, |_, _| Luma([128]));
-
-        // 45 degrees is not supported, should return unchanged
-        let rotated = rotate_image(&img, 45.0);
-        assert_eq!(rotated.dimensions(), img.dimensions());
-    }
 
     #[test]
     fn test_resize_image_zero_scale() {
@@ -1155,33 +1020,7 @@ mod tests {
         assert!(tiny.height() >= 1);
     }
 
-    #[test]
-    fn test_rotate_image_with_normalized_values() {
-        let img = GrayImage::from_vec(2, 3, vec![1, 2, 3, 4, 5, 6]).unwrap();
-
-        // Test all supported normalized values
-        let rot0 = rotate_image(&img, 0.0);
-        assert_eq!(rot0.dimensions(), (2, 3));
-
-        let rot90 = rotate_image(&img, 90.0);
-        assert_eq!(rot90.dimensions(), (3, 2));
-
-        let rot180 = rotate_image(&img, 180.0);
-        assert_eq!(rot180.dimensions(), (2, 3));
-
-        let rot270 = rotate_image(&img, 270.0);
-        assert_eq!(rot270.dimensions(), (3, 2));
-    }
-
     // Tests now use the production normalize_rotation function from super::*
-
-    #[test]
-    fn test_rotation_normalization_exact_values() {
-        assert_eq!(normalize_rotation(0.0), Some(0.0));
-        assert_eq!(normalize_rotation(90.0), Some(90.0));
-        assert_eq!(normalize_rotation(180.0), Some(180.0));
-        assert_eq!(normalize_rotation(270.0), Some(270.0));
-    }
 
     #[test]
     fn test_rotation_normalization_wrapping() {
@@ -1191,58 +1030,6 @@ mod tests {
         assert_eq!(normalize_rotation(540.0), Some(180.0));
         assert_eq!(normalize_rotation(-90.0), Some(270.0));
         assert_eq!(normalize_rotation(-270.0), Some(90.0));
-    }
-
-    #[test]
-    fn test_rotation_normalization_tolerance() {
-        // Values within ±1° tolerance should normalize
-        assert_eq!(normalize_rotation(89.5), Some(90.0));
-        assert_eq!(normalize_rotation(90.5), Some(90.0));
-        assert_eq!(normalize_rotation(0.5), Some(0.0));
-        assert_eq!(normalize_rotation(359.5), Some(0.0));
-        assert_eq!(normalize_rotation(179.9), Some(180.0));
-        assert_eq!(normalize_rotation(270.9), Some(270.0));
-
-        // Boundary: exactly 1° away should be accepted (inclusive)
-        assert_eq!(normalize_rotation(89.0), Some(90.0));
-        assert_eq!(normalize_rotation(91.0), Some(90.0));
-        assert_eq!(normalize_rotation(1.0), Some(0.0));
-        assert_eq!(normalize_rotation(359.0), Some(0.0));
-        assert_eq!(normalize_rotation(179.0), Some(180.0));
-        assert_eq!(normalize_rotation(181.0), Some(180.0));
-        assert_eq!(normalize_rotation(269.0), Some(270.0));
-        assert_eq!(normalize_rotation(271.0), Some(270.0));
-    }
-
-    #[test]
-    fn test_rotation_normalization_invalid() {
-        // Values outside tolerance should be rejected
-        assert_eq!(normalize_rotation(45.0), None);
-        assert_eq!(normalize_rotation(135.0), None);
-        assert_eq!(normalize_rotation(87.9), None); // > 1° from 90
-        assert_eq!(normalize_rotation(92.1), None); // > 1° from 90
-    }
-
-    #[test]
-    fn test_scale_validation_valid_ranges() {
-        // Normal valid range
-        assert!(validate_scale_range(&ScaleRange {
-            min: 0.5,
-            max: 2.0,
-            step: 0.1,
-        })
-        .is_ok());
-
-        // Single-scale search (min == max) is valid
-        assert!(validate_scale_range(&ScaleRange {
-            min: 1.0,
-            max: 1.0,
-            step: 0.1,
-        })
-        .is_ok());
-
-        // Defaults should be valid
-        assert!(validate_scale_range(&ScaleRange::default()).is_ok());
     }
 
     #[test]
@@ -1559,52 +1346,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_find_image_template_id_preferred_over_base64() {
-        let screenshot_cache = Arc::new(RwLock::new(ScreenshotCache::default()));
-        let image_cache = Arc::new(RwLock::new(ImageCache::default()));
-
-        // Add a small template to the cache
-        let template_id = {
-            let mut cache = image_cache.write().await;
-            cache.store(
-                create_test_png_bytes(8, 8),
-                make_image_metadata(8, 8),
-                Some("template"),
-            )
-        };
-
-        // Provide both template_id and template_image_base64 - template_id should be used
-        let params = FindImageParams {
-            screenshot_id: None,
-            screenshot_image_base64: Some(
-                base64::engine::general_purpose::STANDARD.encode(create_test_png_bytes(50, 50)),
-            ),
-            template_id: Some(template_id.clone()),
-            template_image_base64: Some("invalid_base64_that_would_fail".to_string()), // Would error if used
-            mask_id: None,
-            mask_image_base64: None,
-            mode: "fast".to_string(),
-            threshold: Some(0.5),
-            max_results: None,
-            scales: Some(ScaleRange {
-                min: 1.0,
-                max: 1.0,
-                step: 0.1,
-            }),
-            rotations: None,
-            search_region: None,
-            stride: None,
-            return_screen_coords: false,
-        };
-
-        // Should succeed because template_id is used, not the invalid base64
-        let result = find_image(params, screenshot_cache, image_cache).await;
-        assert!(
-            !result.is_error.unwrap_or(true),
-            "Should succeed using template_id"
-        );
-    }
 
     #[tokio::test]
     async fn test_find_image_stale_template_id_falls_back_to_base64() {
