@@ -135,3 +135,69 @@ Use this when you (the model) look at the *image* from `take_screenshot` and est
 1.  **Thought:** I can read text directly from the screenshot OCR data without using the clipboard.
 2.  **Call:** `take_screenshot(include_ocr=true)`
 3.  **Action:** Read the OCR summary text in the response (lines include clickable coordinates).
+
+---
+
+## 🖼️ Template Matching (Advanced Vision)
+
+For finding non-text UI elements like icons, shapes, or specific visual patterns, use the `find_image` tool with template matching.
+
+### `load_image`
+Load an image from a local file path and cache it for use with `find_image`.
+*   **Inputs:**
+    *   `path` (string, required): Local filesystem path to the image file.
+    *   `id_prefix` (string, optional): Prefix for the generated ID (e.g., "template", "mask").
+    *   `max_width`, `max_height` (integer, optional): Downscale constraints (maintains aspect ratio).
+    *   `as_mask` (boolean, default `false`): Convert to single-channel grayscale mask.
+    *   `return_base64` (boolean, default `false`): Include base64-encoded image data in response.
+*   **Returns (JSON):**
+    ```json
+    {
+      "image_id": "template-0",
+      "width": 64,
+      "height": 64,
+      "channels": 4,
+      "mime": "image/png",
+      "sha256": "abc123..."
+    }
+    ```
+
+### `find_image`
+Find a template image within a screenshot using template matching. Returns precise click coordinates.
+*   **Inputs:**
+    *   `screenshot_id` (string, optional): Screenshot ID from `take_screenshot` (preferred).
+    *   `screenshot_image_base64` (string, optional): Base64-encoded screenshot (if no screenshot_id).
+    *   `template_id` (string, optional): Image ID from `load_image` (preferred).
+    *   `template_image_base64` (string, optional): Base64-encoded template (if no template_id).
+    *   `mask_id` (string, optional): Image ID for the mask (from `load_image`).
+    *   `mask_image_base64` (string, optional): Base64-encoded mask (white=match, black=ignore).
+    *   `mode` (string, default `"fast"`): `"fast"` or `"accurate"`.
+    *   `threshold` (number, optional): Minimum match score 0.0-1.0.
+    *   `max_results` (integer, optional): Maximum matches to return.
+    *   `scales` (object, optional): Scale search range `{min, max, step}`.
+    *   `rotations` (array, optional): Rotations to try in degrees (only 0, 90, 180, 270 supported).
+*   **Returns (JSON):**
+    ```json
+    {
+      "matches": [
+        {
+          "score": 0.95,
+          "bbox": {"x": 100, "y": 200, "w": 64, "h": 64},
+          "center": {"x": 132, "y": 232},
+          "scale": 1.0,
+          "rotation": 0,
+          "screen_x": 166,
+          "screen_y": 216
+        }
+      ]
+    }
+    ```
+
+### Template Matching Example Flow
+```
+1. take_screenshot(app_name="MyApp")      → screenshot_id: "screenshot-0"
+2. load_image(path="/path/to/icon.png")   → image_id: "image-0"
+3. find_image(screenshot_id="screenshot-0", template_id="image-0")
+   → matches: [{screen_x: 150, screen_y: 200, ...}]
+4. click(x=150, y=200)
+```

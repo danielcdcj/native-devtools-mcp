@@ -1,7 +1,7 @@
 use crate::app_protocol::AppProtocolClient;
 use crate::tools::{
-    app_protocol as app_tools, find_image, input as input_tools, navigation, screenshot,
-    screenshot_cache::ScreenshotCache,
+    app_protocol as app_tools, find_image, image_cache::ImageCache, input as input_tools,
+    load_image, navigation, screenshot, screenshot_cache::ScreenshotCache,
 };
 use rmcp::{
     handler::server::ServerHandler,
@@ -27,6 +27,7 @@ fn json_to_object(value: Value) -> rmcp::model::JsonObject {
 pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
     screenshot_cache: Arc<RwLock<ScreenshotCache>>,
+    image_cache: Arc<RwLock<ImageCache>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -40,6 +41,7 @@ impl MacOSDevToolsServer {
         Self {
             app_client: Arc::new(RwLock::new(None)),
             screenshot_cache: Arc::new(RwLock::new(ScreenshotCache::default())),
+            image_cache: Arc::new(RwLock::new(ImageCache::default())),
         }
     }
 
@@ -351,10 +353,9 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_image",
-                "Find a template image within a screenshot using template matching. Returns precise click coordinates for non-text UI elements like icons and shapes. Use screenshot_id from take_screenshot or provide screenshot_image_base64.",
+                "Find a template image within a screenshot using template matching. Returns precise click coordinates for non-text UI elements like icons and shapes. Use screenshot_id from take_screenshot or provide screenshot_image_base64. Use template_id from load_image or provide template_image_base64.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
-                    "required": ["template_image_base64"],
                     "properties": {
                         "screenshot_id": {
                             "type": "string",
@@ -364,9 +365,17 @@ impl MacOSDevToolsServer {
                             "type": "string",
                             "description": "Base64-encoded screenshot image (used if no screenshot_id)"
                         },
+                        "template_id": {
+                            "type": "string",
+                            "description": "Image ID from a previous load_image call (preferred over template_image_base64)"
+                        },
                         "template_image_base64": {
                             "type": "string",
-                            "description": "Base64-encoded template image to find (required)"
+                            "description": "Base64-encoded template image to find (used if no template_id)"
+                        },
+                        "mask_id": {
+                            "type": "string",
+                            "description": "Image ID from a previous load_image call for the mask"
                         },
                         "mask_image_base64": {
                             "type": "string",
@@ -418,6 +427,42 @@ impl MacOSDevToolsServer {
                             "type": "boolean",
                             "description": "Include screen coordinates for clicking (default: true)",
                             "default": true
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "load_image",
+                "Load an image from a local file path and cache it for use with find_image. Returns an image_id that can be passed to find_image as template_id or mask_id. This avoids manually base64-encoding images.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Local filesystem path to the image file"
+                        },
+                        "id_prefix": {
+                            "type": "string",
+                            "description": "Optional prefix for the generated ID (e.g., 'template', 'mask')"
+                        },
+                        "max_width": {
+                            "type": "integer",
+                            "description": "Maximum width to downscale to (maintains aspect ratio)"
+                        },
+                        "max_height": {
+                            "type": "integer",
+                            "description": "Maximum height to downscale to (maintains aspect ratio)"
+                        },
+                        "as_mask": {
+                            "type": "boolean",
+                            "description": "If true, convert to single-channel grayscale mask",
+                            "default": false
+                        },
+                        "return_base64": {
+                            "type": "boolean",
+                            "description": "If true, include base64-encoded image data in response",
+                            "default": false
                         }
                     }
                 }))),
@@ -817,7 +862,17 @@ impl ServerHandler for MacOSDevToolsServer {
             "find_image" => {
                 let params: find_image::FindImageParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                Ok(find_image::find_image(params, self.screenshot_cache.clone()).await)
+                Ok(find_image::find_image(
+                    params,
+                    self.screenshot_cache.clone(),
+                    self.image_cache.clone(),
+                )
+                .await)
+            }
+            "load_image" => {
+                let params: load_image::LoadImageParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(load_image::load_image(params, self.image_cache.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
