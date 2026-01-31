@@ -4,6 +4,13 @@ version = "0.3.2"
 edition = "2021"
 license = "MIT"
 
+[features]
+default = ["find_image_fast"]
+# Enable both SIMD and parallel optimizations for find_image
+find_image_fast = ["find_image_simd", "find_image_parallel"]
+find_image_simd = ["dep:wide"]
+find_image_parallel = ["dep:rayon"]
+
 [dependencies]
 # MCP SDK
 rmcp = { version = "0.1", features = ["server", "transport-io", "macros"] }
@@ -30,6 +37,10 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2.5"
 sha2 = "0.10.9"
+
+# Optional dependencies for find_image optimization
+rayon = { version = "1.10", optional = true }
+wide = { version = "0.7", optional = true }
 
 # macOS frameworks
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -65,3 +76,8 @@ unexpected_cfgs = "allow"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "find_image_bench"
+harness = false
