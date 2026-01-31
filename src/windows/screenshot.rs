@@ -4,13 +4,14 @@ use super::display;
 use super::window::{find_window_by_id, hwnd_from_id, WindowBounds};
 use std::mem;
 use thiserror::Error;
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
-    SRCCOPY,
+    MonitorFromPoint, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HBITMAP, HDC, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
 /// Extract pixel dimensions from PNG data by reading the IHDR chunk.
@@ -57,11 +58,38 @@ pub fn capture_screen() -> Result<Screenshot, ScreenshotError> {
     let png_data = capture_region_to_png(vx, vy, vw, vh)?;
     let (pixel_width, pixel_height) = png_dimensions_or(&png_data, vw as u32, vh as u32);
 
-    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
-    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
+    // Compute effective scale from actual PNG dimensions vs capture bounds.
+    // This is more reliable than querying GetDpiForMonitor because it measures
+    // what BitBlt actually captured rather than what the OS reports.
+    // If PNG pixels match capture bounds, scale is 1.0 (logical capture).
+    let effective_scale = if vw > 0 && vh > 0 {
+        // Use width for scale calculation (should be same as height ratio)
+        let scale = pixel_width as f64 / vw as f64;
+        // Clamp to reasonable range and round to avoid floating point noise
+        if (scale - 1.0).abs() < 0.01 {
+            1.0
+        } else {
+            scale
+        }
+    } else {
+        1.0
+    };
+
+    // Debug logging
+    if std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok() {
+        let dpi_scale = get_scale_factor_at_point(vx, vy);
+        eprintln!(
+            "[DEBUG capture_screen] logical_bounds=({}, {}, {}x{}), png_pixels={}x{}, dpi_scale={}, effective_scale={}",
+            vx, vy, vw, vh,
+            pixel_width, pixel_height,
+            dpi_scale,
+            effective_scale
+        );
+    }
+
     Ok(Screenshot {
         png_data,
-        scale_factor: 1.0,
+        scale_factor: effective_scale,
         origin_x: vx as f64,
         origin_y: vy as f64,
         pixel_width,
@@ -85,12 +113,21 @@ pub fn capture_region(
     let png_data = capture_region_to_png(x_int, y_int, w_int, h_int)?;
     let (pixel_width, pixel_height) = png_dimensions_or(&png_data, w_int as u32, h_int as u32);
 
-    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
-    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
-    // Use integer-aligned origin to match the captured region exactly.
+    // Compute effective scale from actual PNG dimensions vs capture bounds.
+    let effective_scale = if w_int > 0 && h_int > 0 {
+        let scale = pixel_width as f64 / w_int as f64;
+        if (scale - 1.0).abs() < 0.01 {
+            1.0
+        } else {
+            scale
+        }
+    } else {
+        1.0
+    };
+
     Ok(Screenshot {
         png_data,
-        scale_factor: 1.0,
+        scale_factor: effective_scale,
         origin_x: f64::from(x_int),
         origin_y: f64::from(y_int),
         pixel_width,
@@ -119,12 +156,34 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
     let png_data = capture_region_to_png(bounds.x as i32, bounds.y as i32, width, height)?;
     let (pixel_width, pixel_height) = png_dimensions_or(&png_data, width as u32, height as u32);
 
-    // BitBlt with Per-Monitor DPI V2 awareness captures in logical coordinates,
-    // so scale_factor should be 1.0 (no conversion needed for click coordinates).
-    // Also use the same bounds for origin as used for capture to ensure consistency.
+    // Compute effective scale from actual PNG dimensions vs capture bounds.
+    let effective_scale = if width > 0 && height > 0 {
+        let scale = pixel_width as f64 / width as f64;
+        if (scale - 1.0).abs() < 0.01 {
+            1.0
+        } else {
+            scale
+        }
+    } else {
+        1.0
+    };
+
+    // Debug logging
+    if std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok() {
+        let dpi_scale = get_scale_factor_at_point(bounds.x as i32, bounds.y as i32);
+        eprintln!(
+            "[DEBUG capture_window] window_id={}, bounds=({}, {}, {}x{}), png_pixels={}x{}, dpi_scale={}, effective_scale={}",
+            window_id,
+            bounds.x, bounds.y, width, height,
+            pixel_width, pixel_height,
+            dpi_scale,
+            effective_scale
+        );
+    }
+
     Ok(Screenshot {
         png_data,
-        scale_factor: 1.0,
+        scale_factor: effective_scale,
         origin_x: bounds.x,
         origin_y: bounds.y,
         pixel_width,
@@ -156,6 +215,21 @@ fn get_window_bounds_for_capture(hwnd: HWND) -> WindowBounds {
         y: rect.top as f64,
         width: (rect.right - rect.left) as f64,
         height: (rect.bottom - rect.top) as f64,
+    }
+}
+
+/// Get the DPI scale factor for a point on screen.
+/// Returns the scale factor (e.g., 1.5 for 150% DPI) of the monitor containing the point.
+fn get_scale_factor_at_point(x: i32, y: i32) -> f64 {
+    unsafe {
+        let point = POINT { x, y };
+        let hmonitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+
+        let mut dpi_x: u32 = 96;
+        let mut dpi_y: u32 = 96;
+        let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+
+        dpi_x as f64 / 96.0
     }
 }
 
