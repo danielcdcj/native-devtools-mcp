@@ -1,6 +1,6 @@
 {
   "name": "native-devtools-mcp",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MCP server for computer-use / desktop automation of native apps (screenshots, OCR, input)",
   "license": "MIT",
   "repository": {
@@ -39,8 +39,8 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.3.2",
-    "@sh3ll3x3c/native-devtools-mcp-win32-x64": "0.3.2"
+    "@sh3ll3x3c/native-devtools-mcp-darwin-arm64": "0.3.3",
+    "@sh3ll3x3c/native-devtools-mcp-win32-x64": "0.3.3"
   },
   "engines": {
     "node": ">=18"
