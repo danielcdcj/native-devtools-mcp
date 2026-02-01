@@ -175,7 +175,7 @@ Find a template image within a screenshot using template matching. Returns preci
     *   `template_image_base64` (string, optional): Base64-encoded template (if no template_id).
     *   `mask_id` (string, optional): Image ID for the mask (from `load_image`).
     *   `mask_image_base64` (string, optional): Base64-encoded mask (white=match, black=ignore).
-    *   `mode` (string, default `"fast"`): `"fast"` or `"accurate"`.
+    *   `mode` (string, default `"fast"`): `"fast"` or `"accurate"`. Fast uses downscaling/early-exit for speed; accurate uses full-res, wider scales, smaller stride.
     *   `threshold` (number, optional): Minimum match score 0.0-1.0.
     *   `max_results` (integer, optional): Maximum matches to return.
     *   `scales` (object, optional): Scale search range `{min, max, step}`.

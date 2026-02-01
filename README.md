@@ -30,6 +30,7 @@ MCP, Model Context Protocol, computer use, desktop automation, UI automation, RP
 - **👀 Computer Vision:** Capture screenshots of screens, windows, or specific regions. Includes built-in OCR (text recognition) to "read" the screen.
 - **🖱️ Input Simulation:** Click, drag, scroll, and type text naturally. Supports global coordinates and window-relative actions.
 - **🪟 Window Management:** List open windows, find applications, and bring them to focus.
+- **🧩 Template Matching:** Find non-text UI elements (icons, shapes) using `load_image` + `find_image`, returning precise click coordinates.
 - **🔒 Local & Private:** 100% local execution. No screenshots or data are ever sent to external servers.
 - **🔌 Dual-Mode Interaction:**
     1.  **Visual/Native:** Works with *any* app via screenshots & coordinates (Universal).
@@ -45,6 +46,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).
 2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
 3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately.
+4.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
 
 ## 📦 Installation (macOS + Windows)
 
@@ -143,14 +145,30 @@ We provide two ways for agents to interact, allowing them to choose the best too
 ### 1. The "Visual" Approach (Universal)
 **Best for:** 99% of apps (Electron, Qt, Games, Browsers).
 *   **How it works:** The agent takes a screenshot, analyzes it visually (or uses OCR), and clicks at coordinates.
-*   **Tools:** `take_screenshot`, `find_text`, `click`, `type_text`.
-*   **Example:** "Click the button that looks like a gear icon."
+*   **Tools:** `take_screenshot`, `find_text`, `click`, `type_text` (plus `load_image` / `find_image` for icons and shapes).
+*   **Example:** "Click the button that looks like a gear icon." → use `find_image` with a gear template.
 
 ### 2. The "Structural" Approach (AppDebugKit)
 **Best for:** Apps specifically instrumented with our AppDebugKit library (mostly for developers testing their own apps).
 *   **How it works:** The agent connects to a debug port and queries the UI tree (like HTML DOM).
 *   **Tools:** `app_connect`, `app_query`, `app_click`.
 *   **Example:** `app_click(element_id="submit-button")`.
+
+## 🧩 Template Matching (find_image)
+
+Use `find_image` when the target is **not text** (icons, toggles, custom controls) and OCR or `find_text` cannot identify it.
+
+**Typical flow:**
+1. `take_screenshot(app_name="MyApp")` → `screenshot_id`
+2. `load_image(path="/path/to/icon.png")` → `template_id`
+3. `find_image(screenshot_id="...", template_id="...")` → `matches` with `screen_x/screen_y`
+4. `click(x=..., y=...)`
+
+**Fast vs Accurate:**
+- **fast** (default): uses downscaling and early-exit for speed.
+- **accurate**: uses full-resolution, wider scale search, and smaller stride for thorough matching.
+
+Optional inputs like `mask_id`, `search_region`, `scales`, and `rotations` can improve precision and performance.
 
 ## 🏗️ Architecture
 
