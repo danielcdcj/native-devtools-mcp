@@ -234,3 +234,118 @@ fn format_ocr_results(matches: &[platform::TextMatch]) -> String {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::ocr::{TextBounds, TextMatch};
+
+    fn make_text_match(text: &str, x: f64, y: f64, confidence: f64) -> TextMatch {
+        TextMatch {
+            text: text.to_string(),
+            x,
+            y,
+            confidence,
+            bounds: TextBounds {
+                x,
+                y,
+                width: 50.0,
+                height: 20.0,
+            },
+        }
+    }
+
+    // MARK: - apply_ocr_offset tests
+
+    #[test]
+    fn test_apply_ocr_offset_adds_offsets() {
+        let mut matches = vec![
+            make_text_match("Hello", 100.0, 200.0, 0.9),
+            make_text_match("World", 300.0, 400.0, 0.8),
+        ];
+
+        apply_ocr_offset(&mut matches, 50.0, 75.0);
+
+        assert_eq!(matches[0].x, 150.0);
+        assert_eq!(matches[0].y, 275.0);
+        assert_eq!(matches[0].bounds.x, 150.0);
+        assert_eq!(matches[0].bounds.y, 275.0);
+
+        assert_eq!(matches[1].x, 350.0);
+        assert_eq!(matches[1].y, 475.0);
+    }
+
+    #[test]
+    fn test_apply_ocr_offset_skips_zero_offset() {
+        let mut matches = vec![make_text_match("Test", 100.0, 200.0, 0.9)];
+
+        apply_ocr_offset(&mut matches, 0.0, 0.0);
+
+        // Values should be unchanged
+        assert_eq!(matches[0].x, 100.0);
+        assert_eq!(matches[0].y, 200.0);
+    }
+
+    #[test]
+    fn test_apply_ocr_offset_handles_negative_offsets() {
+        // Multi-display setups can have negative coordinates
+        let mut matches = vec![make_text_match("Negative", 100.0, 100.0, 0.9)];
+
+        apply_ocr_offset(&mut matches, -200.0, -150.0);
+
+        assert_eq!(matches[0].x, -100.0);
+        assert_eq!(matches[0].y, -50.0);
+    }
+
+    #[test]
+    fn test_apply_ocr_offset_empty_matches() {
+        let mut matches: Vec<TextMatch> = vec![];
+        apply_ocr_offset(&mut matches, 100.0, 100.0);
+        assert!(matches.is_empty());
+    }
+
+    // MARK: - format_ocr_results tests
+
+    #[test]
+    fn test_format_ocr_results_filters_low_confidence() {
+        let matches = vec![
+            make_text_match("HighConf", 100.0, 200.0, 0.9),
+            make_text_match("LowConf", 300.0, 400.0, 0.3),
+            make_text_match("Borderline", 500.0, 600.0, 0.5), // Exactly 0.5 should be excluded
+        ];
+
+        let result = format_ocr_results(&matches);
+
+        assert!(result.contains("HighConf"));
+        assert!(!result.contains("LowConf"));
+        assert!(!result.contains("Borderline"));
+    }
+
+    #[test]
+    fn test_format_ocr_results_includes_header() {
+        let matches = vec![make_text_match("Test", 100.0, 200.0, 0.9)];
+        let result = format_ocr_results(&matches);
+
+        assert!(result.starts_with("## OCR Text Detected (click coordinates)"));
+    }
+
+    #[test]
+    fn test_format_ocr_results_formats_coordinates() {
+        let matches = vec![make_text_match("Button", 123.7, 456.2, 0.95)];
+        let result = format_ocr_results(&matches);
+
+        // Coordinates should be rounded to integers in output
+        assert!(result.contains("\"Button\" at (124, 456)"));
+        assert!(result.contains("bounds: {x: 124, y: 456, w: 50, h: 20}"));
+    }
+
+    #[test]
+    fn test_format_ocr_results_empty_matches() {
+        let matches: Vec<TextMatch> = vec![];
+        let result = format_ocr_results(&matches);
+
+        // Should still have header but no items
+        assert!(result.contains("## OCR Text Detected"));
+        assert!(!result.contains("- \""));
+    }
+}

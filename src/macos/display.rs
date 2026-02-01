@@ -127,3 +127,84 @@ pub fn backing_scale_for_point(x: f64, y: f64) -> f64 {
         .map(|d| d.backing_scale_factor)
         .unwrap_or(2.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MARK: - window_to_screen tests
+
+    #[test]
+    fn test_window_to_screen_adds_offset() {
+        let bounds = WindowBounds { x: 100.0, y: 200.0 };
+        let (sx, sy) = window_to_screen(&bounds, 50.0, 75.0);
+
+        assert_eq!(sx, 150.0);
+        assert_eq!(sy, 275.0);
+    }
+
+    #[test]
+    fn test_window_to_screen_zero_offset() {
+        let bounds = WindowBounds { x: 0.0, y: 0.0 };
+        let (sx, sy) = window_to_screen(&bounds, 100.0, 200.0);
+
+        assert_eq!(sx, 100.0);
+        assert_eq!(sy, 200.0);
+    }
+
+    #[test]
+    fn test_window_to_screen_negative_bounds() {
+        // Multi-display setups can have negative window positions
+        let bounds = WindowBounds {
+            x: -1920.0,
+            y: 0.0,
+        };
+        let (sx, sy) = window_to_screen(&bounds, 100.0, 100.0);
+
+        assert_eq!(sx, -1820.0);
+        assert_eq!(sy, 100.0);
+    }
+
+    // MARK: - screenshot_to_screen tests
+
+    #[test]
+    fn test_screenshot_to_screen_retina_scale() {
+        // Retina display: 2x scale means pixel coords are halved
+        let bounds = WindowBounds { x: 100.0, y: 200.0 };
+        let (sx, sy) = screenshot_to_screen(&bounds, 2.0, 200.0, 100.0);
+
+        // 200 pixels / 2.0 scale = 100 points, + 100 origin = 200
+        assert_eq!(sx, 200.0);
+        // 100 pixels / 2.0 scale = 50 points, + 200 origin = 250
+        assert_eq!(sy, 250.0);
+    }
+
+    #[test]
+    fn test_screenshot_to_screen_non_retina() {
+        // Non-retina: 1x scale means pixel coords equal point coords
+        let bounds = WindowBounds { x: 50.0, y: 50.0 };
+        let (sx, sy) = screenshot_to_screen(&bounds, 1.0, 100.0, 100.0);
+
+        assert_eq!(sx, 150.0);
+        assert_eq!(sy, 150.0);
+    }
+
+    #[test]
+    fn test_screenshot_to_screen_fractional_scale() {
+        // Some displays have 1.5x or other fractional scales
+        let bounds = WindowBounds { x: 0.0, y: 0.0 };
+        let (sx, sy) = screenshot_to_screen(&bounds, 1.5, 150.0, 150.0);
+
+        assert_eq!(sx, 100.0);
+        assert_eq!(sy, 100.0);
+    }
+
+    #[test]
+    fn test_screenshot_to_screen_origin_at_zero() {
+        let bounds = WindowBounds { x: 0.0, y: 0.0 };
+        let (sx, sy) = screenshot_to_screen(&bounds, 2.0, 0.0, 0.0);
+
+        assert_eq!(sx, 0.0);
+        assert_eq!(sy, 0.0);
+    }
+}

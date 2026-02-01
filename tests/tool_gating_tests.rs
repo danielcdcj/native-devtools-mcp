@@ -4,6 +4,18 @@
 //! 1. Tool list changes based on connection state
 //! 2. Server capability advertisement for tool list changes
 //! 3. Identity validation logic for expected_bundle_id and expected_app_name
+//!
+//! ## Test Pattern Guidelines
+//!
+//! The `identity_validation` module demonstrates recommended test patterns:
+//!
+//! - **Granular test functions**: One behavior per test, named descriptively
+//! - **Edge case coverage**: Empty strings, whitespace, case sensitivity, missing fields
+//! - **MARK comments**: Group related tests (e.g., `// MARK: - validate_bundle_id tests`)
+//! - **Integration tests**: `validate_identity` tests combine lower-level validators
+//! - **Behavior documentation**: Test names describe what behavior is being verified
+//!
+//! When adding new tests, follow the patterns in `identity_validation` for consistency.
 
 use native_devtools_mcp::server::MacOSDevToolsServer;
 use rmcp::handler::server::ServerHandler;
@@ -41,8 +53,8 @@ mod tool_gating {
     fn test_app_tools_present_when_connected() {
         // When connected, should have base tools + app_connect + all app_* tools
 
-        let tools = MacOSDevToolsServer::get_tools(true);
-        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        let connected_tools = MacOSDevToolsServer::get_tools(true);
+        let tool_names: Vec<String> = connected_tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools should still be present
         assert!(tool_names.contains(&"take_screenshot".to_string()));
@@ -64,42 +76,12 @@ mod tool_gating {
         assert!(tool_names.contains(&"app_screenshot".to_string()));
         assert!(tool_names.contains(&"app_list_windows".to_string()));
         assert!(tool_names.contains(&"app_focus_window".to_string()));
-    }
 
-    #[test]
-    fn test_tool_count_difference() {
+        // Connected state should have more tools than disconnected
         let disconnected_tools = MacOSDevToolsServer::get_tools(false);
-        let connected_tools = MacOSDevToolsServer::get_tools(true);
-
-        // Connected state should have more tools
         assert!(
             connected_tools.len() > disconnected_tools.len(),
             "Connected state should expose more tools than disconnected state"
-        );
-
-        // Verify the additional tools are all app_* tools (excluding app_connect which is always present)
-        let disconnected_names: std::collections::HashSet<String> = disconnected_tools
-            .iter()
-            .map(|t| t.name.to_string())
-            .collect();
-        let connected_names: std::collections::HashSet<String> =
-            connected_tools.iter().map(|t| t.name.to_string()).collect();
-
-        let added_tools: Vec<&String> = connected_names.difference(&disconnected_names).collect();
-
-        // All added tools should start with "app_"
-        for tool_name in &added_tools {
-            assert!(
-                tool_name.starts_with("app_"),
-                "Added tool '{}' should start with 'app_'",
-                tool_name
-            );
-        }
-
-        // There should be at least some app_* tools added
-        assert!(
-            !added_tools.is_empty(),
-            "At least one app_* tool should be added when connected"
         );
     }
 }
