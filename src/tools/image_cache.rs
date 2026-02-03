@@ -233,7 +233,6 @@ mod tests {
         assert!(cache.is_empty());
     }
 
-
     #[test]
     fn test_peek_does_not_update_lru() {
         let mut cache = ImageCache::new(3);
@@ -252,5 +251,4 @@ mod tests {
         assert!(cache.contains(&id2));
         assert!(cache.contains(&id3));
     }
-
 }

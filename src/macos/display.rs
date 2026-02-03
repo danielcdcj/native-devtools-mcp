@@ -155,10 +155,7 @@ mod tests {
     #[test]
     fn test_window_to_screen_negative_bounds() {
         // Multi-display setups can have negative window positions
-        let bounds = WindowBounds {
-            x: -1920.0,
-            y: 0.0,
-        };
+        let bounds = WindowBounds { x: -1920.0, y: 0.0 };
         let (sx, sy) = window_to_screen(&bounds, 100.0, 100.0);
 
         assert_eq!(sx, -1820.0);

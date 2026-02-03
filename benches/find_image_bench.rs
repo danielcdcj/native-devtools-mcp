@@ -48,11 +48,7 @@ fn bench_match_template_ncc(c: &mut Criterion) {
     ];
 
     // Template sizes to test
-    let template_sizes: Vec<(u32, u32)> = vec![
-        (24, 24),
-        (32, 32),
-        (64, 64),
-    ];
+    let template_sizes: Vec<(u32, u32)> = vec![(24, 24), (32, 32), (64, 64)];
 
     // Strides to test (2 = fast mode default)
     let stride = 2u32;
@@ -79,7 +75,9 @@ fn bench_match_template_ncc(c: &mut Criterion) {
 
             group.bench_with_input(bench_id, &(&screen, &template), |b, (screen, template)| {
                 b.iter(|| {
-                    black_box(match_template_ncc(screen, template, None, threshold, stride))
+                    black_box(match_template_ncc(
+                        screen, template, None, threshold, stride,
+                    ))
                 });
             });
         }
@@ -92,12 +90,7 @@ fn bench_match_template_ncc(c: &mut Criterion) {
 fn bench_template_stats(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_template_stats");
 
-    let template_sizes: Vec<(u32, u32)> = vec![
-        (24, 24),
-        (32, 32),
-        (64, 64),
-        (128, 128),
-    ];
+    let template_sizes: Vec<(u32, u32)> = vec![(24, 24), (32, 32), (64, 64), (128, 128)];
 
     for (tw, th) in template_sizes {
         let template = build_template(tw, th);
@@ -123,7 +116,11 @@ fn bench_stride_comparison(c: &mut Criterion) {
         let bench_id = BenchmarkId::new("1920x1080_32x32", format!("stride{}", stride));
 
         group.bench_with_input(bench_id, &stride, |b, &stride| {
-            b.iter(|| black_box(match_template_ncc(&screen, &template, None, threshold, stride)));
+            b.iter(|| {
+                black_box(match_template_ncc(
+                    &screen, &template, None, threshold, stride,
+                ))
+            });
         });
     }
 

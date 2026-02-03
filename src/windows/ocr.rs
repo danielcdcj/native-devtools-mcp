@@ -53,7 +53,10 @@ fn run_winrt_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> 
 
     if debug {
         if let (Ok(w), Ok(h)) = (bitmap.PixelWidth(), bitmap.PixelHeight()) {
-            eprintln!("[DEBUG run_winrt_ocr] bitmap_size={}x{}, scale_param={}", w, h, scale);
+            eprintln!(
+                "[DEBUG run_winrt_ocr] bitmap_size={}x{}, scale_param={}",
+                w, h, scale
+            );
         }
     }
 
@@ -188,7 +191,10 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
 
     // Debug: log first match before offset
     if std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok() {
-        if let Some(first) = matches.iter().find(|m| m.text.to_lowercase().contains(&search.to_lowercase())) {
+        if let Some(first) = matches
+            .iter()
+            .find(|m| m.text.to_lowercase().contains(&search.to_lowercase()))
+        {
             eprintln!(
                 "[DEBUG find_text] search='{}', screenshot_origin=({}, {}), scale_factor={}, first_match_before_offset=({}, {})",
                 search, screenshot.origin_x, screenshot.origin_y, screenshot.scale_factor, first.x, first.y

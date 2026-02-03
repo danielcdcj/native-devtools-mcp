@@ -384,7 +384,10 @@ pub async fn find_image(
                 Some(cached.png_data.clone())
             } else if params.template_image_base64.is_some() {
                 // ID not found but base64 fallback available - warn and continue
-                let msg = format!("Template ID '{}' not found in cache, using base64 fallback", id);
+                let msg = format!(
+                    "Template ID '{}' not found in cache, using base64 fallback",
+                    id
+                );
                 warning = Some(warning.map_or(msg.clone(), |w| format!("{}; {}", w, msg)));
                 None
             } else {
@@ -710,7 +713,10 @@ fn run_matching(input: MatchingInput) -> MatchingResult {
 
     // Extract search region if specified (use Cow to avoid cloning large screenshot)
     let (search_img_region, region_offset) = if let Some(region) = &input.search_region {
-        (Cow::Owned(extract_region(&screenshot_gray, region)), (region.x, region.y))
+        (
+            Cow::Owned(extract_region(&screenshot_gray, region)),
+            (region.x, region.y),
+        )
     } else {
         (Cow::Borrowed(&screenshot_gray), (0, 0))
     };
@@ -1265,7 +1271,6 @@ mod tests {
     use super::*;
     use image::Luma;
 
-
     #[test]
     fn test_nms() {
         let matches = vec![
@@ -1362,7 +1367,6 @@ mod tests {
         assert_eq!(best_y, 40, "Y should be 40, got {}", best_y);
     }
 
-
     #[test]
     fn test_ncc_no_match_for_different_pattern() {
         // Create image with a horizontal gradient
@@ -1383,7 +1387,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_extract_region_clamps_to_bounds() {
         let img = GrayImage::from_fn(100, 100, |x, y| Luma([(x + y) as u8]));
@@ -1402,7 +1405,6 @@ mod tests {
         assert_eq!(extracted.height(), 10); // 100 - 90
     }
 
-
     #[test]
     fn test_rotate_image_90_degrees() {
         // Create a simple 2x3 image
@@ -1413,7 +1415,6 @@ mod tests {
         assert_eq!(rotated.width(), 3);
         assert_eq!(rotated.height(), 2);
     }
-
 
     #[test]
     fn test_resize_image_zero_scale() {
@@ -1751,7 +1752,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn test_find_image_stale_template_id_falls_back_to_base64() {
         let screenshot_cache = Arc::new(RwLock::new(ScreenshotCache::default()));
@@ -1795,9 +1795,16 @@ mod tests {
             &result.content[0].raw
         {
             let response: FindImageResponse = serde_json::from_str(text).unwrap();
-            assert!(response.warning.is_some(), "Should have warning about stale ID");
             assert!(
-                response.warning.as_ref().unwrap().contains("not found in cache"),
+                response.warning.is_some(),
+                "Should have warning about stale ID"
+            );
+            assert!(
+                response
+                    .warning
+                    .as_ref()
+                    .unwrap()
+                    .contains("not found in cache"),
                 "Warning should mention cache miss"
             );
         }
@@ -1848,7 +1855,10 @@ mod tests {
             &result.content[0].raw
         {
             let response: FindImageResponse = serde_json::from_str(text).unwrap();
-            assert!(response.warning.is_some(), "Should have warning about stale mask ID");
+            assert!(
+                response.warning.is_some(),
+                "Should have warning about stale mask ID"
+            );
             assert!(
                 response.warning.as_ref().unwrap().contains("Mask ID"),
                 "Warning should mention mask"
@@ -1890,7 +1900,10 @@ mod tests {
         };
 
         let result = find_image(params, screenshot_cache, image_cache).await;
-        assert!(result.is_error.unwrap_or(false), "Should error on mask dimension mismatch");
+        assert!(
+            result.is_error.unwrap_or(false),
+            "Should error on mask dimension mismatch"
+        );
 
         // Verify error message mentions dimension mismatch
         if let rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text }) =
@@ -1912,7 +1925,10 @@ mod tests {
         let img = GrayImage::new(800, 600);
         let template = GrayImage::new(32, 32);
         let factor = compute_downscale_factor(&img, &template);
-        assert!((factor - 1.0).abs() < f64::EPSILON, "Small images should not be downscaled");
+        assert!(
+            (factor - 1.0).abs() < f64::EPSILON,
+            "Small images should not be downscaled"
+        );
     }
 
     #[test]
@@ -1924,7 +1940,11 @@ mod tests {
         // 1200 / 1920 = 0.625
         assert!(factor < 1.0, "Large images should be downscaled");
         assert!(factor >= 0.5, "Downscale should not go below 0.5");
-        assert!((factor - 0.625).abs() < 0.01, "Expected ~0.625, got {}", factor);
+        assert!(
+            (factor - 0.625).abs() < 0.01,
+            "Expected ~0.625, got {}",
+            factor
+        );
     }
 
     #[test]
@@ -1934,7 +1954,10 @@ mod tests {
         let template = GrayImage::new(32, 32);
         let factor = compute_downscale_factor(&img, &template);
         // 1200 / 3840 = 0.3125, but capped at 0.5
-        assert!((factor - 0.5).abs() < f64::EPSILON, "Very large images should cap at 0.5");
+        assert!(
+            (factor - 0.5).abs() < f64::EPSILON,
+            "Very large images should cap at 0.5"
+        );
     }
 
     #[test]
@@ -2007,7 +2030,10 @@ mod tests {
             false,
         );
 
-        assert!(result.is_none(), "Should return None when template exceeds image");
+        assert!(
+            result.is_none(),
+            "Should return None when template exceeds image"
+        );
     }
 
     #[test]
@@ -2054,7 +2080,10 @@ mod tests {
         assert!(!matches.is_empty(), "Should have at least one match");
 
         // Best match should be near (40, 50)
-        let best = matches.iter().max_by(|a, b| a.score.partial_cmp(&b.score).unwrap()).unwrap();
+        let best = matches
+            .iter()
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+            .unwrap();
         assert!(
             (best.bbox.x as i32 - 40).abs() <= 2,
             "X should be near 40, got {}",

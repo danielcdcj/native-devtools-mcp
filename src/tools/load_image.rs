@@ -304,7 +304,6 @@ mod tests {
         file
     }
 
-
     #[test]
     fn test_apply_max_dimensions_both_constraints() {
         let img = DynamicImage::new_rgb8(400, 200);
@@ -407,7 +406,6 @@ mod tests {
         assert_eq!(result.metadata.width, 100);
         assert_eq!(result.metadata.height, 50);
     }
-
 
     #[tokio::test]
     async fn test_load_image_file_not_found() {

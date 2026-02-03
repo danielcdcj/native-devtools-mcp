@@ -15,7 +15,16 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 
 [Features](#-features) • [Installation](#-installation) • [For AI Agents](#-for-ai-agents-llms) • [Permissions](#-required-permissions-macos)
 
-![Demo](demo.gif)
+<table>
+<tr>
+<td align="center"><strong>macOS</strong></td>
+<td align="center"><strong>Windows</strong></td>
+</tr>
+<tr>
+<td><img src="demo.gif" width="450" alt="macOS Demo"></td>
+<td><img src="windows-demo-1.gif" width="450" alt="Windows Demo"></td>
+</tr>
+</table>
 
 </div>
 
