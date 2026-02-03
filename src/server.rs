@@ -389,7 +389,7 @@ impl MacOSDevToolsServer {
                         },
                         "threshold": {
                             "type": "number",
-                            "description": "Minimum match score 0.0-1.0 (default: 0.88 fast, 0.85 accurate)"
+                            "description": "Minimum match score 0.0-1.0 (default: 0.75)"
                         },
                         "max_results": {
                             "type": "integer",

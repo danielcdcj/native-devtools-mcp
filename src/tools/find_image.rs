@@ -186,7 +186,7 @@ struct ModeDefaults {
 impl ModeDefaults {
     fn fast() -> Self {
         Self {
-            threshold: 0.88,
+            threshold: 0.75,
             max_results: 3,
             scales: ScaleRange {
                 min: 0.8,
@@ -199,7 +199,7 @@ impl ModeDefaults {
 
     fn accurate() -> Self {
         Self {
-            threshold: 0.85,
+            threshold: 0.75,
             max_results: 5,
             scales: ScaleRange {
                 min: 0.5,
