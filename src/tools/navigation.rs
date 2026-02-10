@@ -31,10 +31,24 @@ pub fn list_windows(params: ListWindowsParams) -> CallToolResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ListAppsParams {}
+pub struct ListAppsParams {
+    /// Filter by application name (case-insensitive substring match)
+    pub app_name: Option<String>,
+    /// Only return user-facing apps (excludes system agents, helpers, and daemons)
+    pub user_apps_only: Option<bool>,
+}
 
-pub fn list_apps(_params: ListAppsParams) -> CallToolResult {
-    let apps = platform::list_apps();
+pub fn list_apps(params: ListAppsParams) -> CallToolResult {
+    let mut apps = platform::list_apps();
+
+    if let Some(ref name) = params.app_name {
+        let needle = name.to_lowercase();
+        apps.retain(|app| app.name.to_lowercase().contains(&needle));
+    }
+
+    if params.user_apps_only.unwrap_or(false) {
+        apps.retain(|app| app.is_user_app);
+    }
 
     match serde_json::to_string_pretty(&apps) {
         Ok(json) => CallToolResult::success(vec![Content::text(json)]),

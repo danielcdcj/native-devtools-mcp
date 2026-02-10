@@ -24,6 +24,10 @@ pub struct AppInfo {
     pub pid: i32,
     pub is_active: bool,
     pub is_hidden: bool,
+    /// Whether this is a regular user-facing app. On Windows, all enumerated
+    /// apps have visible windows, so this is always true.
+    #[serde(skip)]
+    pub is_user_app: bool,
 }
 
 struct AppEnumData {
@@ -106,6 +110,7 @@ unsafe extern "system" fn app_enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL 
                 pid: pid as i32,
                 is_active,
                 is_hidden: false, // Windows doesn't have a hidden concept like macOS
+                is_user_app: true, // All enumerated apps have visible windows
             },
         );
     }

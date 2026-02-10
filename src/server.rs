@@ -127,7 +127,16 @@ impl MacOSDevToolsServer {
                 "List all running applications with their names, bundle IDs, and PIDs.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Filter by application name (case-insensitive substring match)"
+                        },
+                        "user_apps_only": {
+                            "type": "boolean",
+                            "description": "Only return user-facing apps (excludes system agents, helpers, and daemons)"
+                        }
+                    }
                 }))),
             ),
             Tool::new(

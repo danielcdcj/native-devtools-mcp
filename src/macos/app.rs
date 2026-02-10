@@ -9,6 +9,10 @@ pub struct AppInfo {
     pub pid: i32,
     pub is_active: bool,
     pub is_hidden: bool,
+    /// Whether this is a regular user-facing app (appears in Dock).
+    /// Background agents and accessory apps are not user-facing.
+    #[serde(skip)]
+    pub is_user_app: bool,
 }
 
 /// List all running applications
@@ -48,6 +52,11 @@ pub fn list_apps() -> Vec<AppInfo> {
             // Get hidden state
             let is_hidden: bool = msg_send![app, isHidden];
 
+            // Get activation policy to distinguish user-facing apps from background agents
+            // NSApplicationActivationPolicyRegular = 0
+            let activation_policy: i64 = msg_send![app, activationPolicy];
+            let is_user_app = activation_policy == 0;
+
             // Filter to user-facing apps (those with a name)
             if !name.is_empty() {
                 apps.push(AppInfo {
@@ -56,6 +65,7 @@ pub fn list_apps() -> Vec<AppInfo> {
                     pid,
                     is_active,
                     is_hidden,
+                    is_user_app,
                 });
             }
         }
