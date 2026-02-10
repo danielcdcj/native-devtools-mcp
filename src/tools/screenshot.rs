@@ -223,7 +223,7 @@ fn apply_ocr_offset(matches: &mut [platform::TextMatch], offset_x: f64, offset_y
 
 /// Format OCR results as a text summary with clickable coordinates and bounds.
 fn format_ocr_results(matches: &[platform::TextMatch]) -> String {
-    let mut result = String::from("## OCR Text Detected (click coordinates)\n\n");
+    let mut result = String::from("## OCR Text Detected\nCoordinates below are screen coordinates — use directly with the click tool. No conversion with screenshot_origin/screenshot_scale needed.\n\n");
 
     for m in matches.iter().filter(|m| m.confidence > 0.5) {
         result.push_str(&format!(
@@ -326,7 +326,7 @@ mod tests {
         let matches = vec![make_text_match("Test", 100.0, 200.0, 0.9)];
         let result = format_ocr_results(&matches);
 
-        assert!(result.starts_with("## OCR Text Detected (click coordinates)"));
+        assert!(result.starts_with("## OCR Text Detected\nCoordinates below are screen coordinates"));
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
         let result = format_ocr_results(&matches);
 
         // Should still have header but no items
-        assert!(result.contains("## OCR Text Detected"));
+        assert!(result.contains("## OCR Text Detected\nCoordinates below are screen coordinates"));
         assert!(!result.contains("- \""));
     }
 }
