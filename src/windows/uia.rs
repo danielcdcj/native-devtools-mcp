@@ -5,7 +5,9 @@
 //! (buttons, labels, menus, etc.).
 
 use super::ocr::{TextBounds, TextMatch};
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, TreeScope, TreeScope_Descendants, TreeScope_Element,
 };
@@ -23,9 +25,8 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
         // Initialize COM on this thread (harmless if already initialized)
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
-        let automation: IUIAutomation =
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
-                .map_err(|e| format!("Failed to create IUIAutomation: {}", e))?;
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
+            .map_err(|e| format!("Failed to create IUIAutomation: {}", e))?;
 
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
@@ -54,7 +55,9 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             .FindAll(scope, &condition)
             .map_err(|e| format!("FindAll failed: {}", e))?;
 
-        let count = elements.Length().map_err(|e| format!("Failed to get element count: {}", e))?;
+        let count = elements
+            .Length()
+            .map_err(|e| format!("Failed to get element count: {}", e))?;
 
         let search_lower = search.to_lowercase();
         let mut matches = Vec::new();
