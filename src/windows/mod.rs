@@ -8,6 +8,7 @@ pub mod display;
 pub mod input;
 pub mod ocr;
 pub mod screenshot;
+pub mod uia;
 pub mod window;
 
 pub use app::*;
