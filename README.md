@@ -54,7 +54,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 **Core Capabilities for System Prompts:**
 1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).
 2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
-3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately.
+3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately. On Windows, uses **UI Automation** for precise element-level matching, with OCR fallback.
 4.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
 
 ## 📦 Installation (macOS + Windows)
@@ -190,6 +190,7 @@ graph TD
     subgraph "Your Machine"
         Sys -->|Screen/OCR| macOS[CoreGraphics / Vision]
         Sys -->|Input| Win[Win32 / SendInput]
+        Sys -->|Text Search| UIA[UI Automation]
         Debug -.->|Inspect| App[Target App]
     end
 ```
@@ -205,6 +206,7 @@ graph TD
 | **Windows** | Screenshots | `BitBlt` (GDI) |
 | | Input | `SendInput` (Win32) |
 | | OCR | `Windows.Media.Ocr` (WinRT) |
+| | Text Search (`find_text`) | `UI Automation` (primary), OCR (fallback) |
 
 ### Screenshot Coordinate Precision
 
@@ -254,6 +256,7 @@ On macOS, you must grant permissions to the **host application** (e.g., Terminal
 
 Works out of the box on **Windows 10/11**.
 *   Uses standard Win32 APIs (GDI, SendInput).
+*   `find_text` uses **UI Automation (UIA)** as the primary search mechanism, querying the accessibility tree for element names. This is faster and more precise than OCR for standard UI elements (buttons, labels, menus). Falls back to OCR automatically when UIA finds no matches.
 *   OCR uses the built-in Windows Media OCR engine (offline).
 *   **Note:** Cannot interact with "Run as Administrator" windows unless the MCP server itself is also running as Administrator.
 

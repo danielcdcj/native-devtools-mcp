@@ -65,9 +65,12 @@ Fast-path to get coordinates without image analysis.
 *   **Returns (JSON array):**
     ```json
     [
-      { "text": "Save", "x": 500, "y": 300, "confidence": 0.94, "bounds": { "x": 480, "y": 290, "width": 40, "height": 20 } }
+      { "text": "Save", "x": 500, "y": 300, "confidence": 1.0, "bounds": { "x": 480, "y": 290, "width": 40, "height": 20 } }
     ]
     ```
+*   **Platform behavior:**
+    *   **Windows:** Uses **UI Automation (UIA)** as the primary mechanism — searches the accessibility tree for elements whose name matches the query. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if UIA finds no matches.
+    *   **macOS:** Uses OCR (Vision framework).
 
 ### 2. Input & Interaction (The "Hands")
 
