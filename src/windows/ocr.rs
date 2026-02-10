@@ -172,8 +172,49 @@ fn load_png_to_software_bitmap(png_data: &[u8]) -> Result<SoftwareBitmap, String
     Ok(bitmap)
 }
 
-/// Find text on screen using OCR. Returns screen coordinates for each match.
+/// Find text on screen. Tries UIA first (fast, reliable for standard UI),
+/// falls back to OCR (works for custom-rendered content).
 pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
+    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+
+    // Primary: try UIA on the foreground window
+    match super::uia::find_text(search) {
+        Ok(matches) if !matches.is_empty() => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] UIA found {} matches for '{}'",
+                    matches.len(),
+                    search
+                );
+            }
+            return Ok(matches);
+        }
+        Ok(_) => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] UIA found no matches for '{}', falling back to OCR",
+                    search
+                );
+            }
+        }
+        Err(e) => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] UIA failed for '{}': {}, falling back to OCR",
+                    search, e
+                );
+            }
+        }
+    }
+
+    // Fallback: OCR via screenshot
+    find_text_ocr(search, display_id)
+}
+
+/// Find text on screen using OCR. Returns screen coordinates for each match.
+fn find_text_ocr(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
+    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+
     let displays = display::get_displays()?;
     let _display = displays
         .iter()
@@ -190,13 +231,13 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
     let mut matches = ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?;
 
     // Debug: log first match before offset
-    if std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok() {
+    if debug {
         if let Some(first) = matches
             .iter()
             .find(|m| m.text.to_lowercase().contains(&search.to_lowercase()))
         {
             eprintln!(
-                "[DEBUG find_text] search='{}', screenshot_origin=({}, {}), scale_factor={}, first_match_before_offset=({}, {})",
+                "[DEBUG find_text_ocr] search='{}', screenshot_origin=({}, {}), scale_factor={}, first_match_before_offset=({}, {})",
                 search, screenshot.origin_x, screenshot.origin_y, screenshot.scale_factor, first.x, first.y
             );
         }
@@ -215,10 +256,10 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
     matches.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
 
     // Debug: log first match after offset
-    if std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok() {
+    if debug {
         if let Some(first) = matches.first() {
             eprintln!(
-                "[DEBUG find_text] first_match_after_offset: text='{}', screen_coords=({}, {})",
+                "[DEBUG find_text_ocr] first_match_after_offset: text='{}', screen_coords=({}, {})",
                 first.text, first.x, first.y
             );
         }
