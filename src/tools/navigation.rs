@@ -74,13 +74,23 @@ pub struct FocusWindowParams {
 pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
     if let Some(app_name) = params.app_name {
         if platform::activate_app(&app_name) {
-            CallToolResult::success(vec![Content::text("Window focused successfully")])
-        } else {
-            CallToolResult::error(vec![Content::text(format!(
-                "No app found matching '{}'. Use list_apps to find the correct app name.",
-                app_name
-            ))])
+            return CallToolResult::success(vec![Content::text("Window focused successfully")]);
         }
+        // Fallback: NSWorkspace.runningApplications doesn't list some apps (e.g. Catalyst/SwiftUI).
+        // Try finding the app via CGWindowList and activating by PID instead.
+        if let Ok(windows) = platform::find_windows_by_app(&app_name) {
+            if let Some(window) = windows.first() {
+                if platform::activate_app_by_pid(window.owner_pid as i32) {
+                    return CallToolResult::success(vec![Content::text(
+                        "Window focused successfully",
+                    )]);
+                }
+            }
+        }
+        CallToolResult::error(vec![Content::text(format!(
+            "No app found matching '{}'. Use list_apps to find the correct app name.",
+            app_name
+        ))])
     } else if let Some(pid) = params.pid {
         if platform::activate_app_by_pid(pid) {
             CallToolResult::success(vec![Content::text("Window focused successfully")])
