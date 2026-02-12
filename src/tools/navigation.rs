@@ -72,31 +72,46 @@ pub struct FocusWindowParams {
 }
 
 pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
-    let success = if let Some(app_name) = params.app_name {
-        platform::activate_app(&app_name)
+    if let Some(app_name) = params.app_name {
+        if platform::activate_app(&app_name) {
+            CallToolResult::success(vec![Content::text("Window focused successfully")])
+        } else {
+            CallToolResult::error(vec![Content::text(format!(
+                "No app found matching '{}'. Use list_apps to find the correct app name.",
+                app_name
+            ))])
+        }
     } else if let Some(pid) = params.pid {
-        platform::activate_app_by_pid(pid)
+        if platform::activate_app_by_pid(pid) {
+            CallToolResult::success(vec![Content::text("Window focused successfully")])
+        } else {
+            CallToolResult::error(vec![Content::text(format!(
+                "No app found with PID {}. Use list_apps to find running apps.",
+                pid
+            ))])
+        }
     } else if let Some(window_id) = params.window_id {
         // For window_id, we need to find the app that owns it and activate that
         match platform::find_window_by_id(window_id) {
-            Ok(Some(window)) => platform::activate_app_by_pid(window.owner_pid as i32),
-            Ok(None) => {
-                return CallToolResult::error(vec![Content::text(format!(
-                    "Window {} not found",
-                    window_id
-                ))]);
+            Ok(Some(window)) => {
+                if platform::activate_app_by_pid(window.owner_pid as i32) {
+                    CallToolResult::success(vec![Content::text("Window focused successfully")])
+                } else {
+                    CallToolResult::error(vec![Content::text(format!(
+                        "Found window {} but failed to activate its owning app (PID {}).",
+                        window_id, window.owner_pid
+                    ))])
+                }
             }
-            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+            Ok(None) => CallToolResult::error(vec![Content::text(format!(
+                "Window {} not found. Use list_windows to find available windows.",
+                window_id
+            ))]),
+            Err(e) => CallToolResult::error(vec![Content::text(e)]),
         }
     } else {
-        return CallToolResult::error(vec![Content::text(
+        CallToolResult::error(vec![Content::text(
             "Provide one of: window_id, app_name, or pid",
-        )]);
-    };
-
-    if success {
-        CallToolResult::success(vec![Content::text("Window focused successfully")])
-    } else {
-        CallToolResult::error(vec![Content::text("Failed to focus window")])
+        )])
     }
 }
