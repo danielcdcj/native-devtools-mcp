@@ -71,57 +71,76 @@ pub struct FocusWindowParams {
     pub pid: Option<i32>,
 }
 
+fn focused() -> CallToolResult {
+    CallToolResult::success(vec![Content::text("Window focused successfully")])
+}
+
+fn error(msg: impl Into<String>) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(msg.into())])
+}
+
 pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
     if let Some(app_name) = params.app_name {
-        if platform::activate_app(&app_name) {
-            return CallToolResult::success(vec![Content::text("Window focused successfully")]);
-        }
-        // Fallback: NSWorkspace.runningApplications doesn't list some apps (e.g. Catalyst/SwiftUI).
-        // Try finding the app via CGWindowList and activating by PID instead.
-        if let Ok(windows) = platform::find_windows_by_app(&app_name) {
-            if let Some(window) = windows.first() {
-                if platform::activate_app_by_pid(window.owner_pid as i32) {
-                    return CallToolResult::success(vec![Content::text(
-                        "Window focused successfully",
-                    )]);
-                }
-            }
-        }
-        CallToolResult::error(vec![Content::text(format!(
-            "No app found matching '{}'. Use list_apps to find the correct app name.",
-            app_name
-        ))])
+        focus_by_app_name(&app_name)
     } else if let Some(pid) = params.pid {
-        if platform::activate_app_by_pid(pid) {
-            CallToolResult::success(vec![Content::text("Window focused successfully")])
-        } else {
-            CallToolResult::error(vec![Content::text(format!(
-                "No app found with PID {}. Use list_apps to find running apps.",
-                pid
-            ))])
-        }
+        focus_by_pid(pid)
     } else if let Some(window_id) = params.window_id {
-        // For window_id, we need to find the app that owns it and activate that
-        match platform::find_window_by_id(window_id) {
-            Ok(Some(window)) => {
-                if platform::activate_app_by_pid(window.owner_pid as i32) {
-                    CallToolResult::success(vec![Content::text("Window focused successfully")])
-                } else {
-                    CallToolResult::error(vec![Content::text(format!(
-                        "Found window {} but failed to activate its owning app (PID {}).",
-                        window_id, window.owner_pid
-                    ))])
-                }
-            }
-            Ok(None) => CallToolResult::error(vec![Content::text(format!(
-                "Window {} not found. Use list_windows to find available windows.",
-                window_id
-            ))]),
-            Err(e) => CallToolResult::error(vec![Content::text(e)]),
-        }
+        focus_by_window_id(window_id)
     } else {
-        CallToolResult::error(vec![Content::text(
-            "Provide one of: window_id, app_name, or pid",
-        )])
+        error("Provide one of: window_id, app_name, or pid")
+    }
+}
+
+fn focus_by_app_name(app_name: &str) -> CallToolResult {
+    if platform::activate_app(app_name) {
+        return focused();
+    }
+
+    // Fallback: the primary activate_app path may not find some apps (e.g. Catalyst/SwiftUI
+    // on macOS). Try finding the app via the window list and activating by PID instead.
+    let pid = platform::find_windows_by_app(app_name)
+        .ok()
+        .and_then(|w| w.first().map(|win| win.owner_pid as i32));
+
+    if let Some(pid) = pid {
+        if platform::activate_app_by_pid(pid) {
+            return focused();
+        }
+    }
+
+    error(format!(
+        "No app found matching '{}'. Use list_apps to find the correct app name.",
+        app_name
+    ))
+}
+
+fn focus_by_pid(pid: i32) -> CallToolResult {
+    if platform::activate_app_by_pid(pid) {
+        focused()
+    } else {
+        error(format!(
+            "No app found with PID {}. Use list_apps to find running apps.",
+            pid
+        ))
+    }
+}
+
+fn focus_by_window_id(window_id: u32) -> CallToolResult {
+    match platform::find_window_by_id(window_id) {
+        Ok(Some(window)) => {
+            if platform::activate_app_by_pid(window.owner_pid as i32) {
+                focused()
+            } else {
+                error(format!(
+                    "Found window {} but failed to activate its owning app (PID {}).",
+                    window_id, window.owner_pid
+                ))
+            }
+        }
+        Ok(None) => error(format!(
+            "Window {} not found. Use list_windows to find available windows.",
+            window_id
+        )),
+        Err(e) => error(e),
     }
 }
