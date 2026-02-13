@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "native-devtools-mcp"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "base64 0.22.1",
  "cocoa",
