@@ -413,10 +413,6 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
     };
 
     match matches_result {
-        Ok(matches) if matches.is_empty() => CallToolResult::success(vec![Content::text(format!(
-            "No matches found for \"{}\"",
-            params.text
-        ))]),
         Ok(matches) => match serde_json::to_string_pretty(&matches) {
             Ok(json) => CallToolResult::success(vec![Content::text(json)]),
             Err(e) => {
