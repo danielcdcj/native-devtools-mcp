@@ -61,7 +61,7 @@ Captures pixel data and layout.
 
 #### `find_text`
 Fast-path to get coordinates without image analysis.
-*   **Inputs:** `text` (string), `display_id` (number, optional).
+*   **Inputs:** `text` (string, case-insensitive substring match against accessibility element names, then OCR), `app_name` (string, optional), `window_id` (number, optional), `display_id` (number, optional).
 *   **Returns (JSON array):**
     ```json
     [
@@ -69,8 +69,9 @@ Fast-path to get coordinates without image analysis.
     ]
     ```
 *   **Platform behavior:**
-    *   **Windows:** Uses **UI Automation (UIA)** as the primary mechanism — searches the accessibility tree for elements whose name matches the query. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if UIA finds no matches.
-    *   **macOS:** Uses OCR (Vision framework).
+    *   **Both platforms:** Uses the **platform accessibility API** as the primary mechanism — searches the accessibility tree for elements whose name matches the query. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if accessibility finds no matches.
+    *   **macOS:** Accessibility API (primary), Vision OCR (fallback). Note: accessibility results use semantic names (e.g., "All Clear" instead of "AC", "Subtract" instead of "−"), so search by meaning rather than displayed symbol.
+    *   **Windows:** UI Automation (primary), WinRT OCR (fallback).
 
 ### 2. Input & Interaction (The "Hands")
 
