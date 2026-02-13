@@ -1,4 +1,5 @@
 pub mod app;
+pub mod ax;
 pub mod display;
 pub mod input;
 pub mod ocr;

@@ -1,0 +1,334 @@
+//! macOS Accessibility API (AXUIElement) text search.
+//!
+//! Uses the macOS Accessibility tree to find UI elements by name.
+//! This is faster and more reliable than OCR for standard UI elements
+//! (buttons, labels, menus, etc.).
+
+use super::ocr::{TextBounds, TextMatch};
+use core_foundation::array::CFArray;
+use core_foundation::base::{CFType, TCFType};
+use core_foundation::string::CFString;
+use core_graphics::geometry::{CGPoint, CGSize};
+use objc::runtime::{Class, Object};
+use objc::{msg_send, sel, sel_impl};
+use std::ffi::c_void;
+use std::ptr;
+
+// AXUIElement opaque type
+type AXUIElementRef = *mut c_void;
+// AXValue opaque type
+type AXValueRef = *mut c_void;
+
+// AXValueType constants
+const K_AX_VALUE_TYPE_CGPOINT: u32 = 1;
+const K_AX_VALUE_TYPE_CGSIZE: u32 = 2;
+
+// AX error codes
+const K_AX_ERROR_SUCCESS: i32 = 0;
+
+const MAX_DEPTH: u32 = 50;
+const MAX_ELEMENTS: usize = 10_000;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: core_foundation::string::CFStringRef,
+        value: *mut core_foundation::base::CFTypeRef,
+    ) -> i32;
+    fn AXValueGetValue(value: AXValueRef, value_type: u32, value_ptr: *mut c_void) -> bool;
+}
+
+/// Find text in UI elements of an app's accessibility tree.
+///
+/// Searches the accessibility tree for elements whose AXTitle, AXValue, or
+/// AXDescription contains the search string (case-insensitive).
+/// Returns matching elements with screen coordinates for clicking.
+pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
+    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+
+    let pid = match window_id {
+        Some(wid) => pid_for_window(wid)?,
+        None => frontmost_pid()?,
+    };
+
+    if debug {
+        eprintln!(
+            "[DEBUG ax::find_text] search='{}', window_id={:?}, pid={}",
+            search, window_id, pid
+        );
+    }
+
+    let app_element = unsafe { AXUIElementCreateApplication(pid) };
+    if app_element.is_null() {
+        return Err(format!("Failed to create AXUIElement for pid {}", pid));
+    }
+
+    let search_lower = search.to_lowercase();
+    let mut matches = Vec::new();
+    let mut element_count: usize = 0;
+
+    unsafe {
+        walk_tree(
+            app_element,
+            &search_lower,
+            &mut matches,
+            &mut element_count,
+            0,
+        );
+        core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
+    }
+
+    if debug {
+        eprintln!(
+            "[DEBUG ax::find_text] found {} matches out of {} elements",
+            matches.len(),
+            element_count
+        );
+    }
+
+    Ok(matches)
+}
+
+/// Recursively walk the AX element tree and collect matches.
+///
+/// `depth` limits recursion to prevent runaway traversal of deep trees.
+unsafe fn walk_tree(
+    element: AXUIElementRef,
+    search_lower: &str,
+    matches: &mut Vec<TextMatch>,
+    element_count: &mut usize,
+    depth: u32,
+) {
+    // Guard against excessively deep or large trees
+    if depth > MAX_DEPTH || *element_count >= MAX_ELEMENTS {
+        return;
+    }
+
+    *element_count += 1;
+
+    // Check AXTitle, AXValue, AXDescription for a match
+    let title = get_string_attribute(element, "AXTitle");
+    let value = get_string_attribute(element, "AXValue");
+    let description = get_string_attribute(element, "AXDescription");
+
+    let matched_text = [&title, &value, &description]
+        .iter()
+        .filter_map(|s| s.as_ref())
+        .find(|s| !s.is_empty() && s.to_lowercase().contains(search_lower));
+
+    if let Some(text) = matched_text {
+        if let Some((position, size)) = get_position_and_size(element) {
+            // Skip zero-size elements (collapsed/hidden)
+            if size.width > 0.0 && size.height > 0.0 {
+                let bounds = TextBounds {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                };
+
+                let center_x = bounds.x + bounds.width / 2.0;
+                let center_y = bounds.y + bounds.height / 2.0;
+
+                matches.push(TextMatch {
+                    text: text.clone(),
+                    x: center_x,
+                    y: center_y,
+                    confidence: 1.0,
+                    bounds,
+                });
+            }
+        }
+    }
+
+    // Recurse into children
+    let children_attr = CFString::new("AXChildren");
+    let mut children_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(
+        element,
+        children_attr.as_concrete_TypeRef(),
+        &mut children_ref,
+    );
+
+    if err != K_AX_ERROR_SUCCESS || children_ref.is_null() {
+        return;
+    }
+
+    // children_ref is a CFArray of AXUIElementRef
+    let children: CFArray<*const c_void> = CFArray::wrap_under_create_rule(children_ref as _);
+
+    for i in 0..children.len() {
+        let child = *children.get_unchecked(i) as AXUIElementRef;
+        // Retain the child for the duration of our walk since CFArray only gives a get-rule ref
+        core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
+        walk_tree(child, search_lower, matches, element_count, depth + 1);
+        core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
+    }
+}
+
+/// Get a string attribute from an AX element. Returns None if the attribute
+/// doesn't exist or isn't a string.
+unsafe fn get_string_attribute(element: AXUIElementRef, attr_name: &str) -> Option<String> {
+    let attr = CFString::new(attr_name);
+    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
+
+    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
+        return None;
+    }
+
+    // value_ref is owned (create rule) — wrap it so it gets released
+    let cf_value = CFType::wrap_under_create_rule(value_ref);
+
+    // Try to downcast to CFString
+    let cf_string = cf_value.downcast::<CFString>()?;
+    Some(cf_string.to_string())
+}
+
+/// Get position (CGPoint) and size (CGSize) of an AX element.
+/// Returns None if either attribute is missing.
+unsafe fn get_position_and_size(element: AXUIElementRef) -> Option<(CGPoint, CGSize)> {
+    let position = get_ax_point(element, "AXPosition")?;
+    let size = get_ax_size(element, "AXSize")?;
+    Some((position, size))
+}
+
+/// Extract a CGPoint from an AXValue attribute.
+unsafe fn get_ax_point(element: AXUIElementRef, attr_name: &str) -> Option<CGPoint> {
+    let attr = CFString::new(attr_name);
+    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
+
+    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
+        return None;
+    }
+
+    let mut point = CGPoint::new(0.0, 0.0);
+    let ok = AXValueGetValue(
+        value_ref as AXValueRef,
+        K_AX_VALUE_TYPE_CGPOINT,
+        &mut point as *mut CGPoint as *mut c_void,
+    );
+
+    core_foundation::base::CFRelease(value_ref);
+
+    if ok {
+        Some(point)
+    } else {
+        None
+    }
+}
+
+/// Extract a CGSize from an AXValue attribute.
+unsafe fn get_ax_size(element: AXUIElementRef, attr_name: &str) -> Option<CGSize> {
+    let attr = CFString::new(attr_name);
+    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
+
+    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
+        return None;
+    }
+
+    let mut size = CGSize::new(0.0, 0.0);
+    let ok = AXValueGetValue(
+        value_ref as AXValueRef,
+        K_AX_VALUE_TYPE_CGSIZE,
+        &mut size as *mut CGSize as *mut c_void,
+    );
+
+    core_foundation::base::CFRelease(value_ref);
+
+    if ok {
+        Some(size)
+    } else {
+        None
+    }
+}
+
+/// Get the PID that owns a given window ID, using CGWindowListCopyWindowInfo.
+fn pid_for_window(window_id: u32) -> Result<i32, String> {
+    let window = super::window::find_window_by_id(window_id)?
+        .ok_or_else(|| format!("Window {} not found", window_id))?;
+    i32::try_from(window.owner_pid)
+        .map_err(|_| format!("PID {} exceeds i32 range", window.owner_pid))
+}
+
+/// Get the PID of the frontmost application via NSWorkspace.
+fn frontmost_pid() -> Result<i32, String> {
+    unsafe {
+        let cls = Class::get("NSWorkspace").ok_or("NSWorkspace class not available")?;
+        let workspace: *mut Object = msg_send![cls, sharedWorkspace];
+        if workspace.is_null() {
+            return Err("NSWorkspace.sharedWorkspace returned nil".to_string());
+        }
+        let app: *mut Object = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return Err("No frontmost application found".to_string());
+        }
+        let pid: i32 = msg_send![app, processIdentifier];
+        Ok(pid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Search for "9" in the frontmost app (Calculator).
+    /// Requires Calculator to be running and in the foreground.
+    /// Run with: cargo test test_ax_find_text_calculator -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_ax_find_text_calculator() {
+        let results = find_text("9", None).expect("find_text should succeed");
+        println!("AX find_text results for '9' (no window_id):");
+        for m in &results {
+            println!(
+                "  '{}' at ({:.1}, {:.1}) bounds=({:.1}, {:.1}, {:.1}x{:.1})",
+                m.text, m.x, m.y, m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height
+            );
+        }
+        assert!(
+            !results.is_empty(),
+            "Should find at least one match for '9'"
+        );
+        for m in &results {
+            assert!(m.x > 0.0, "x coordinate should be positive");
+            assert!(m.y > 0.0, "y coordinate should be positive");
+        }
+    }
+
+    /// Search for "9" using Calculator's window_id.
+    /// Requires Calculator to be running.
+    /// Run with: cargo test test_ax_find_text_with_window_id -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_ax_find_text_with_window_id() {
+        let windows = crate::macos::window::find_windows_by_app("Calculator")
+            .expect("find_windows_by_app should succeed");
+        let calc_window = windows
+            .first()
+            .expect("Calculator must be running for this test");
+
+        println!("Calculator window id: {}", calc_window.id);
+
+        let results =
+            find_text("9", Some(calc_window.id)).expect("find_text with window_id should succeed");
+        println!(
+            "AX find_text results for '9' (window_id={}):",
+            calc_window.id
+        );
+        for m in &results {
+            println!(
+                "  '{}' at ({:.1}, {:.1}) bounds=({:.1}, {:.1}, {:.1}x{:.1})",
+                m.text, m.x, m.y, m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height
+            );
+        }
+        assert!(
+            !results.is_empty(),
+            "Should find at least one match for '9' with window_id"
+        );
+    }
+}
