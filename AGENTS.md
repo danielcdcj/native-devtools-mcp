@@ -69,9 +69,9 @@ Fast-path to get coordinates without image analysis.
     ]
     ```
 *   **Platform behavior:**
-    *   **Both platforms:** Uses the **platform accessibility API** as the primary mechanism — searches the accessibility tree for elements whose name matches the query. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if accessibility finds no matches.
-    *   **macOS:** Accessibility API (primary), Vision OCR (fallback). Note: accessibility results use semantic names (e.g., "All Clear" instead of "AC", "Subtract" instead of "−"), so search by meaning rather than displayed symbol.
-    *   **Windows:** UI Automation (primary), WinRT OCR (fallback).
+    *   **Both platforms:** Uses the **platform accessibility API** as the primary mechanism — searches the accessibility tree for elements by name. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if accessibility finds no matches.
+    *   **macOS:** Accessibility API (primary), Vision OCR (fallback). Matches against element title, value, and description. Note: accessibility results use semantic names (e.g., "All Clear" instead of "AC", "Subtract" instead of "−"), so search by meaning rather than displayed symbol.
+    *   **Windows:** UI Automation (primary), WinRT OCR (fallback). Matches against element Name property only.
 
 ### 2. Input & Interaction (The "Hands")
 

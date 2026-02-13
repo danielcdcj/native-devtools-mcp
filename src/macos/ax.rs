@@ -179,11 +179,9 @@ unsafe fn get_string_attribute(element: AXUIElementRef, attr_name: &str) -> Opti
         return None;
     }
 
-    // value_ref is owned (create rule) — wrap it so it gets released
-    let cf_value = CFType::wrap_under_create_rule(value_ref);
-
-    // Try to downcast to CFString
-    let cf_string = cf_value.downcast::<CFString>()?;
+    // value_ref is owned (create rule) — wrap it so it gets released.
+    // downcast_into consumes cf_value, avoiding an extra retain/release cycle.
+    let cf_string = CFType::wrap_under_create_rule(value_ref).downcast_into::<CFString>()?;
     Some(cf_string.to_string())
 }
 

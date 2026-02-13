@@ -497,7 +497,10 @@ fn find_text_in_window(
         uses_language_correction,
     )?;
     #[cfg(target_os = "windows")]
-    let mut matches = ocr::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?;
+    let mut matches = {
+        let _ = uses_language_correction; // Windows OCR doesn't support this param
+        ocr::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?
+    };
 
     // Offset OCR coordinates from image-relative to screen-absolute
     for m in &mut matches {
