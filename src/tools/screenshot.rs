@@ -182,11 +182,13 @@ pub async fn take_screenshot(
 
             // Run OCR if requested
             if params.include_ocr {
-                match platform::ocr_image(
-                    &screenshot.png_data,
-                    Some(screenshot.scale_factor),
-                    false,
-                ) {
+                #[cfg(target_os = "macos")]
+                let ocr_result =
+                    platform::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor), false);
+                #[cfg(target_os = "windows")]
+                let ocr_result =
+                    platform::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor));
+                match ocr_result {
                     Ok(mut matches) => {
                         apply_ocr_offset(&mut matches, screenshot.origin_x, screenshot.origin_y);
                         if !matches.is_empty() {
