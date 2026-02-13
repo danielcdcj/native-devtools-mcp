@@ -358,7 +358,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "PREFERRED for clicking buttons/labels by name. Finds text on screen using OCR and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Requires macOS 10.15+ or Windows 10 1903+.",
+                "PREFERRED for clicking buttons/labels by name. Finds text on screen using OCR and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Can be scoped to a specific app window for faster, more precise results. Requires macOS 10.15+ or Windows 10 1903+.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
@@ -367,9 +367,17 @@ impl MacOSDevToolsServer {
                             "type": "string",
                             "description": "Text to search for (case-insensitive)"
                         },
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to scope the search to a specific app's window (e.g., 'Calculator'). Faster and avoids false matches from other windows."
+                        },
+                        "window_id": {
+                            "type": "integer",
+                            "description": "Window ID to scope the search to a specific window"
+                        },
                         "display_id": {
                             "type": "integer",
-                            "description": "Display ID to search on. Use get_displays to list available displays. If omitted, searches the main display."
+                            "description": "Display ID to search on. Use get_displays to list available displays. If omitted, searches the main display. Ignored when window_id or app_name is provided."
                         }
                     }
                 }))),

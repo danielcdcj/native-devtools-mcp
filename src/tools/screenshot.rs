@@ -326,7 +326,9 @@ mod tests {
         let matches = vec![make_text_match("Test", 100.0, 200.0, 0.9)];
         let result = format_ocr_results(&matches);
 
-        assert!(result.starts_with("## OCR Text Detected\nCoordinates below are screen coordinates"));
+        assert!(
+            result.starts_with("## OCR Text Detected\nCoordinates below are screen coordinates")
+        );
     }
 
     #[test]

@@ -376,11 +376,43 @@ pub fn get_displays(_params: GetDisplaysParams) -> CallToolResult {
 pub struct FindTextParams {
     pub text: String,
     /// Optional display ID to search on. If omitted, searches the main display.
+    /// Ignored when window_id or app_name is provided.
     pub display_id: Option<u32>,
+    /// Window ID to scope the search to a specific window.
+    pub window_id: Option<u32>,
+    /// Application name to scope the search to a specific app's window.
+    pub app_name: Option<String>,
 }
 
 pub fn find_text(params: FindTextParams) -> CallToolResult {
-    match ocr::find_text(&params.text, params.display_id) {
+    // Resolve window_id from app_name if provided
+    let window_id = match (params.window_id, &params.app_name) {
+        (Some(id), _) => Some(id),
+        (None, Some(app_name)) => match crate::platform::find_windows_by_app(app_name) {
+            Ok(windows) if !windows.is_empty() => Some(windows[0].id),
+            Ok(_) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "No window found for app '{}'",
+                    app_name
+                ))]);
+            }
+            Err(e) => {
+                return CallToolResult::error(vec![Content::text(format!(
+                    "Failed to find window: {}",
+                    e
+                ))]);
+            }
+        },
+        (None, None) => None,
+    };
+
+    let matches_result = if let Some(wid) = window_id {
+        find_text_in_window(&params.text, wid)
+    } else {
+        ocr::find_text(&params.text, params.display_id)
+    };
+
+    match matches_result {
         Ok(matches) if matches.is_empty() => CallToolResult::success(vec![Content::text(format!(
             "No matches found for \"{}\"",
             params.text
@@ -393,4 +425,31 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
         },
         Err(e) => CallToolResult::error(vec![Content::text(e)]),
     }
+}
+
+/// Run OCR scoped to a single window and return matching text with screen coordinates.
+fn find_text_in_window(search: &str, window_id: u32) -> Result<Vec<ocr::TextMatch>, String> {
+    let screenshot = crate::platform::capture_window(window_id)
+        .map_err(|e| format!("Failed to capture window: {}", e))?;
+
+    let mut matches = ocr::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?;
+
+    // Offset OCR coordinates from image-relative to screen-absolute
+    for m in &mut matches {
+        m.x += screenshot.origin_x;
+        m.y += screenshot.origin_y;
+        m.bounds.x += screenshot.origin_x;
+        m.bounds.y += screenshot.origin_y;
+    }
+
+    // Filter by search term
+    let search_lower = search.to_lowercase();
+    matches.retain(|m| m.text.to_lowercase().contains(&search_lower));
+    matches.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(matches)
 }
