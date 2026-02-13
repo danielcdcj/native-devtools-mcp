@@ -172,42 +172,8 @@ fn load_png_to_software_bitmap(png_data: &[u8]) -> Result<SoftwareBitmap, String
     Ok(bitmap)
 }
 
-/// Find text on screen. Tries UIA first (fast, reliable for standard UI),
-/// falls back to OCR (works for custom-rendered content).
+/// Find text on screen using OCR. Returns screen coordinates for each match.
 pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
-    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
-
-    // Primary: try UIA on the foreground window
-    match super::uia::find_text(search) {
-        Ok(matches) if !matches.is_empty() => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] UIA found {} matches for '{}'",
-                    matches.len(),
-                    search
-                );
-            }
-            return Ok(matches);
-        }
-        Ok(_) => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] UIA found no matches for '{}', falling back to OCR",
-                    search
-                );
-            }
-        }
-        Err(e) => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] UIA failed for '{}': {}, falling back to OCR",
-                    search, e
-                );
-            }
-        }
-    }
-
-    // Fallback: OCR via screenshot
     find_text_ocr(search, display_id)
 }
 

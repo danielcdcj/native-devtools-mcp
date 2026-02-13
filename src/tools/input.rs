@@ -369,7 +369,7 @@ pub fn get_displays(_params: GetDisplaysParams) -> CallToolResult {
 }
 
 // ============================================================================
-// Find Text (OCR)
+// Find Text (Accessibility + OCR)
 // ============================================================================
 
 #[derive(Debug, Deserialize)]
@@ -389,6 +389,8 @@ pub struct FindTextParams {
 }
 
 pub fn find_text(params: FindTextParams) -> CallToolResult {
+    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+
     // Resolve window_id from app_name if provided
     let window_id = match (params.window_id, &params.app_name) {
         (Some(id), _) => Some(id),
@@ -410,24 +412,83 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
         (None, None) => None,
     };
 
-    let matches_result = if let Some(wid) = window_id {
+    // Primary: try accessibility tree search
+    let ax_result = find_text_accessibility(&params.text, window_id);
+    match &ax_result {
+        Ok(matches) if !matches.is_empty() => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] accessibility search found {} matches for '{}'",
+                    matches.len(),
+                    params.text
+                );
+            }
+            return serialize_matches(matches);
+        }
+        Ok(_) => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] accessibility search found no matches for '{}', falling back to OCR",
+                    params.text
+                );
+            }
+        }
+        Err(e) => {
+            if debug {
+                eprintln!(
+                    "[DEBUG find_text] accessibility search failed for '{}': {}, falling back to OCR",
+                    params.text, e
+                );
+            }
+        }
+    }
+
+    // Fallback: OCR
+    let ocr_result = if let Some(wid) = window_id {
         find_text_in_window(&params.text, wid, params.uses_language_correction)
     } else {
-        ocr::find_text(
-            &params.text,
-            params.display_id,
-            params.uses_language_correction,
-        )
+        #[cfg(target_os = "macos")]
+        {
+            ocr::find_text(
+                &params.text,
+                params.display_id,
+                params.uses_language_correction,
+            )
+        }
+        #[cfg(target_os = "windows")]
+        {
+            ocr::find_text(&params.text, params.display_id)
+        }
     };
 
-    match matches_result {
-        Ok(matches) => match serde_json::to_string_pretty(&matches) {
-            Ok(json) => CallToolResult::success(vec![Content::text(json)]),
-            Err(e) => {
-                CallToolResult::error(vec![Content::text(format!("Failed to serialize: {}", e))])
-            }
-        },
+    match ocr_result {
+        Ok(ref matches) => serialize_matches(matches),
         Err(e) => CallToolResult::error(vec![Content::text(e)]),
+    }
+}
+
+/// Try to find text using the platform accessibility API.
+fn find_text_accessibility(
+    search: &str,
+    window_id: Option<u32>,
+) -> Result<Vec<ocr::TextMatch>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::ax::find_text(search, window_id)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // TODO: support targeting specific window_id via ElementFromHandle(hwnd)
+        let _ = window_id;
+        crate::windows::uia::find_text(search)
+    }
+}
+
+/// Serialize text matches to a JSON CallToolResult.
+fn serialize_matches(matches: &[ocr::TextMatch]) -> CallToolResult {
+    match serde_json::to_string_pretty(matches) {
+        Ok(json) => CallToolResult::success(vec![Content::text(json)]),
+        Err(e) => CallToolResult::error(vec![Content::text(format!("Failed to serialize: {}", e))]),
     }
 }
 
@@ -440,11 +501,14 @@ fn find_text_in_window(
     let screenshot = crate::platform::capture_window(window_id)
         .map_err(|e| format!("Failed to capture window: {}", e))?;
 
+    #[cfg(target_os = "macos")]
     let mut matches = ocr::ocr_image(
         &screenshot.png_data,
         Some(screenshot.scale_factor),
         uses_language_correction,
     )?;
+    #[cfg(target_os = "windows")]
+    let mut matches = ocr::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?;
 
     // Offset OCR coordinates from image-relative to screen-absolute
     for m in &mut matches {
