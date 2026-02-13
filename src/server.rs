@@ -358,14 +358,14 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "PREFERRED for clicking buttons/labels by name. Finds text on screen using OCR and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Can be scoped to a specific app window for faster, more precise results. Requires macOS 10.15+ or Windows 10 1903+.",
+                "PREFERRED for clicking buttons/labels by name. Finds text on screen using the platform accessibility API (macOS Accessibility, Windows UI Automation) with OCR fallback, and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Can be scoped to a specific app window for faster, more precise results. Note: accessibility results use semantic element names (e.g., 'All Clear' instead of 'AC', 'Subtract' instead of '\u{2212}'), so search by meaning rather than displayed symbol. Requires macOS 10.15+ or Windows 10 1903+.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
                     "properties": {
                         "text": {
                             "type": "string",
-                            "description": "Text to search for (case-insensitive)"
+                            "description": "Text to search for (case-insensitive substring match). Matches against accessibility element names first (e.g., 'All Clear', 'Subtract'), then falls back to OCR on visible text."
                         },
                         "app_name": {
                             "type": "string",
@@ -381,7 +381,7 @@ impl MacOSDevToolsServer {
                         },
                         "uses_language_correction": {
                             "type": "boolean",
-                            "description": "Enable language correction for better word accuracy. Default is false, which is better for UI automation (buttons, labels, single characters)."
+                            "description": "Enable language correction for better word accuracy in OCR fallback. Default is false, which is better for UI automation (buttons, labels, single characters). Has no effect when results come from the accessibility API."
                         }
                     }
                 }))),
