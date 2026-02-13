@@ -115,6 +115,29 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
     false
 }
 
+/// Launch an application by name using `open -a`.
+///
+/// This finds the app in standard locations (/Applications, ~/Applications, etc.)
+/// and launches it. If the app is already running, it is brought to the front.
+pub fn launch_app(app_name: &str) -> Result<(), String> {
+    let output = std::process::Command::new("open")
+        .arg("-a")
+        .arg(app_name)
+        .output()
+        .map_err(|e| format!("Failed to run 'open' command: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Failed to launch '{}': {}",
+            app_name,
+            stderr.trim()
+        ))
+    }
+}
+
 unsafe fn nsstring_to_string(ns_string: id) -> String {
     let utf8_ptr: *const i8 = msg_send![ns_string, UTF8String];
     if utf8_ptr.is_null() {

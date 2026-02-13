@@ -293,6 +293,28 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
     data.found
 }
 
+/// Launch an application by name.
+///
+/// Uses `cmd /c start "" "app_name"` which searches PATH and App Paths registry.
+/// For apps not in PATH, provide the full executable path.
+pub fn launch_app(app_name: &str) -> Result<(), String> {
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "start", "", app_name])
+        .output()
+        .map_err(|e| format!("Failed to run start command: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "Failed to launch '{}': {}",
+            app_name,
+            stderr.trim()
+        ))
+    }
+}
+
 /// Focus a window by its handle.
 ///
 /// Uses multiple techniques to bring a window to the foreground since

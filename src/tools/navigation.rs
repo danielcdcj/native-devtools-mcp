@@ -60,6 +60,22 @@ pub fn list_apps(params: ListAppsParams) -> CallToolResult {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct LaunchAppParams {
+    /// Application name to launch (e.g., "Calculator", "Safari")
+    pub app_name: String,
+}
+
+pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
+    match platform::launch_app(&params.app_name) {
+        Ok(()) => CallToolResult::success(vec![Content::text(format!(
+            "Launched '{}'",
+            params.app_name
+        ))]),
+        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FocusWindowParams {
     /// Window ID to focus (optional, use with window_id)
     pub window_id: Option<u32>,

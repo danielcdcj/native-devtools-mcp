@@ -160,6 +160,20 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "launch_app",
+                "Launch an application by name. On macOS, finds apps in /Applications and other standard locations. If the app is already running, brings it to the front.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["app_name"],
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to launch (e.g., 'Calculator', 'Safari')"
+                        }
+                    }
+                }))),
+            ),
             // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
@@ -767,6 +781,11 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: navigation::FocusWindowParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(navigation::focus_window(params))
+            }
+            "launch_app" => {
+                let params: navigation::LaunchAppParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(navigation::launch_app(params))
             }
             // App Debug Protocol tools
             "app_connect" => {
