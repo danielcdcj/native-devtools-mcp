@@ -378,6 +378,10 @@ impl MacOSDevToolsServer {
                         "display_id": {
                             "type": "integer",
                             "description": "Display ID to search on. Use get_displays to list available displays. If omitted, searches the main display. Ignored when window_id or app_name is provided."
+                        },
+                        "uses_language_correction": {
+                            "type": "boolean",
+                            "description": "Enable language correction for better word accuracy. Default is false, which is better for UI automation (buttons, labels, single characters)."
                         }
                     }
                 }))),

@@ -55,17 +55,29 @@ pub struct TextMatch {
 }
 
 /// Run OCR on PNG image data and return all detected text with screen coordinates.
-pub fn ocr_image(png_data: &[u8], scale: Option<f64>) -> Result<Vec<TextMatch>, String> {
+///
+/// When `uses_language_correction` is `false` (recommended for UI automation),
+/// Vision skips word-level correction, improving detection of isolated characters
+/// like calculator buttons, single-letter labels, and symbols.
+pub fn ocr_image(
+    png_data: &[u8],
+    scale: Option<f64>,
+    uses_language_correction: bool,
+) -> Result<Vec<TextMatch>, String> {
     let scale = scale.unwrap_or_else(|| {
         display::get_main_display()
             .map(|d| d.backing_scale_factor)
             .unwrap_or(2.0)
     });
 
-    unsafe { run_vision_ocr(png_data, scale) }
+    unsafe { run_vision_ocr(png_data, scale, uses_language_correction) }
 }
 
-unsafe fn run_vision_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> {
+unsafe fn run_vision_ocr(
+    png_data: &[u8],
+    scale: f64,
+    uses_language_correction: bool,
+) -> Result<Vec<TextMatch>, String> {
     // Check Vision framework availability
     let handler_class = Class::get("VNImageRequestHandler")
         .ok_or("Vision framework not available (requires macOS 10.13+)")?;
@@ -113,6 +125,7 @@ unsafe fn run_vision_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, 
 
     // VNRequestTextRecognitionLevel: 0 = accurate, 1 = fast (NSInteger)
     let _: () = msg_send![request, setRecognitionLevel: 0isize];
+    let _: () = msg_send![request, setUsesLanguageCorrection: uses_language_correction as i8];
 
     // Execute request
     let requests: *mut Object = msg_send![array_class, arrayWithObject: request];
@@ -194,7 +207,11 @@ unsafe fn nsstring_to_string(nsstring: *mut Object) -> String {
 }
 
 /// Find text on screen using OCR. Returns screen coordinates for each match.
-pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>, String> {
+pub fn find_text(
+    search: &str,
+    display_id: Option<u32>,
+    uses_language_correction: bool,
+) -> Result<Vec<TextMatch>, String> {
     let displays = display::get_displays().map_err(|e| format!("get_displays failed: {}", e))?;
     let (display_index, display) = displays
         .iter()
@@ -235,7 +252,11 @@ pub fn find_text(search: &str, display_id: Option<u32>) -> Result<Vec<TextMatch>
 
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_path);
-    let mut matches = ocr_image(&png_data, Some(display.backing_scale_factor))?;
+    let mut matches = ocr_image(
+        &png_data,
+        Some(display.backing_scale_factor),
+        uses_language_correction,
+    )?;
 
     // Offset for multi-display and filter by search term
     let search_lower = search.to_lowercase();
@@ -304,7 +325,7 @@ mod tests {
         let png_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/calculator.png");
         let png_data = std::fs::read(png_path).expect("Failed to read calculator.png fixture");
 
-        let matches = ocr_image(&png_data, Some(2.0)).expect("OCR should succeed");
+        let matches = ocr_image(&png_data, Some(2.0), false).expect("OCR should succeed");
 
         println!("Found {} text matches:", matches.len());
         for m in &matches {
@@ -320,7 +341,6 @@ mod tests {
             "OCR should detect text from calculator"
         );
 
-        // Check that we found some expected calculator buttons
         let texts: Vec<&str> = matches.iter().map(|m| m.text.as_str()).collect();
         println!("Detected texts: {:?}", texts);
 
@@ -388,5 +408,129 @@ mod tests {
         assert_eq!(bounds.height, 200.0);
         assert_eq!(cx, 500.0);
         assert_eq!(cy, 400.0);
+    }
+
+    /// Compare OCR results from window capture vs full-screen capture on Calculator.
+    /// Requires Calculator to be running. Run with:
+    ///   cargo test test_ocr_window_vs_screen -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_ocr_window_vs_screen() {
+        use crate::macos::screenshot;
+        use crate::macos::window;
+
+        // Find Calculator window
+        let windows = window::find_windows_by_app("Calculator").expect("Failed to list windows");
+        let calc_window = windows
+            .first()
+            .expect("Calculator must be running for this test");
+        let window_id = calc_window.id;
+        println!("Calculator window id: {}", window_id);
+
+        // --- Path 1: capture_window (what take_screenshot + find_text with app_name use) ---
+        let win_screenshot =
+            screenshot::capture_window(window_id).expect("Failed to capture Calculator window");
+        println!(
+            "Window capture: {}x{} pixels, scale={}",
+            win_screenshot.pixel_width, win_screenshot.pixel_height, win_screenshot.scale_factor
+        );
+        let win_matches = ocr_image(
+            &win_screenshot.png_data,
+            Some(win_screenshot.scale_factor),
+            false,
+        )
+        .expect("OCR on window capture failed");
+        let mut win_texts: Vec<&str> = win_matches.iter().map(|m| m.text.as_str()).collect();
+        win_texts.sort();
+
+        // --- Path 2: screencapture full screen (what find_text without app_name uses) ---
+        let displays = display::get_displays().expect("Failed to get displays");
+        let (display_index, display_info) = displays
+            .iter()
+            .enumerate()
+            .find(|(_, d)| d.is_main)
+            .map(|(i, d)| (i + 1, d.clone()))
+            .expect("No main display found");
+
+        let temp_path = std::env::temp_dir().join("native_devtools_ocr_comparison_test.png");
+        let temp_path_str = temp_path.to_str().unwrap();
+        let status = std::process::Command::new("/usr/sbin/screencapture")
+            .args(["-x", "-D", &display_index.to_string(), temp_path_str])
+            .status()
+            .expect("screencapture failed");
+        assert!(status.success(), "screencapture exited with error");
+        let screen_png = std::fs::read(&temp_path).expect("Failed to read screen capture");
+        let _ = std::fs::remove_file(&temp_path);
+
+        // Get screen image dimensions
+        let screen_dims = image::io::Reader::new(std::io::Cursor::new(&screen_png))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok());
+        if let Some((w, h)) = screen_dims {
+            println!(
+                "Screen capture: {}x{} pixels, scale={}",
+                w, h, display_info.backing_scale_factor
+            );
+        }
+
+        let screen_matches = ocr_image(&screen_png, Some(display_info.backing_scale_factor), false)
+            .expect("OCR on screen capture failed");
+
+        // Filter screen OCR to just Calculator-relevant items by position
+        // (the screen has lots of other text)
+        let calc_x = calc_window.bounds.x;
+        let calc_y = calc_window.bounds.y;
+        let calc_w = calc_window.bounds.width;
+        let calc_h = calc_window.bounds.height;
+        println!(
+            "Calculator bounds: ({}, {}) {}x{}",
+            calc_x, calc_y, calc_w, calc_h
+        );
+
+        let screen_calc_matches: Vec<&TextMatch> = screen_matches
+            .iter()
+            .filter(|m| {
+                // Screen OCR coords are image-relative (no display offset yet),
+                // but window bounds are in screen coords.
+                // For main display at origin (0,0), these align.
+                let sx = m.x + display_info.bounds.x;
+                let sy = m.y + display_info.bounds.y;
+                sx >= calc_x && sx <= calc_x + calc_w && sy >= calc_y && sy <= calc_y + calc_h
+            })
+            .collect();
+        let mut screen_texts: Vec<&str> = screen_calc_matches
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect();
+        screen_texts.sort();
+
+        println!("\n=== Results ===");
+        println!(
+            "Window capture OCR: {} matches — {:?}",
+            win_texts.len(),
+            win_texts
+        );
+        println!(
+            "Screen capture OCR (Calculator region): {} matches — {:?}",
+            screen_texts.len(),
+            screen_texts
+        );
+
+        // Show what each found that the other didn't
+        let only_window: Vec<&&str> = win_texts
+            .iter()
+            .filter(|t| !screen_texts.contains(t))
+            .collect();
+        let only_screen: Vec<&&str> = screen_texts
+            .iter()
+            .filter(|t| !win_texts.contains(t))
+            .collect();
+        println!("\nOnly in window capture: {:?}", only_window);
+        println!("Only in screen capture: {:?}", only_screen);
+        println!(
+            "Total screen OCR matches (all windows): {}",
+            screen_matches.len()
+        );
     }
 }

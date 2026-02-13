@@ -382,6 +382,10 @@ pub struct FindTextParams {
     pub window_id: Option<u32>,
     /// Application name to scope the search to a specific app's window.
     pub app_name: Option<String>,
+    /// Enable language correction (helps with word accuracy but hurts single-character
+    /// detection). Defaults to false, which is better for UI automation.
+    #[serde(default)]
+    pub uses_language_correction: bool,
 }
 
 pub fn find_text(params: FindTextParams) -> CallToolResult {
@@ -407,9 +411,13 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
     };
 
     let matches_result = if let Some(wid) = window_id {
-        find_text_in_window(&params.text, wid)
+        find_text_in_window(&params.text, wid, params.uses_language_correction)
     } else {
-        ocr::find_text(&params.text, params.display_id)
+        ocr::find_text(
+            &params.text,
+            params.display_id,
+            params.uses_language_correction,
+        )
     };
 
     match matches_result {
@@ -424,11 +432,19 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
 }
 
 /// Run OCR scoped to a single window and return matching text with screen coordinates.
-fn find_text_in_window(search: &str, window_id: u32) -> Result<Vec<ocr::TextMatch>, String> {
+fn find_text_in_window(
+    search: &str,
+    window_id: u32,
+    uses_language_correction: bool,
+) -> Result<Vec<ocr::TextMatch>, String> {
     let screenshot = crate::platform::capture_window(window_id)
         .map_err(|e| format!("Failed to capture window: {}", e))?;
 
-    let mut matches = ocr::ocr_image(&screenshot.png_data, Some(screenshot.scale_factor))?;
+    let mut matches = ocr::ocr_image(
+        &screenshot.png_data,
+        Some(screenshot.scale_factor),
+        uses_language_correction,
+    )?;
 
     // Offset OCR coordinates from image-relative to screen-absolute
     for m in &mut matches {
