@@ -413,34 +413,23 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
     };
 
     // Primary: try accessibility tree search
-    let ax_result = find_text_accessibility(&params.text, window_id);
-    match &ax_result {
+    match find_text_accessibility(&params.text, window_id) {
         Ok(matches) if !matches.is_empty() => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] accessibility search found {} matches for '{}'",
-                    matches.len(),
-                    params.text
-                );
-            }
-            return serialize_matches(matches);
+            return serialize_matches(&matches);
         }
-        Ok(_) => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] accessibility search found no matches for '{}', falling back to OCR",
-                    params.text
-                );
-            }
+        Ok(_) if debug => {
+            eprintln!(
+                "[DEBUG find_text] no accessibility matches for '{}', trying OCR",
+                params.text
+            );
         }
-        Err(e) => {
-            if debug {
-                eprintln!(
-                    "[DEBUG find_text] accessibility search failed for '{}': {}, falling back to OCR",
-                    params.text, e
-                );
-            }
+        Err(e) if debug => {
+            eprintln!(
+                "[DEBUG find_text] accessibility failed for '{}': {}, trying OCR",
+                params.text, e
+            );
         }
+        _ => {}
     }
 
     // Fallback: OCR

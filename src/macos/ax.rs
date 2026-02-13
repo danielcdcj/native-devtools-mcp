@@ -190,13 +190,17 @@ unsafe fn get_string_attribute(element: AXUIElementRef, attr_name: &str) -> Opti
 /// Get position (CGPoint) and size (CGSize) of an AX element.
 /// Returns None if either attribute is missing.
 unsafe fn get_position_and_size(element: AXUIElementRef) -> Option<(CGPoint, CGSize)> {
-    let position = get_ax_point(element, "AXPosition")?;
-    let size = get_ax_size(element, "AXSize")?;
+    let position: CGPoint = get_ax_value(element, "AXPosition", K_AX_VALUE_TYPE_CGPOINT)?;
+    let size: CGSize = get_ax_value(element, "AXSize", K_AX_VALUE_TYPE_CGSIZE)?;
     Some((position, size))
 }
 
-/// Extract a CGPoint from an AXValue attribute.
-unsafe fn get_ax_point(element: AXUIElementRef, attr_name: &str) -> Option<CGPoint> {
+/// Extract a typed value (CGPoint or CGSize) from an AXValue attribute.
+unsafe fn get_ax_value<T: Default>(
+    element: AXUIElementRef,
+    attr_name: &str,
+    ax_value_type: u32,
+) -> Option<T> {
     let attr = CFString::new(attr_name);
     let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
     let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
@@ -205,43 +209,17 @@ unsafe fn get_ax_point(element: AXUIElementRef, attr_name: &str) -> Option<CGPoi
         return None;
     }
 
-    let mut point = CGPoint::new(0.0, 0.0);
+    let mut result = T::default();
     let ok = AXValueGetValue(
         value_ref as AXValueRef,
-        K_AX_VALUE_TYPE_CGPOINT,
-        &mut point as *mut CGPoint as *mut c_void,
+        ax_value_type,
+        &mut result as *mut T as *mut c_void,
     );
 
     core_foundation::base::CFRelease(value_ref);
 
     if ok {
-        Some(point)
-    } else {
-        None
-    }
-}
-
-/// Extract a CGSize from an AXValue attribute.
-unsafe fn get_ax_size(element: AXUIElementRef, attr_name: &str) -> Option<CGSize> {
-    let attr = CFString::new(attr_name);
-    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
-    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
-
-    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
-        return None;
-    }
-
-    let mut size = CGSize::new(0.0, 0.0);
-    let ok = AXValueGetValue(
-        value_ref as AXValueRef,
-        K_AX_VALUE_TYPE_CGSIZE,
-        &mut size as *mut CGSize as *mut c_void,
-    );
-
-    core_foundation::base::CFRelease(value_ref);
-
-    if ok {
-        Some(size)
+        Some(result)
     } else {
         None
     }
