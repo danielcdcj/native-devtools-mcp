@@ -26,6 +26,9 @@ Rewrote the server instructions that LLMs see to prevent tool misrouting between
 
 ## v0.3.6
 
-- Initial Android device support via ADB (behind `--features android` flag)
-- Cross-device compatibility improvements (Samsung, Xiaomi/MIUI)
-- Android smoke tests and tool gating tests
+- Accessibility API element tree search for `find_text` on macOS (faster, more accurate than OCR alone)
+- Added `app_name` and `window_id` params to `find_text` for window-scoped search
+- Added `launch_app` tool to start applications by name
+- Disabled OCR language correction by default for better UI text detection
+- `find_text` returns empty JSON array instead of prose on zero matches
+- Windows compatibility fix for screenshot OCR
