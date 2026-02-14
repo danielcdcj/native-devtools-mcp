@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.1
+
+- Added MCP Registry publishing to the release workflow
+- Server is now discoverable at `io.github.sh3ll3x3c/native-devtools` on the MCP Registry
+
 ## v0.4.0
 
 ### Android support included by default
