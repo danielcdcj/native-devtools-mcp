@@ -20,14 +20,30 @@ pub struct UiBounds {
     pub height: f64,
 }
 
+const DUMP_PATH: &str = "/sdcard/ui_dump.xml";
+
 /// Find UI elements matching `search` text (case-insensitive) via `uiautomator dump`.
+///
+/// Tries dumping to `/dev/tty` first (fast, avoids file I/O). If the device doesn't
+/// return XML inline (e.g. Samsung), falls back to dumping to a temp file on the device.
 pub fn find_text(device: &mut AndroidDevice, search: &str) -> Result<Vec<UiElement>, String> {
+    // Try /dev/tty first — works on most AOSP-based devices.
     let output = device
         .shell("uiautomator dump /dev/tty")
         .map_err(|e| format!("uiautomator dump failed: {}", e))?;
 
-    // uiautomator dump prefixes output with "UI hierrchy dumped to: /dev/tty"
-    // Strip everything before the first '<' to get the actual XML.
+    if let Some(xml_start) = output.find('<') {
+        return Ok(search_xml(&output[xml_start..], search));
+    }
+
+    // Fallback: dump to file (required on Samsung and some other OEMs).
+    let output = device
+        .shell(&format!(
+            "uiautomator dump {path} && cat {path} && rm -f {path}",
+            path = DUMP_PATH
+        ))
+        .map_err(|e| format!("uiautomator dump (file fallback) failed: {}", e))?;
+
     let xml_start = output.find('<').ok_or_else(|| {
         format!(
             "UI dump failed — device may be locked or showing a system dialog. Raw output: {}",

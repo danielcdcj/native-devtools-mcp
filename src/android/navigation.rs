@@ -35,6 +35,9 @@ pub fn list_apps(
 }
 
 pub fn launch_app(device: &mut AndroidDevice, package_name: &str) -> Result<(), String> {
+    // Force-stop first so the app starts fresh (avoids resuming a stale activity).
+    device.shell_args(&["am", "force-stop", package_name]).ok();
+
     let output = device.shell_args(&[
         "monkey",
         "-p",
@@ -125,12 +128,18 @@ fn parse_wm_density(output: &str) -> Option<u32> {
     result
 }
 
-/// Find the resumed activity from `dumpsys activity activities` output by looking
-/// for `mResumedActivity` lines with a component like `com.example.app/.MainActivity`.
+/// Find the resumed activity from `dumpsys activity activities` output.
+/// Matches common field names across Android variants:
+/// - `mResumedActivity` (AOSP/stock)
+/// - `topResumedActivity` (Samsung One UI, newer AOSP)
+/// - `ResumedActivity:` (some Samsung builds)
 fn parse_resumed_activity(output: &str) -> Option<AndroidActivity> {
     for line in output.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("mResumedActivity") {
+        if trimmed.contains("mResumedActivity")
+            || trimmed.contains("topResumedActivity")
+            || trimmed.starts_with("ResumedActivity:")
+        {
             if let Some(component) = extract_component_from_activity_line(trimmed) {
                 return Some(component);
             }
@@ -223,5 +232,25 @@ mod tests {
         let activity = result.unwrap();
         assert_eq!(activity.package, "com.app");
         assert_eq!(activity.activity, "com.app.MainActivity");
+    }
+
+    #[test]
+    fn test_parse_resumed_activity_samsung_top_resumed() {
+        let output = "      topResumedActivity=ActivityRecord{205279515 u0 com.microsoft.launcher/.Launcher t17857}\n";
+        let result = parse_resumed_activity(output);
+        assert!(result.is_some());
+        let activity = result.unwrap();
+        assert_eq!(activity.package, "com.microsoft.launcher");
+        assert_eq!(activity.activity, "com.microsoft.launcher.Launcher");
+    }
+
+    #[test]
+    fn test_parse_resumed_activity_samsung_resumed_label() {
+        let output = "  ResumedActivity: ActivityRecord{108657286 u0 com.android.settings/.Settings t18519}\n";
+        let result = parse_resumed_activity(output);
+        assert!(result.is_some());
+        let activity = result.unwrap();
+        assert_eq!(activity.package, "com.android.settings");
+        assert_eq!(activity.activity, "com.android.settings.Settings");
     }
 }
