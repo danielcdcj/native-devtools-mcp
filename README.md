@@ -9,9 +9,11 @@
 
 **Give your AI agent "eyes" and "hands" for native desktop applications.**
 
-A Model Context Protocol (MCP) server that provides **Computer Use** capabilities: screenshots, OCR, input simulation, and window management.
+A Model Context Protocol (MCP) server that provides **Computer Use** capabilities: screenshots, OCR, input simulation, and window management — for **native desktop apps**, not just browsers.
 
-[//]: # "Search keywords: MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, mouse, keyboard, screen reading, macOS, Windows, native-devtools-mcp"
+**Works with:** [Claude Desktop](https://claude.ai/download) • [Claude Code](https://docs.anthropic.com/en/docs/claude-code) • [Cursor](https://cursor.com) • Any MCP-compatible client
+
+[//]: # "Search keywords: MCP, MCP server, Model Context Protocol, computer use, desktop automation, UI automation, native app testing, test automation, e2e testing, RPA, screenshots, OCR, template matching, accessibility, mouse, keyboard, screen reading, macOS, Windows, Claude, Claude Code, Cursor, AI agent, native-devtools-mcp"
 
 [Features](#-features) • [Installation](#-installation) • [For AI Agents](#-for-ai-agents-llms) • [Permissions](#-required-permissions-macos)
 
@@ -29,10 +31,6 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 </div>
 
 ---
-
-## 🔍 Search Keywords
-
-MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, screen reading, mouse, keyboard, macOS, Windows, native-devtools-mcp.
 
 ## 🚀 Features
 
