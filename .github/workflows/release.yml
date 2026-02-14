@@ -163,27 +163,32 @@ jobs:
         with:
           path: artifacts
 
-      - name: Check for release notes
-        id: release_notes
+      - name: Extract changelog for this version
+        id: changelog
         run: |
-          if [ -f RELEASE_NOTES.md ]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Extract the section between "## vX.Y.Z" and the next "## v" heading (or EOF)
+          NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '1d;$d' | sed '/^$/N;/^\n$/d')
+          if [ -n "$NOTES" ]; then
             echo "has_notes=true" >> "$GITHUB_OUTPUT"
+            # Write to file for body_path (handles multiline safely)
+            echo "$NOTES" > RELEASE_BODY.md
           else
             echo "has_notes=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create GitHub Release (with notes)
-        if: steps.release_notes.outputs.has_notes == 'true'
+      - name: Create GitHub Release (with changelog)
+        if: steps.changelog.outputs.has_notes == 'true'
         uses: softprops/action-gh-release@v1
         with:
           files: |
             artifacts/native-devtools-mcp-*/*.tar.gz
             artifacts/native-devtools-mcp-*/*.zip
             artifacts/macos-app-dmg/*.dmg
-          body_path: RELEASE_NOTES.md
+          body_path: RELEASE_BODY.md
 
       - name: Create GitHub Release (auto-generated)
-        if: steps.release_notes.outputs.has_notes == 'false'
+        if: steps.changelog.outputs.has_notes == 'false'
         uses: softprops/action-gh-release@v1
         with:
           files: |

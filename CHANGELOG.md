@@ -1,4 +1,6 @@
-## What's New in v0.4.0
+# Changelog
+
+## v0.4.0
 
 ### Android support included by default
 
@@ -21,3 +23,9 @@ Rewrote the server instructions that LLMs see to prevent tool misrouting between
 ### Breaking changes
 
 - The `android` Cargo feature flag has been removed. `adb_client` and `quick-xml` are now default dependencies. If you were building without `--features android`, your binary will now be slightly larger (~1MB) but functionally identical — Android tools remain hidden until you call `android_connect`.
+
+## v0.3.6
+
+- Initial Android device support via ADB (behind `--features android` flag)
+- Cross-device compatibility improvements (Samsung, Xiaomi/MIUI)
+- Android smoke tests and tool gating tests
