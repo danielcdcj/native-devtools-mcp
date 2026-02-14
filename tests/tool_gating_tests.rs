@@ -99,6 +99,78 @@ mod tool_gating {
 }
 
 #[cfg(test)]
+#[cfg(feature = "android")]
+mod android_tool_gating {
+    use super::*;
+
+    #[test]
+    fn test_android_base_tools_always_present() {
+        let tools = MacOSDevToolsServer::get_tools(false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        assert!(names.contains(&"android_list_devices".to_string()));
+        assert!(names.contains(&"android_connect".to_string()));
+    }
+
+    #[test]
+    fn test_android_tools_hidden_when_disconnected() {
+        let tools = MacOSDevToolsServer::get_tools(false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        assert!(!names.contains(&"android_disconnect".to_string()));
+        assert!(!names.contains(&"android_screenshot".to_string()));
+        assert!(!names.contains(&"android_click".to_string()));
+        assert!(!names.contains(&"android_swipe".to_string()));
+        assert!(!names.contains(&"android_type_text".to_string()));
+        assert!(!names.contains(&"android_press_key".to_string()));
+        assert!(!names.contains(&"android_find_text".to_string()));
+        assert!(!names.contains(&"android_list_apps".to_string()));
+        assert!(!names.contains(&"android_launch_app".to_string()));
+        assert!(!names.contains(&"android_get_display_info".to_string()));
+        assert!(!names.contains(&"android_get_current_activity".to_string()));
+    }
+
+    #[test]
+    fn test_android_tools_visible_when_connected() {
+        let tools = MacOSDevToolsServer::get_tools(false, true);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        // Base tools
+        assert!(names.contains(&"android_list_devices".to_string()));
+        assert!(names.contains(&"android_connect".to_string()));
+
+        // Connected-only tools
+        assert!(names.contains(&"android_disconnect".to_string()));
+        assert!(names.contains(&"android_screenshot".to_string()));
+        assert!(names.contains(&"android_click".to_string()));
+        assert!(names.contains(&"android_swipe".to_string()));
+        assert!(names.contains(&"android_type_text".to_string()));
+        assert!(names.contains(&"android_press_key".to_string()));
+        assert!(names.contains(&"android_find_text".to_string()));
+        assert!(names.contains(&"android_list_apps".to_string()));
+        assert!(names.contains(&"android_launch_app".to_string()));
+        assert!(names.contains(&"android_get_display_info".to_string()));
+        assert!(names.contains(&"android_get_current_activity".to_string()));
+    }
+
+    #[test]
+    fn test_android_connection_adds_tools() {
+        let disconnected = MacOSDevToolsServer::get_tools(false, false);
+        let connected = MacOSDevToolsServer::get_tools(false, true);
+
+        assert!(
+            connected.len() > disconnected.len(),
+            "Android connected state should expose more tools: {} vs {}",
+            connected.len(),
+            disconnected.len()
+        );
+
+        // Should add exactly 11 tools (disconnect + 10 functional tools)
+        assert_eq!(connected.len() - disconnected.len(), 11);
+    }
+}
+
+#[cfg(test)]
 mod server_capabilities {
     use super::*;
 
