@@ -3,6 +3,10 @@ use crate::tools::{
     app_protocol as app_tools, find_image, image_cache::ImageCache, input as input_tools,
     load_image, navigation, screenshot, screenshot_cache::ScreenshotCache,
 };
+#[cfg(feature = "android")]
+use base64::Engine;
+#[cfg(feature = "android")]
+use rmcp::model::Content;
 use rmcp::{
     handler::server::ServerHandler,
     model::{
@@ -16,6 +20,38 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[cfg(feature = "android")]
+use crate::android::AndroidDevice;
+
+/// Serialize a value to pretty-printed JSON, returning a formatted error on failure.
+#[cfg(feature = "android")]
+fn to_json_pretty(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|e| format!("Failed to serialize: {}", e))
+}
+
+/// Extract a required string field from a JSON value.
+#[cfg(feature = "android")]
+fn parse_string_field(args: &Value, field: &str) -> Result<String, McpError> {
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| McpError::invalid_params(format!("missing required param: {}", field), None))
+}
+
+/// Extract required `x` and `y` number fields from a JSON value.
+#[cfg(feature = "android")]
+fn parse_xy(args: &Value) -> Result<(f64, f64), McpError> {
+    let x = args
+        .get("x")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| McpError::invalid_params("missing required param: x", None))?;
+    let y = args
+        .get("y")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| McpError::invalid_params("missing required param: y", None))?;
+    Ok((x, y))
+}
+
 fn json_to_object(value: Value) -> rmcp::model::JsonObject {
     match value {
         Value::Object(map) => map,
@@ -28,6 +64,8 @@ pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
     screenshot_cache: Arc<RwLock<ScreenshotCache>>,
     image_cache: Arc<RwLock<ImageCache>>,
+    #[cfg(feature = "android")]
+    android_device: Arc<RwLock<Option<AndroidDevice>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -42,22 +80,54 @@ impl MacOSDevToolsServer {
             app_client: Arc::new(RwLock::new(None)),
             screenshot_cache: Arc::new(RwLock::new(ScreenshotCache::default())),
             image_cache: Arc::new(RwLock::new(ImageCache::default())),
+            #[cfg(feature = "android")]
+            android_device: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Check if currently connected to an app debug server
     async fn is_connected(&self) -> bool {
         self.app_client.read().await.is_some()
+    }
+
+    #[cfg(feature = "android")]
+    async fn is_android_connected(&self) -> bool {
+        self.android_device.read().await.is_some()
+    }
+
+    /// Acquire the android device lock and call `f` with a mutable reference.
+    /// Returns a "not connected" error result if no device is connected.
+    #[cfg(feature = "android")]
+    async fn with_android_device<F>(&self, f: F) -> CallToolResult
+    where
+        F: FnOnce(&mut AndroidDevice) -> CallToolResult,
+    {
+        let mut guard = self.android_device.write().await;
+        match guard.as_mut() {
+            Some(device) => f(device),
+            None => CallToolResult::error(vec![Content::text(
+                "No Android device connected. Use android_connect first.",
+            )]),
+        }
     }
 
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
-    pub fn get_tools(connected: bool) -> Vec<Tool> {
+    pub fn get_tools(
+        app_connected: bool,
+        #[cfg(feature = "android")] android_connected: bool,
+    ) -> Vec<Tool> {
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
-        if connected {
+        if app_connected {
             tools.extend(Self::get_app_tools());
+        }
+        #[cfg(feature = "android")]
+        {
+            tools.extend(Self::get_android_base_tools());
+            if android_connected {
+                tools.extend(Self::get_android_tools());
+            }
         }
         tools
     }
@@ -714,6 +784,196 @@ impl MacOSDevToolsServer {
             ),
         ]
     }
+
+    /// Android tools that are always available (device discovery and connection)
+    #[cfg(feature = "android")]
+    fn get_android_base_tools() -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "android_list_devices",
+                "List all Android devices connected via ADB.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "android_connect",
+                "Connect to an Android device by its serial number. Use android_list_devices to find available devices.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["serial"],
+                    "properties": {
+                        "serial": {
+                            "type": "string",
+                            "description": "Device serial number (e.g., 'emulator-5554' or a USB device serial)"
+                        }
+                    }
+                }))),
+            ),
+        ]
+    }
+
+    /// Android tools available only when a device is connected
+    #[cfg(feature = "android")]
+    fn get_android_tools() -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "android_disconnect",
+                "Disconnect from the current Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "android_screenshot",
+                "Take a screenshot of the Android device screen. Returns a base64-encoded JPEG image.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Optional file path to save the screenshot PNG to instead of returning it inline."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_click",
+                "Tap at screen coordinates on the Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Screen X coordinate"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Screen Y coordinate"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_swipe",
+                "Swipe from one point to another on the Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["start_x", "start_y", "end_x", "end_y"],
+                    "properties": {
+                        "start_x": {
+                            "type": "number",
+                            "description": "Start X coordinate"
+                        },
+                        "start_y": {
+                            "type": "number",
+                            "description": "Start Y coordinate"
+                        },
+                        "end_x": {
+                            "type": "number",
+                            "description": "End X coordinate"
+                        },
+                        "end_y": {
+                            "type": "number",
+                            "description": "End Y coordinate"
+                        },
+                        "duration_ms": {
+                            "type": "integer",
+                            "description": "Duration of the swipe in milliseconds (optional, default is instant)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_type_text",
+                "Type text on the Android device. Special characters are automatically escaped.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to type"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_press_key",
+                "Press a key on the Android device by keycode name (e.g., 'KEYCODE_HOME') or numeric code.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Key to press (e.g., 'KEYCODE_HOME', 'KEYCODE_BACK', 'KEYCODE_ENTER', or a numeric keycode)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_find_text",
+                "Find UI elements on the Android device screen that match the given text. Uses uiautomator to dump the view hierarchy and search for matching elements. Returns coordinates for clicking.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to search for (case-insensitive substring match against text and content-desc attributes)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_list_apps",
+                "List installed apps on the Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "user_apps_only": {
+                            "type": "boolean",
+                            "description": "Only return user-installed (third-party) apps. Default is false (all packages)."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_launch_app",
+                "Launch an app on the Android device by its package name.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["package_name"],
+                    "properties": {
+                        "package_name": {
+                            "type": "string",
+                            "description": "Package name to launch (e.g., 'com.android.settings')"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "android_get_display_info",
+                "Get display information (size and density) from the Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "android_get_current_activity",
+                "Get the currently resumed activity on the Android device.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+        ]
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
@@ -758,7 +1018,11 @@ impl ServerHandler for MacOSDevToolsServer {
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
         Ok(ListToolsResult {
-            tools: Self::get_tools(connected),
+            tools: Self::get_tools(
+                connected,
+                #[cfg(feature = "android")]
+                self.is_android_connected().await,
+            ),
             next_cursor: None,
         })
     }
@@ -914,6 +1178,233 @@ impl ServerHandler for MacOSDevToolsServer {
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(load_image::load_image(params, self.image_cache.clone()).await)
             }
+            // Android tools
+            #[cfg(feature = "android")]
+            "android_list_devices" => match crate::android::device::list_devices() {
+                Ok(devices) => Ok(CallToolResult::success(vec![Content::text(
+                    to_json_pretty(&devices),
+                )])),
+                Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+            },
+            #[cfg(feature = "android")]
+            "android_connect" => {
+                let serial = parse_string_field(&args, "serial")?;
+                match AndroidDevice::connect(&serial) {
+                    Ok(device) => {
+                        let msg = format!(
+                            "Connected to Android device '{}'. Android tools (android_*) are now available.",
+                            device.serial
+                        );
+                        *self.android_device.write().await = Some(device);
+                        let _ = context.peer.notify_tool_list_changed().await;
+                        Ok(CallToolResult::success(vec![Content::text(msg)]))
+                    }
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
+            }
+            #[cfg(feature = "android")]
+            "android_disconnect" => {
+                if self.android_device.write().await.take().is_some() {
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "Disconnected from Android device. Android tools (android_*) are no longer available.",
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(
+                        "No Android device connected.",
+                    )]))
+                }
+            }
+            #[cfg(feature = "android")]
+            "android_screenshot" => {
+                let file_path = args
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(self
+                    .with_android_device(|device| {
+                        let shot = match crate::android::screenshot::capture(device) {
+                            Ok(s) => s,
+                            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+                        };
+                        if let Some(ref path) = file_path {
+                            return match std::fs::write(path, &shot.png_data) {
+                                Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                    "Screenshot saved to {} ({}x{})",
+                                    path, shot.width, shot.height
+                                ))]),
+                                Err(e) => CallToolResult::error(vec![Content::text(format!(
+                                    "Failed to save screenshot: {}",
+                                    e
+                                ))]),
+                            };
+                        }
+                        let (image_data, mime_type) = match screenshot::png_to_jpeg(&shot.png_data)
+                        {
+                            Ok(jpeg_data) => (jpeg_data, "image/jpeg"),
+                            Err(e) => {
+                                tracing::warn!("JPEG conversion failed, using PNG: {}", e);
+                                (shot.png_data, "image/png")
+                            }
+                        };
+                        let base64_data =
+                            base64::engine::general_purpose::STANDARD.encode(&image_data);
+                        let mut contents = vec![Content::image(base64_data, mime_type)];
+                        contents.push(Content::text(to_json_pretty(&serde_json::json!({
+                            "width": shot.width,
+                            "height": shot.height,
+                            "scale": 1.0,
+                            "device": device.serial,
+                        }))));
+                        CallToolResult::success(contents)
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_click" => {
+                let (x, y) = parse_xy(&args)?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::click(device, x, y) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Tapped at ({:.0}, {:.0})",
+                                x, y
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_swipe" => {
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    start_x: f64,
+                    start_y: f64,
+                    end_x: f64,
+                    end_y: f64,
+                    duration_ms: Option<u32>,
+                }
+                let p: Params = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::swipe(
+                            device,
+                            p.start_x,
+                            p.start_y,
+                            p.end_x,
+                            p.end_y,
+                            p.duration_ms,
+                        ) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Swiped from ({:.0}, {:.0}) to ({:.0}, {:.0})",
+                                p.start_x, p.start_y, p.end_x, p.end_y
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_type_text" => {
+                let text = parse_string_field(&args, "text")?;
+                let len = text.len();
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::type_text(device, &text) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Typed {} characters",
+                                len
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_press_key" => {
+                let key = parse_string_field(&args, "key")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::press_key(device, &key) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Pressed key: {}",
+                                key
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_find_text" => {
+                let text = parse_string_field(&args, "text")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::ui_automator::find_text(device, &text) {
+                            Ok(elements) => CallToolResult::success(vec![Content::text(
+                                to_json_pretty(&elements),
+                            )]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_list_apps" => {
+                let user_apps_only = args
+                    .get("user_apps_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::navigation::list_apps(device, user_apps_only) {
+                            Ok(apps) => {
+                                CallToolResult::success(vec![Content::text(to_json_pretty(&apps))])
+                            }
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_launch_app" => {
+                let package_name = parse_string_field(&args, "package_name")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::navigation::launch_app(device, &package_name) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Launched {}",
+                                package_name
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
+            }
+            #[cfg(feature = "android")]
+            "android_get_display_info" => Ok(self
+                .with_android_device(|device| {
+                    match crate::android::navigation::get_display_info(device) {
+                        Ok(info) => {
+                            CallToolResult::success(vec![Content::text(to_json_pretty(&info))])
+                        }
+                        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                    }
+                })
+                .await),
+            #[cfg(feature = "android")]
+            "android_get_current_activity" => Ok(self
+                .with_android_device(
+                    |device| match crate::android::navigation::get_current_activity(device) {
+                        Ok(activity) => {
+                            CallToolResult::success(vec![Content::text(to_json_pretty(&activity))])
+                        }
+                        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                    },
+                )
+                .await),
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
                 None,

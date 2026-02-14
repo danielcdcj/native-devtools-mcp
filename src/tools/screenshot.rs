@@ -43,7 +43,7 @@ fn default_include_ocr() -> bool {
 const JPEG_QUALITY: u8 = 80;
 
 /// Convert PNG data to JPEG.
-fn png_to_jpeg(png_data: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn png_to_jpeg(png_data: &[u8]) -> Result<Vec<u8>, String> {
     let img = ImageReader::new(Cursor::new(png_data))
         .with_guessed_format()
         .map_err(|e| format!("Failed to read image: {}", e))?

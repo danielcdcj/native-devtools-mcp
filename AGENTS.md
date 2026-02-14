@@ -1,10 +1,10 @@
 # Agent Context: native-devtools-mcp
 
-**About:** This is the AGENTS.md for **native-devtools-mcp**, an MCP (Model Context Protocol) server that enables **computer use** / **desktop automation** on macOS and Windows: screenshots, OCR, mouse/keyboard input, and window management.
+**About:** This is the AGENTS.md for **native-devtools-mcp**, an MCP (Model Context Protocol) server that enables **computer use** / **desktop automation** on macOS, Windows, and Android: screenshots, OCR, mouse/keyboard input, window management, and Android device control via ADB.
 
-**Search keywords:** MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, screen reading, mouse, keyboard, macOS, Windows, native-devtools-mcp.
+**Search keywords:** MCP, Model Context Protocol, computer use, desktop automation, UI automation, RPA, screenshots, OCR, screen reading, mouse, keyboard, macOS, Windows, Android, ADB, mobile testing, native-devtools-mcp.
 
-**Role:** You are an agent equipped with "Computer Use" capabilities. You can see the screen, type, move the mouse, and interact with native desktop applications.
+**Role:** You are an agent equipped with "Computer Use" capabilities. You can see the screen, type, move the mouse, and interact with native desktop and mobile applications.
 
 **Constraint:** You are operating a real machine. Actions are permanent. Ensure you verify the state of the screen before and after actions.
 
@@ -98,6 +98,43 @@ Scrolls at a specific screen position.
 
 *   `list_windows`: Returns array of `{ id, title, bounds, app_name }`.
 *   `focus_window`: Accepts `{ window_id: 123 }`, `{ app_name: "Code" }`, or `{ pid: 999 }`.
+
+### 4. Android Device Control (requires `android` feature flag)
+
+Android tools use the `android_` prefix. Device management tools are always available; all other tools appear after connecting to a device.
+
+#### Device Management
+*   `android_list_devices`: Lists connected ADB devices. Returns `[{ "serial": "abc123", "state": "device" }]`.
+*   `android_connect`: Connect to a device. **Input:** `serial` (string). Unlocks all other `android_*` tools.
+*   `android_disconnect`: Disconnect from the current device.
+
+#### Vision
+*   `android_screenshot`: Captures the device screen. Returns a PNG image + metadata `{ "device": "abc123", "width": 1080, "height": 2400, "scale": 1.0 }`.
+*   `android_find_text`: Find UI elements by text (case-insensitive substring). Uses `uiautomator dump` to search the accessibility tree. **Input:** `text` (string). Returns `[{ "text": "OK", "x": 540, "y": 1200, "bounds": { "x": 480, "y": 1170, "width": 120, "height": 60 } }]`.
+
+#### Input
+*   `android_click`: Tap at screen coordinates. **Inputs:** `x`, `y` (numbers).
+*   `android_swipe`: Swipe between two points. **Inputs:** `start_x`, `start_y`, `end_x`, `end_y` (numbers), `duration_ms` (optional).
+*   `android_type_text`: Type text on the device. **Input:** `text` (string). Handles shell escaping automatically.
+*   `android_press_key`: Press a key. **Input:** `key` (string, e.g., `"KEYCODE_HOME"`, `"KEYCODE_BACK"`, `"KEYCODE_ENTER"`).
+
+#### App & Display Info
+*   `android_launch_app`: Launch an app. **Input:** `package` (string, e.g., `"com.android.settings"`).
+*   `android_list_apps`: List installed packages.
+*   `android_get_display_info`: Returns `{ "width": 1080, "height": 2400, "density": 440 }`.
+*   `android_get_current_activity`: Returns the current foreground activity component.
+
+#### Android Workflow Example
+```
+1. android_list_devices                    → [{"serial": "abc123", "state": "device"}]
+2. android_connect(serial="abc123")        → Connected
+3. android_screenshot                      → [image + metadata]
+4. android_find_text(text="Settings")      → [{"text": "Settings", "x": 540, "y": 800, ...}]
+5. android_click(x=540, y=800)             → Tapped
+6. android_screenshot                      → Verify result
+```
+
+**Note:** Android coordinates are absolute screen pixels (no scale conversion needed). Use `x`/`y` from `android_find_text` directly with `android_click`.
 
 ---
 
