@@ -163,7 +163,27 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create GitHub Release
+      - name: Check for release notes
+        id: release_notes
+        run: |
+          if [ -f RELEASE_NOTES.md ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (with notes)
+        if: steps.release_notes.outputs.has_notes == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/native-devtools-mcp-*/*.tar.gz
+            artifacts/native-devtools-mcp-*/*.zip
+            artifacts/macos-app-dmg/*.dmg
+          body_path: RELEASE_NOTES.md
+
+      - name: Create GitHub Release (auto-generated)
+        if: steps.release_notes.outputs.has_notes == 'false'
         uses: softprops/action-gh-release@v1
         with:
           files: |
