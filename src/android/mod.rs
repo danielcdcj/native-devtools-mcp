@@ -4,4 +4,4 @@ pub mod navigation;
 pub mod screenshot;
 pub mod ui_automator;
 
-pub use device::{AndroidDevice, AndroidDeviceInfo};
+pub use device::AndroidDevice;
