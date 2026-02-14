@@ -1,6 +1,7 @@
 {
   "name": "native-devtools-mcp",
   "version": "0.4.0",
+  "mcpName": "io.github.sh3ll3x3c/native-devtools",
   "description": "MCP server for native app testing — screenshot, OCR, click, type, find_text, template matching. macOS, Windows & Android.",
   "license": "MIT",
   "repository": {
