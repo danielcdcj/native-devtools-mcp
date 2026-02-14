@@ -1,7 +1,7 @@
 {
   "name": "native-devtools-mcp",
   "version": "0.4.0",
-  "description": "MCP server for native desktop app testing — screenshot, OCR, click, type, find_text, template matching. macOS & Windows.",
+  "description": "MCP server for native app testing — screenshot, OCR, click, type, find_text, template matching. macOS, Windows & Android.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -39,7 +39,11 @@
     "testing",
     "automation",
     "macos",
-    "windows"
+    "windows",
+    "android",
+    "adb",
+    "mobile-testing",
+    "mobile-automation"
   ],
   "bin": {
     "native-devtools-mcp": "bin/cli.js"
