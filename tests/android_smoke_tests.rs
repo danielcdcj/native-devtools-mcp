@@ -5,7 +5,7 @@
 //!
 //! Run with:
 //! ```bash
-//! cargo test --features android --test android_smoke_tests -- --ignored --test-threads=1
+//! cargo test --test android_smoke_tests -- --ignored --test-threads=1
 //! ```
 //!
 //! Tests must run sequentially (`--test-threads=1`) since they share a single physical device.
@@ -15,8 +15,6 @@
 //! - Device authorized for USB debugging
 //! - Screen unlocked and awake
 //! - For input/uiautomator tests: MIUI devices need "USB debugging (Security settings)" enabled
-
-#![cfg(feature = "android")]
 
 use native_devtools_mcp::android::{device, input, navigation, screenshot, ui_automator};
 use std::thread;

@@ -3,9 +3,7 @@ use crate::tools::{
     app_protocol as app_tools, find_image, image_cache::ImageCache, input as input_tools,
     load_image, navigation, screenshot, screenshot_cache::ScreenshotCache,
 };
-#[cfg(feature = "android")]
 use base64::Engine;
-#[cfg(feature = "android")]
 use rmcp::model::Content;
 use rmcp::{
     handler::server::ServerHandler,
@@ -20,17 +18,14 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[cfg(feature = "android")]
 use crate::android::AndroidDevice;
 
 /// Serialize a value to pretty-printed JSON, returning a formatted error on failure.
-#[cfg(feature = "android")]
 fn to_json_pretty(value: &impl serde::Serialize) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|e| format!("Failed to serialize: {}", e))
 }
 
 /// Extract a required string field from a JSON value.
-#[cfg(feature = "android")]
 fn parse_string_field(args: &Value, field: &str) -> Result<String, McpError> {
     args.get(field)
         .and_then(|v| v.as_str())
@@ -39,7 +34,6 @@ fn parse_string_field(args: &Value, field: &str) -> Result<String, McpError> {
 }
 
 /// Extract required `x` and `y` number fields from a JSON value.
-#[cfg(feature = "android")]
 fn parse_xy(args: &Value) -> Result<(f64, f64), McpError> {
     let x = args
         .get("x")
@@ -64,7 +58,6 @@ pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
     screenshot_cache: Arc<RwLock<ScreenshotCache>>,
     image_cache: Arc<RwLock<ImageCache>>,
-    #[cfg(feature = "android")]
     android_device: Arc<RwLock<Option<AndroidDevice>>>,
 }
 
@@ -80,7 +73,6 @@ impl MacOSDevToolsServer {
             app_client: Arc::new(RwLock::new(None)),
             screenshot_cache: Arc::new(RwLock::new(ScreenshotCache::default())),
             image_cache: Arc::new(RwLock::new(ImageCache::default())),
-            #[cfg(feature = "android")]
             android_device: Arc::new(RwLock::new(None)),
         }
     }
@@ -89,14 +81,12 @@ impl MacOSDevToolsServer {
         self.app_client.read().await.is_some()
     }
 
-    #[cfg(feature = "android")]
     async fn is_android_connected(&self) -> bool {
         self.android_device.read().await.is_some()
     }
 
     /// Acquire the android device lock and call `f` with a mutable reference.
     /// Returns a "not connected" error result if no device is connected.
-    #[cfg(feature = "android")]
     async fn with_android_device<F>(&self, f: F) -> CallToolResult
     where
         F: FnOnce(&mut AndroidDevice) -> CallToolResult,
@@ -113,21 +103,15 @@ impl MacOSDevToolsServer {
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
-    pub fn get_tools(
-        app_connected: bool,
-        #[cfg(feature = "android")] android_connected: bool,
-    ) -> Vec<Tool> {
+    pub fn get_tools(app_connected: bool, android_connected: bool) -> Vec<Tool> {
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
         if app_connected {
             tools.extend(Self::get_app_tools());
         }
-        #[cfg(feature = "android")]
-        {
-            tools.extend(Self::get_android_base_tools());
-            if android_connected {
-                tools.extend(Self::get_android_tools());
-            }
+        tools.extend(Self::get_android_base_tools());
+        if android_connected {
+            tools.extend(Self::get_android_tools());
         }
         tools
     }
@@ -786,7 +770,6 @@ impl MacOSDevToolsServer {
     }
 
     /// Android tools that are always available (device discovery and connection)
-    #[cfg(feature = "android")]
     fn get_android_base_tools() -> Vec<Tool> {
         vec![
             Tool::new(
@@ -815,7 +798,6 @@ impl MacOSDevToolsServer {
     }
 
     /// Android tools available only when a device is connected
-    #[cfg(feature = "android")]
     fn get_android_tools() -> Vec<Tool> {
         vec![
             Tool::new(
@@ -989,23 +971,38 @@ impl ServerHandler for MacOSDevToolsServer {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             instructions: Some(
-                "Native DevTools MCP server for testing native applications on macOS and Windows.\n\n\
-                 Two approaches for UI interaction:\n\
-                 1. AppDebugKit (app_* tools): For apps with AppDebugKit embedded (macOS only). \
-                    Use app_connect first, then app_click, app_type, etc. for element-level precision.\n\
-                 2. CGEvent/SendInput (click, type_text, etc.): For any app (egui, Electron, etc.). \
-                    Requires Accessibility permission on macOS.\n\n\
-                 CLICKING BY TEXT (PREFERRED): When asked to click a button or UI element by name, \
-                 use find_text first to get accurate screen coordinates, then click at those coordinates. \
-                 Example: find_text(text='Submit') returns coordinates, then click(x=..., y=...). \
-                 This is more reliable than visually estimating coordinates from screenshots.\n\n\
-                 CLICKING BY VISUAL POSITION: When you need to click at a specific visual location \
-                 (not identified by text), use take_screenshot with include_ocr=true. The OCR results \
-                 include screen coordinates you can click directly. For positions not covered by OCR, \
-                 use the screenshot metadata (origin_x, origin_y, scale) to convert pixel positions.\n\n\
-                 IMPORTANT: Always use focus_window before clicking to ensure the target window receives the click.\n\n\
-                 Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code' for VSCode) \
-                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows."
+                "Native DevTools MCP server for automating desktop apps (macOS/Windows) and Android devices.\n\n\
+                 WHICH TOOLS TO USE:\n\
+                 - Desktop apps: use tools WITHOUT a prefix (click, find_text, take_screenshot, type_text, etc.)\n\
+                 - Android devices: use tools WITH the android_ prefix (android_click, android_find_text, etc.)\n\
+                 - App debug protocol: use app_* tools only when given a WebSocket URL to connect to\n\
+                 NEVER mix these — desktop tools do not work on Android and vice versa.\n\n\
+                 == DESKTOP (macOS/Windows) ==\n\n\
+                 CLICKING BY TEXT (PREFERRED): Use find_text to locate UI elements by name, \
+                 then click at the returned coordinates.\n\
+                 Example: find_text(text='Submit') → click(x=..., y=...).\n\n\
+                 CLICKING BY VISUAL POSITION: Use take_screenshot with include_ocr=true. \
+                 The OCR results include screen coordinates you can click directly. \
+                 For positions not covered by OCR, use the screenshot metadata \
+                 (origin_x, origin_y, scale) to convert pixel positions.\n\n\
+                 Always call focus_window before clicking to ensure the target window receives input.\n\n\
+                 Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code') \
+                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n\
+                 App debug protocol (app_* tools): For element-level precision in apps with an embedded \
+                 debug server. Use app_connect with a WebSocket URL first, then app_click, app_type, etc.\n\n\
+                 == ANDROID ==\n\n\
+                 All Android tools require connecting to a device first:\n\
+                 1. android_list_devices — find available devices and their serial numbers\n\
+                 2. android_connect(serial='...') — connect (this unlocks all other android_* tools)\n\
+                 To switch devices, call android_disconnect first, then android_connect to the new device.\n\n\
+                 CLICKING BY TEXT (PREFERRED): Use android_find_text to search the accessibility tree, \
+                 then android_click at the returned coordinates.\n\
+                 Example: android_find_text(text='Settings') → android_click(x=..., y=...).\n\n\
+                 CLICKING BY VISUAL POSITION: Use android_screenshot to see the screen, \
+                 then android_click at the desired coordinates.\n\
+                 Note: android_screenshot has no OCR — always prefer android_find_text for text elements.\n\n\
+                 Android coordinates are absolute screen pixels — no scale conversion needed.\n\
+                 Use android_press_key with Android keycodes (e.g., 'KEYCODE_BACK', 'KEYCODE_HOME')."
                     .to_string(),
             ),
         }
@@ -1018,11 +1015,7 @@ impl ServerHandler for MacOSDevToolsServer {
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
         Ok(ListToolsResult {
-            tools: Self::get_tools(
-                connected,
-                #[cfg(feature = "android")]
-                self.is_android_connected().await,
-            ),
+            tools: Self::get_tools(connected, self.is_android_connected().await),
             next_cursor: None,
         })
     }
@@ -1179,14 +1172,12 @@ impl ServerHandler for MacOSDevToolsServer {
                 Ok(load_image::load_image(params, self.image_cache.clone()).await)
             }
             // Android tools
-            #[cfg(feature = "android")]
             "android_list_devices" => match crate::android::device::list_devices() {
                 Ok(devices) => Ok(CallToolResult::success(vec![Content::text(
                     to_json_pretty(&devices),
                 )])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
             },
-            #[cfg(feature = "android")]
             "android_connect" => {
                 let serial = parse_string_field(&args, "serial")?;
                 match AndroidDevice::connect(&serial) {
@@ -1202,7 +1193,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
                 }
             }
-            #[cfg(feature = "android")]
             "android_disconnect" => {
                 if self.android_device.write().await.take().is_some() {
                     let _ = context.peer.notify_tool_list_changed().await;
@@ -1215,7 +1205,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     )]))
                 }
             }
-            #[cfg(feature = "android")]
             "android_screenshot" => {
                 let file_path = args
                     .get("file_path")
@@ -1260,7 +1249,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_click" => {
                 let (x, y) = parse_xy(&args)?;
                 Ok(self
@@ -1275,7 +1263,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_swipe" => {
                 #[derive(serde::Deserialize)]
                 struct Params {
@@ -1306,7 +1293,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_type_text" => {
                 let text = parse_string_field(&args, "text")?;
                 let len = text.len();
@@ -1322,7 +1308,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_press_key" => {
                 let key = parse_string_field(&args, "key")?;
                 Ok(self
@@ -1337,7 +1322,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_find_text" => {
                 let text = parse_string_field(&args, "text")?;
                 Ok(self
@@ -1351,7 +1335,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_list_apps" => {
                 let user_apps_only = args
                     .get("user_apps_only")
@@ -1368,7 +1351,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_launch_app" => {
                 let package_name = parse_string_field(&args, "package_name")?;
                 Ok(self
@@ -1383,7 +1365,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     })
                     .await)
             }
-            #[cfg(feature = "android")]
             "android_get_display_info" => Ok(self
                 .with_android_device(|device| {
                     match crate::android::navigation::get_display_info(device) {
@@ -1394,7 +1375,6 @@ impl ServerHandler for MacOSDevToolsServer {
                     }
                 })
                 .await),
-            #[cfg(feature = "android")]
             "android_get_current_activity" => Ok(self
                 .with_android_device(
                     |device| match crate::android::navigation::get_current_activity(device) {

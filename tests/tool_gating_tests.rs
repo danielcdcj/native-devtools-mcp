@@ -30,11 +30,7 @@ mod tool_gating {
         // app_* tools (except app_connect) should NOT be present
 
         // This tests the get_tools(false) case
-        let tools = MacOSDevToolsServer::get_tools(
-            false,
-            #[cfg(feature = "android")]
-            false,
-        );
+        let tools = MacOSDevToolsServer::get_tools(false, false);
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools should be present
@@ -57,11 +53,7 @@ mod tool_gating {
     fn test_app_tools_present_when_connected() {
         // When connected, should have base tools + app_connect + all app_* tools
 
-        let connected_tools = MacOSDevToolsServer::get_tools(
-            true,
-            #[cfg(feature = "android")]
-            false,
-        );
+        let connected_tools = MacOSDevToolsServer::get_tools(true, false);
         let tool_names: Vec<String> = connected_tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools should still be present
@@ -86,11 +78,7 @@ mod tool_gating {
         assert!(tool_names.contains(&"app_focus_window".to_string()));
 
         // Connected state should have more tools than disconnected
-        let disconnected_tools = MacOSDevToolsServer::get_tools(
-            false,
-            #[cfg(feature = "android")]
-            false,
-        );
+        let disconnected_tools = MacOSDevToolsServer::get_tools(false, false);
         assert!(
             connected_tools.len() > disconnected_tools.len(),
             "Connected state should expose more tools than disconnected state"
@@ -99,7 +87,6 @@ mod tool_gating {
 }
 
 #[cfg(test)]
-#[cfg(feature = "android")]
 mod android_tool_gating {
     use super::*;
 

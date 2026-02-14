@@ -1,7 +1,6 @@
 // Suppress warnings from cocoa/objc crates (deprecated APIs and cfg warnings)
 #![allow(deprecated)]
 
-#[cfg(feature = "android")]
 pub mod android;
 pub mod app_protocol;
 #[cfg(target_os = "macos")]

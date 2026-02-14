@@ -9,7 +9,6 @@ mod tools;
 #[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(feature = "android")]
 mod android;
 
 // Re-export platform module for unified access
