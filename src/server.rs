@@ -23,6 +23,35 @@ use tokio::sync::RwLock;
 #[cfg(feature = "android")]
 use crate::android::AndroidDevice;
 
+/// Serialize a value to pretty-printed JSON, returning a formatted error on failure.
+#[cfg(feature = "android")]
+fn to_json_pretty(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|e| format!("Failed to serialize: {}", e))
+}
+
+/// Extract a required string field from a JSON value.
+#[cfg(feature = "android")]
+fn parse_string_field(args: &Value, field: &str) -> Result<String, McpError> {
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| McpError::invalid_params(format!("missing required param: {}", field), None))
+}
+
+/// Extract required `x` and `y` number fields from a JSON value.
+#[cfg(feature = "android")]
+fn parse_xy(args: &Value) -> Result<(f64, f64), McpError> {
+    let x = args
+        .get("x")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| McpError::invalid_params("missing required param: x", None))?;
+    let y = args
+        .get("y")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| McpError::invalid_params("missing required param: y", None))?;
+    Ok((x, y))
+}
+
 fn json_to_object(value: Value) -> rmcp::model::JsonObject {
     match value {
         Value::Object(map) => map,
@@ -56,15 +85,29 @@ impl MacOSDevToolsServer {
         }
     }
 
-    /// Check if currently connected to an app debug server
     async fn is_connected(&self) -> bool {
         self.app_client.read().await.is_some()
     }
 
-    /// Check if an Android device is currently connected
     #[cfg(feature = "android")]
     async fn is_android_connected(&self) -> bool {
         self.android_device.read().await.is_some()
+    }
+
+    /// Acquire the android device lock and call `f` with a mutable reference.
+    /// Returns a "not connected" error result if no device is connected.
+    #[cfg(feature = "android")]
+    async fn with_android_device<F>(&self, f: F) -> CallToolResult
+    where
+        F: FnOnce(&mut AndroidDevice) -> CallToolResult,
+    {
+        let mut guard = self.android_device.write().await;
+        match guard.as_mut() {
+            Some(device) => f(device),
+            None => CallToolResult::error(vec![Content::text(
+                "No Android device connected. Use android_connect first.",
+            )]),
+        }
     }
 
     /// Get tools available based on connection state.
@@ -1138,30 +1181,23 @@ impl ServerHandler for MacOSDevToolsServer {
             // Android tools
             #[cfg(feature = "android")]
             "android_list_devices" => match crate::android::device::list_devices() {
-                Ok(devices) => {
-                    let json = serde_json::to_string_pretty(&devices)
-                        .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
-                    Ok(CallToolResult::success(vec![Content::text(json)]))
-                }
+                Ok(devices) => Ok(CallToolResult::success(vec![Content::text(
+                    to_json_pretty(&devices),
+                )])),
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
             },
             #[cfg(feature = "android")]
             "android_connect" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    serial: String,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                match AndroidDevice::connect(&params.serial) {
+                let serial = parse_string_field(&args, "serial")?;
+                match AndroidDevice::connect(&serial) {
                     Ok(device) => {
-                        let serial = device.serial.clone();
+                        let msg = format!(
+                            "Connected to Android device '{}'. Android tools (android_*) are now available.",
+                            device.serial
+                        );
                         *self.android_device.write().await = Some(device);
                         let _ = context.peer.notify_tool_list_changed().await;
-                        Ok(CallToolResult::success(vec![Content::text(format!(
-                            "Connected to Android device '{}'. Android tools (android_*) are now available.",
-                            serial
-                        ))]))
+                        Ok(CallToolResult::success(vec![Content::text(msg)]))
                     }
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
                 }
@@ -1181,44 +1217,28 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "android")]
             "android_screenshot" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    file_path: Option<String>,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::screenshot::capture(device) {
-                    Ok(shot) => {
-                        // If file_path is specified, save PNG to disk
-                        if let Some(ref path) = params.file_path {
-                            match std::fs::write(path, &shot.png_data) {
-                                Ok(()) => {
-                                    return Ok(CallToolResult::success(vec![Content::text(
-                                        format!(
-                                            "Screenshot saved to {} ({}x{})",
-                                            path, shot.width, shot.height
-                                        ),
-                                    )]));
-                                }
-                                Err(e) => {
-                                    return Ok(CallToolResult::error(vec![Content::text(
-                                        format!("Failed to save screenshot: {}", e),
-                                    )]));
-                                }
-                            }
+                let file_path = args
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(self
+                    .with_android_device(|device| {
+                        let shot = match crate::android::screenshot::capture(device) {
+                            Ok(s) => s,
+                            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+                        };
+                        if let Some(ref path) = file_path {
+                            return match std::fs::write(path, &shot.png_data) {
+                                Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                    "Screenshot saved to {} ({}x{})",
+                                    path, shot.width, shot.height
+                                ))]),
+                                Err(e) => CallToolResult::error(vec![Content::text(format!(
+                                    "Failed to save screenshot: {}",
+                                    e
+                                ))]),
+                            };
                         }
-
-                        // Convert to JPEG for smaller payload
                         let (image_data, mime_type) = match screenshot::png_to_jpeg(&shot.png_data)
                         {
                             Ok(jpeg_data) => (jpeg_data, "image/jpeg"),
@@ -1227,48 +1247,33 @@ impl ServerHandler for MacOSDevToolsServer {
                                 (shot.png_data, "image/png")
                             }
                         };
-
                         let base64_data =
                             base64::engine::general_purpose::STANDARD.encode(&image_data);
                         let mut contents = vec![Content::image(base64_data, mime_type)];
-                        let metadata = serde_json::json!({
+                        contents.push(Content::text(to_json_pretty(&serde_json::json!({
                             "width": shot.width,
                             "height": shot.height,
-                        });
-                        if let Ok(json) = serde_json::to_string_pretty(&metadata) {
-                            contents.push(Content::text(json));
-                        }
-                        Ok(CallToolResult::success(contents))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                            "scale": 1.0,
+                            "device": device.serial,
+                        }))));
+                        CallToolResult::success(contents)
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_click" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    x: f64,
-                    y: f64,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::input::click(device, params.x, params.y) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Tapped at ({:.0}, {:.0})",
-                        params.x, params.y
-                    ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let (x, y) = parse_xy(&args)?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::click(device, x, y) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Tapped at ({:.0}, {:.0})",
+                                x, y
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_swipe" => {
@@ -1280,208 +1285,126 @@ impl ServerHandler for MacOSDevToolsServer {
                     end_y: f64,
                     duration_ms: Option<u32>,
                 }
-                let params: Params = serde_json::from_value(args)
+                let p: Params = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::input::swipe(
-                    device,
-                    params.start_x,
-                    params.start_y,
-                    params.end_x,
-                    params.end_y,
-                    params.duration_ms,
-                ) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Swiped from ({:.0}, {:.0}) to ({:.0}, {:.0})",
-                        params.start_x, params.start_y, params.end_x, params.end_y
-                    ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::swipe(
+                            device,
+                            p.start_x,
+                            p.start_y,
+                            p.end_x,
+                            p.end_y,
+                            p.duration_ms,
+                        ) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Swiped from ({:.0}, {:.0}) to ({:.0}, {:.0})",
+                                p.start_x, p.start_y, p.end_x, p.end_y
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_type_text" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    text: String,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::input::type_text(device, &params.text) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Typed text: \"{}\"",
-                        params.text
-                    ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let text = parse_string_field(&args, "text")?;
+                let len = text.len();
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::type_text(device, &text) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Typed {} characters",
+                                len
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_press_key" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    key: String,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::input::press_key(device, &params.key) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Pressed key: {}",
-                        params.key
-                    ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let key = parse_string_field(&args, "key")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::input::press_key(device, &key) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Pressed key: {}",
+                                key
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_find_text" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    text: String,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::ui_automator::find_text(device, &params.text) {
-                    Ok(elements) => {
-                        let json = serde_json::to_string_pretty(&elements)
-                            .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let text = parse_string_field(&args, "text")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::ui_automator::find_text(device, &text) {
+                            Ok(elements) => CallToolResult::success(vec![Content::text(
+                                to_json_pretty(&elements),
+                            )]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_list_apps" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    #[serde(default)]
-                    user_apps_only: bool,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::navigation::list_apps(device, params.user_apps_only) {
-                    Ok(apps) => {
-                        let json = serde_json::to_string_pretty(&apps)
-                            .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let user_apps_only = args
+                    .get("user_apps_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::navigation::list_apps(device, user_apps_only) {
+                            Ok(apps) => {
+                                CallToolResult::success(vec![Content::text(to_json_pretty(&apps))])
+                            }
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
             "android_launch_app" => {
-                #[derive(serde::Deserialize)]
-                struct Params {
-                    package_name: String,
-                }
-                let params: Params = serde_json::from_value(args)
-                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::navigation::launch_app(device, &params.package_name) {
-                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Launched {}",
-                        params.package_name
-                    ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
+                let package_name = parse_string_field(&args, "package_name")?;
+                Ok(self
+                    .with_android_device(|device| {
+                        match crate::android::navigation::launch_app(device, &package_name) {
+                            Ok(()) => CallToolResult::success(vec![Content::text(format!(
+                                "Launched {}",
+                                package_name
+                            ))]),
+                            Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                        }
+                    })
+                    .await)
             }
             #[cfg(feature = "android")]
-            "android_get_display_info" => {
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
+            "android_get_display_info" => Ok(self
+                .with_android_device(|device| {
+                    match crate::android::navigation::get_display_info(device) {
+                        Ok(info) => {
+                            CallToolResult::success(vec![Content::text(to_json_pretty(&info))])
+                        }
+                        Err(e) => CallToolResult::error(vec![Content::text(e)]),
                     }
-                };
-                match crate::android::navigation::get_display_info(device) {
-                    Ok(info) => {
-                        let json = serde_json::to_string_pretty(&info)
-                            .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
-            }
+                })
+                .await),
             #[cfg(feature = "android")]
-            "android_get_current_activity" => {
-                let mut guard: tokio::sync::RwLockWriteGuard<'_, Option<AndroidDevice>> =
-                    self.android_device.write().await;
-                let device = match guard.as_mut() {
-                    Some(d) => d,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "No Android device connected. Use android_connect first.",
-                        )]))
-                    }
-                };
-                match crate::android::navigation::get_current_activity(device) {
-                    Ok(activity) => {
-                        let json = serde_json::to_string_pretty(&activity)
-                            .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-                }
-            }
+            "android_get_current_activity" => Ok(self
+                .with_android_device(
+                    |device| match crate::android::navigation::get_current_activity(device) {
+                        Ok(activity) => {
+                            CallToolResult::success(vec![Content::text(to_json_pretty(&activity))])
+                        }
+                        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+                    },
+                )
+                .await),
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
                 None,

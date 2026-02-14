@@ -45,7 +45,7 @@ wide = { version = "0.7", optional = true }
 
 # Android device control via ADB
 adb_client = { version = "3", optional = true }
-quick-xml = { version = "0.37", optional = true }
+quick-xml = { version = "0.39", optional = true }
 
 # macOS frameworks
 [target.'cfg(target_os = "macos")'.dependencies]

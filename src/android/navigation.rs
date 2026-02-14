@@ -2,36 +2,25 @@ use serde::Serialize;
 
 use super::device::AndroidDevice;
 
-/// Information about an installed Android app.
 #[derive(Debug, Clone, Serialize)]
 pub struct AndroidAppInfo {
-    /// The package name (e.g. "com.android.settings").
     pub package_name: String,
 }
 
-/// Display information for an Android device.
 #[derive(Debug, Clone, Serialize)]
 pub struct AndroidDisplayInfo {
-    /// Display width in pixels.
     pub width: u32,
-    /// Display height in pixels.
     pub height: u32,
-    /// Display density in DPI.
     pub density: u32,
 }
 
-/// Information about the currently running activity.
 #[derive(Debug, Clone, Serialize)]
 pub struct AndroidActivity {
-    /// The package name.
     pub package: String,
-    /// The activity class name.
     pub activity: String,
 }
 
-/// List installed packages on the device.
-///
-/// When `user_apps_only` is true, only third-party apps are returned (using `pm list packages -3`).
+/// List installed packages. When `user_apps_only` is true, only third-party apps are returned.
 pub fn list_apps(
     device: &mut AndroidDevice,
     user_apps_only: bool,
@@ -45,7 +34,6 @@ pub fn list_apps(
     Ok(parse_package_list(&output))
 }
 
-/// Launch an app by its package name using the monkey command.
 pub fn launch_app(device: &mut AndroidDevice, package_name: &str) -> Result<(), String> {
     let output = device.shell_args(&[
         "monkey",
@@ -66,7 +54,6 @@ pub fn launch_app(device: &mut AndroidDevice, package_name: &str) -> Result<(), 
     Ok(())
 }
 
-/// Get the current display size and density.
 pub fn get_display_info(device: &mut AndroidDevice) -> Result<AndroidDisplayInfo, String> {
     let size_output = device.shell("wm size")?;
     let density_output = device.shell("wm density")?;
@@ -88,7 +75,6 @@ pub fn get_display_info(device: &mut AndroidDevice) -> Result<AndroidDisplayInfo
     })
 }
 
-/// Get the currently resumed activity.
 pub fn get_current_activity(device: &mut AndroidDevice) -> Result<AndroidActivity, String> {
     let output = device.shell("dumpsys activity activities")?;
 
@@ -96,7 +82,6 @@ pub fn get_current_activity(device: &mut AndroidDevice) -> Result<AndroidActivit
         .ok_or_else(|| "No resumed activity found in dumpsys output".to_string())
 }
 
-/// Parse `pm list packages` output into a list of package names.
 fn parse_package_list(output: &str) -> Vec<AndroidAppInfo> {
     output
         .lines()
@@ -109,9 +94,8 @@ fn parse_package_list(output: &str) -> Vec<AndroidAppInfo> {
         .collect()
 }
 
-/// Parse `wm size` output (e.g. "Physical size: 1080x1920") into (width, height).
+/// Parse `wm size` output, e.g. "Physical size: 1080x1920". Last match wins (override takes precedence).
 fn parse_wm_size(output: &str) -> Option<(u32, u32)> {
-    // Look for the last line that contains a dimension (override takes precedence)
     let mut result = None;
     for line in output.lines() {
         let trimmed = line.trim();
@@ -127,7 +111,7 @@ fn parse_wm_size(output: &str) -> Option<(u32, u32)> {
     result
 }
 
-/// Parse `wm density` output (e.g. "Physical density: 420") into a density value.
+/// Parse `wm density` output, e.g. "Physical density: 420". Last match wins.
 fn parse_wm_density(output: &str) -> Option<u32> {
     let mut result = None;
     for line in output.lines() {
@@ -141,16 +125,12 @@ fn parse_wm_density(output: &str) -> Option<u32> {
     result
 }
 
-/// Parse `dumpsys activity activities` output to find the resumed activity.
-///
-/// Looks for lines containing `mResumedActivity` with a component like
-/// `com.example.app/.MainActivity`.
+/// Find the resumed activity from `dumpsys activity activities` output by looking
+/// for `mResumedActivity` lines with a component like `com.example.app/.MainActivity`.
 fn parse_resumed_activity(output: &str) -> Option<AndroidActivity> {
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.contains("mResumedActivity") {
-            // Format: mResumedActivity: ActivityRecord{hash u0 com.pkg/.Activity t123}
-            // We need to extract the component name (com.pkg/.Activity)
             if let Some(component) = extract_component_from_activity_line(trimmed) {
                 return Some(component);
             }
@@ -159,13 +139,8 @@ fn parse_resumed_activity(output: &str) -> Option<AndroidActivity> {
     None
 }
 
-/// Extract package/activity from an ActivityRecord line.
-///
-/// Expected format contains something like `com.android.settings/.Settings`
-/// within the curly braces.
+/// Extract package/activity component from an ActivityRecord line.
 fn extract_component_from_activity_line(line: &str) -> Option<AndroidActivity> {
-    // Find the component in the form "package/activity"
-    // It appears after "u0 " (or similar user prefix) in the ActivityRecord
     for token in line.split_whitespace() {
         if token.contains('/') && token.contains('.') && !token.starts_with('{') {
             let (package, activity) = token.split_once('/')?;

@@ -4,48 +4,42 @@ use serde::Serialize;
 
 use super::device::AndroidDevice;
 
-/// A UI element found on the Android device screen.
 #[derive(Debug, Clone, Serialize)]
 pub struct UiElement {
-    /// The text content of the element.
     pub text: String,
-    /// Center X coordinate of the element bounds.
     pub x: f64,
-    /// Center Y coordinate of the element bounds.
     pub y: f64,
-    /// Bounding rectangle of the element.
     pub bounds: UiBounds,
 }
 
-/// Bounding rectangle for a UI element in screen coordinates.
 #[derive(Debug, Clone, Serialize)]
 pub struct UiBounds {
-    /// Left edge X coordinate.
     pub x: f64,
-    /// Top edge Y coordinate.
     pub y: f64,
-    /// Width of the bounding rectangle.
     pub width: f64,
-    /// Height of the bounding rectangle.
     pub height: f64,
 }
 
-/// Find UI elements on the device that match the given search text.
-///
-/// Runs `uiautomator dump` to capture the view hierarchy, then searches
-/// the XML for elements whose `text` or `content-desc` attributes contain
-/// the search string (case-insensitive).
+/// Find UI elements matching `search` text (case-insensitive) via `uiautomator dump`.
 pub fn find_text(device: &mut AndroidDevice, search: &str) -> Result<Vec<UiElement>, String> {
-    let xml = device
+    let output = device
         .shell("uiautomator dump /dev/tty")
         .map_err(|e| format!("uiautomator dump failed: {}", e))?;
 
-    Ok(search_xml(&xml, search))
+    // uiautomator dump prefixes output with "UI hierrchy dumped to: /dev/tty"
+    // Strip everything before the first '<' to get the actual XML.
+    let xml_start = output.find('<').ok_or_else(|| {
+        format!(
+            "UI dump failed — device may be locked or showing a system dialog. Raw output: {}",
+            &output[..output.len().min(200)]
+        )
+    })?;
+
+    Ok(search_xml(&output[xml_start..], search))
 }
 
-/// Parse a bounds string of the form `[x1,y1][x2,y2]` into `(x1, y1, x2, y2)`.
+/// Parse a bounds string `[x1,y1][x2,y2]` into `(x1, y1, x2, y2)`.
 fn parse_bounds(bounds_str: &str) -> Option<(f64, f64, f64, f64)> {
-    // Expected format: [x1,y1][x2,y2]
     let stripped = bounds_str.trim();
     if !stripped.starts_with('[') {
         return None;
@@ -74,10 +68,7 @@ fn parse_bounds(bounds_str: &str) -> Option<(f64, f64, f64, f64)> {
     Some((x1, y1, x2, y2))
 }
 
-/// Search parsed UI hierarchy XML for elements matching the search text.
-///
-/// Matches against both `text` and `content-desc` attributes (case-insensitive,
-/// substring match).
+/// Search UI hierarchy XML for elements whose `text` or `content-desc` contains `search` (case-insensitive).
 fn search_xml(xml: &str, search: &str) -> Vec<UiElement> {
     let search_lower = search.to_lowercase();
     let mut results = Vec::new();
