@@ -84,11 +84,6 @@ cargo build --release
 # Binary: ./target/release/native-devtools-mcp
 ```
 
-To include Android device support, enable the `android` feature flag:
-
-```bash
-cargo build --release --features android
-```
 </details>
 
 ## ⚙️ Configuration
@@ -186,19 +181,13 @@ Optional inputs like `mask_id`, `search_region`, `scales`, and `rotations` can i
 
 ## 📱 Android Support
 
-Android support is available as an optional feature flag. It lets the MCP server communicate with Android devices over ADB (USB or Wi-Fi), providing screenshots, input simulation, UI element search, and app management.
+Android support is built-in. The MCP server communicates with Android devices over ADB (USB or Wi-Fi), providing screenshots, input simulation, UI element search, and app management.
 
 ### Prerequisites
 
 1. **ADB installed** on the host machine (`brew install android-platform-tools` on macOS, or install via [Android SDK](https://developer.android.com/tools/releases/platform-tools))
 2. **USB debugging enabled** on the Android device (Settings > Developer options > USB debugging)
 3. **ADB server running** — starts automatically when you run `adb devices`
-
-### Building with Android support
-
-```bash
-cargo build --release --features android
-```
 
 ### Android tools
 
@@ -250,7 +239,7 @@ android_click(x=..., y=...)   → tap it
 Smoke tests verify all Android tools against a real connected device. They are `#[ignore]`d by default and must be run explicitly:
 
 ```bash
-cargo test --features android --test android_smoke_tests -- --ignored --test-threads=1
+cargo test --test android_smoke_tests -- --ignored --test-threads=1
 ```
 
 Tests must run sequentially (`--test-threads=1`) since they share a single physical device. The device must be unlocked and awake.
