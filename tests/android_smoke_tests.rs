@@ -158,17 +158,17 @@ fn test_find_text_in_settings() {
     launch_settings(&mut device);
 
     // "Settings" appears in the title bar on every device/language (English assumed)
-    let results = ui_automator::find_text(&mut device, "Settings")
+    let result = ui_automator::find_text(&mut device, "Settings")
         .expect("uiautomator dump failed — is the screen unlocked?");
     assert!(
-        !results.is_empty(),
+        !result.matches.is_empty(),
         "Should find 'Settings' text in Settings app"
     );
     assert!(
-        results[0].x > 0.0 && results[0].y > 0.0,
+        result.matches[0].x > 0.0 && result.matches[0].y > 0.0,
         "Coordinates should be positive"
     );
-    assert!(results[0].bounds.width > 0.0 && results[0].bounds.height > 0.0);
+    assert!(result.matches[0].bounds.width > 0.0 && result.matches[0].bounds.height > 0.0);
 
     // Clean up
     input::press_key(&mut device, "KEYCODE_HOME").ok();
@@ -203,9 +203,9 @@ fn test_type_text() {
     let info = navigation::get_display_info(&mut device).expect("Failed to get display info");
     // Look for a search element via uiautomator
     let search_results = ui_automator::find_text(&mut device, "Search");
-    if let Ok(results) = search_results {
-        if !results.is_empty() {
-            input::click(&mut device, results[0].x, results[0].y).ok();
+    if let Ok(result) = search_results {
+        if !result.matches.is_empty() {
+            input::click(&mut device, result.matches[0].x, result.matches[0].y).ok();
             thread::sleep(Duration::from_secs(1));
             input::type_text(&mut device, "wifi").expect("Failed to type text");
             thread::sleep(Duration::from_secs(1));

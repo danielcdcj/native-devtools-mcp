@@ -1327,9 +1327,19 @@ impl ServerHandler for MacOSDevToolsServer {
                 Ok(self
                     .with_android_device(|device| {
                         match crate::android::ui_automator::find_text(device, &text) {
-                            Ok(elements) => CallToolResult::success(vec![Content::text(
-                                to_json_pretty(&elements),
-                            )]),
+                            Ok(result) => {
+                                let mut content =
+                                    vec![Content::text(to_json_pretty(&result.matches))];
+                                if result.matches.is_empty() {
+                                    content.push(Content::text(
+                                        input_tools::build_no_matches_hint(
+                                            &text,
+                                            &result.available_elements,
+                                        ),
+                                    ));
+                                }
+                                CallToolResult::success(content)
+                            }
                             Err(e) => CallToolResult::error(vec![Content::text(e)]),
                         }
                     })

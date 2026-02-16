@@ -451,7 +451,8 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
     };
 
     match ocr_result {
-        Ok(ref matches) => serialize_matches(matches),
+        Ok(ref matches) if !matches.is_empty() => serialize_matches(matches),
+        Ok(_) => empty_result_with_available_elements(&params.text, window_id, debug),
         Err(e) => CallToolResult::error(vec![Content::text(e)]),
     }
 }
@@ -471,6 +472,63 @@ fn find_text_accessibility(
         let _ = window_id;
         crate::windows::uia::find_text(search)
     }
+}
+
+/// Collect all visible element names using the platform accessibility API.
+fn list_element_names_accessibility(window_id: Option<u32>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::ax::list_element_names(window_id)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window_id;
+        crate::windows::uia::list_element_names()
+    }
+}
+
+const MAX_HINT_ELEMENTS: usize = 200;
+
+/// Build a "no matches found" hint JSON string with available element names.
+/// Shared between desktop `find_text` and `android_find_text`.
+pub fn build_no_matches_hint(search: &str, available_elements: &[String]) -> String {
+    let capped: Vec<&str> = available_elements
+        .iter()
+        .take(MAX_HINT_ELEMENTS)
+        .map(|s| s.as_str())
+        .collect();
+    let hint = serde_json::json!({
+        "message": format!("No matches found for \"{}\"", search),
+        "available_elements": capped,
+    });
+    hint.to_string()
+}
+
+/// Build an empty result with a list of available UI elements as a hint.
+fn empty_result_with_available_elements(
+    search: &str,
+    window_id: Option<u32>,
+    debug: bool,
+) -> CallToolResult {
+    let mut content = vec![Content::text("[]")];
+
+    match list_element_names_accessibility(window_id) {
+        Ok(names) => {
+            if debug && !names.is_empty() {
+                eprintln!(
+                    "[DEBUG find_text] listing {} available element names as hint",
+                    names.len()
+                );
+            }
+            content.push(Content::text(build_no_matches_hint(search, &names)));
+        }
+        Err(e) if debug => {
+            eprintln!("[DEBUG find_text] failed to list element names: {}", e);
+        }
+        _ => {}
+    }
+
+    CallToolResult::success(content)
 }
 
 /// Serialize text matches to a JSON CallToolResult.

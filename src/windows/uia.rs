@@ -13,6 +13,58 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
+/// Enumerate all UIA elements in the foreground window, calling `visitor` on each
+/// element's name (non-empty names only). Returns early with an empty result if
+/// no foreground window is available.
+fn for_each_element_name(mut visitor: impl FnMut(&str)) -> Result<(), String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
+            .map_err(|e| format!("Failed to create IUIAutomation: {}", e))?;
+
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return Ok(());
+        }
+
+        let root = automation
+            .ElementFromHandle(hwnd)
+            .map_err(|e| format!("Failed to get element from foreground window: {}", e))?;
+
+        let condition = automation
+            .CreateTrueCondition()
+            .map_err(|e| format!("Failed to create condition: {}", e))?;
+
+        let scope = TreeScope(TreeScope_Element.0 | TreeScope_Descendants.0);
+        let elements = root
+            .FindAll(scope, &condition)
+            .map_err(|e| format!("FindAll failed: {}", e))?;
+
+        let count = elements
+            .Length()
+            .map_err(|e| format!("Failed to get element count: {}", e))?;
+
+        for i in 0..count {
+            let elem = match elements.GetElement(i) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let name = match elem.CurrentName() {
+                Ok(n) => n.to_string(),
+                Err(_) => continue,
+            };
+
+            if !name.is_empty() {
+                visitor(&name);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Find text in UI elements of the foreground window using UIA.
 ///
 /// Searches the accessibility tree of the foreground window for elements
@@ -20,9 +72,10 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 /// Returns matching elements with screen coordinates for clicking.
 pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
     let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+    let search_lower = search.to_lowercase();
+    let mut matches = Vec::new();
 
     unsafe {
-        // Initialize COM on this thread (harmless if already initialized)
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
         let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
@@ -45,7 +98,6 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             );
         }
 
-        // Search the element itself and all descendants
         let condition = automation
             .CreateTrueCondition()
             .map_err(|e| format!("Failed to create condition: {}", e))?;
@@ -58,9 +110,6 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
         let count = elements
             .Length()
             .map_err(|e| format!("Failed to get element count: {}", e))?;
-
-        let search_lower = search.to_lowercase();
-        let mut matches = Vec::new();
 
         if debug {
             eprintln!("[DEBUG uia::find_text] scanning {} elements", count);
@@ -86,7 +135,6 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
                 Err(_) => continue,
             };
 
-            // Skip elements with zero or negative area (collapsed/hidden)
             let width = (rect.right - rect.left) as f64;
             let height = (rect.bottom - rect.top) as f64;
             if width <= 0.0 || height <= 0.0 {
@@ -100,13 +148,10 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
                 height,
             };
 
-            let center_x = bounds.x + bounds.width / 2.0;
-            let center_y = bounds.y + bounds.height / 2.0;
-
             matches.push(TextMatch {
                 text: name,
-                x: center_x,
-                y: center_y,
+                x: bounds.x + bounds.width / 2.0,
+                y: bounds.y + bounds.height / 2.0,
                 confidence: 1.0,
                 bounds,
             });
@@ -119,7 +164,23 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
                 count
             );
         }
-
-        Ok(matches)
     }
+
+    Ok(matches)
+}
+
+/// Collect all unique non-empty element names from the UIA tree of the foreground window.
+/// Used to provide a list of available elements when a search returns no matches.
+pub fn list_element_names() -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for_each_element_name(|name| {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+            names.push(trimmed.to_string());
+        }
+    })?;
+
+    Ok(names)
 }

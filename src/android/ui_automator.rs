@@ -22,18 +22,43 @@ pub struct UiBounds {
 
 const DUMP_PATH: &str = "/sdcard/ui_dump.xml";
 
+/// Result of a find_text search, including available element names on empty results.
+pub struct FindTextResult {
+    pub matches: Vec<UiElement>,
+    /// Populated only when `matches` is empty — lists all visible element names.
+    pub available_elements: Vec<String>,
+}
+
 /// Find UI elements matching `search` text (case-insensitive) via `uiautomator dump`.
 ///
 /// Tries dumping to `/dev/tty` first (fast, avoids file I/O). If the device doesn't
 /// return XML inline (e.g. Samsung), falls back to dumping to a temp file on the device.
-pub fn find_text(device: &mut AndroidDevice, search: &str) -> Result<Vec<UiElement>, String> {
+///
+/// When no matches are found, `available_elements` is populated with all visible
+/// element names so the caller can suggest corrections.
+pub fn find_text(device: &mut AndroidDevice, search: &str) -> Result<FindTextResult, String> {
+    let xml = dump_ui_xml(device)?;
+    let matches = search_xml(&xml, search);
+    let available_elements = if matches.is_empty() {
+        collect_element_names_xml(&xml)
+    } else {
+        Vec::new()
+    };
+    Ok(FindTextResult {
+        matches,
+        available_elements,
+    })
+}
+
+/// Dump the UI hierarchy XML from the device.
+fn dump_ui_xml(device: &mut AndroidDevice) -> Result<String, String> {
     // Try /dev/tty first — works on most AOSP-based devices.
     let output = device
         .shell("uiautomator dump /dev/tty")
         .map_err(|e| format!("uiautomator dump failed: {}", e))?;
 
     if let Some(xml_start) = output.find('<') {
-        return Ok(search_xml(&output[xml_start..], search));
+        return Ok(output[xml_start..].to_string());
     }
 
     // Fallback: dump to file (required on Samsung and some other OEMs).
@@ -51,7 +76,7 @@ pub fn find_text(device: &mut AndroidDevice, search: &str) -> Result<Vec<UiEleme
         )
     })?;
 
-    Ok(search_xml(&output[xml_start..], search))
+    Ok(output[xml_start..].to_string())
 }
 
 /// Parse a bounds string `[x1,y1][x2,y2]` into `(x1, y1, x2, y2)`.
@@ -84,6 +109,36 @@ fn parse_bounds(bounds_str: &str) -> Option<(f64, f64, f64, f64)> {
     Some((x1, y1, x2, y2))
 }
 
+/// Collect all unique non-empty element names (text and content-desc) from the UI hierarchy XML.
+fn collect_element_names_xml(xml: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut reader = Reader::from_str(xml);
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    if key != b"text" && key != b"content-desc" {
+                        continue;
+                    }
+                    let value = attr.unescape_value().unwrap_or_default();
+                    let trimmed = value.trim();
+                    if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                        names.push(trimmed.to_string());
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    names
+}
+
 /// Search UI hierarchy XML for elements whose `text` or `content-desc` contains `search` (case-insensitive).
 fn search_xml(xml: &str, search: &str) -> Vec<UiElement> {
     let search_lower = search.to_lowercase();
@@ -98,13 +153,17 @@ fn search_xml(xml: &str, search: &str) -> Vec<UiElement> {
                 let mut bounds_attr = String::new();
 
                 for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                    let value = attr.unescape_value().unwrap_or_default().to_string();
-
-                    match key.as_str() {
-                        "text" => text_attr = value,
-                        "content-desc" => content_desc_attr = value,
-                        "bounds" => bounds_attr = value,
+                    match attr.key.as_ref() {
+                        b"text" => {
+                            text_attr = attr.unescape_value().unwrap_or_default().to_string()
+                        }
+                        b"content-desc" => {
+                            content_desc_attr =
+                                attr.unescape_value().unwrap_or_default().to_string()
+                        }
+                        b"bounds" => {
+                            bounds_attr = attr.unescape_value().unwrap_or_default().to_string()
+                        }
                         _ => {}
                     }
                 }

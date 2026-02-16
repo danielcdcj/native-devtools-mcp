@@ -70,13 +70,32 @@ pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>,
     let mut element_count: usize = 0;
 
     unsafe {
-        walk_tree(
-            app_element,
-            &search_lower,
-            &mut matches,
-            &mut element_count,
-            0,
-        );
+        walk_ax_tree(app_element, &mut element_count, 0, &mut |element| {
+            let matched_text = ["AXTitle", "AXValue", "AXDescription"]
+                .iter()
+                .filter_map(|attr| get_string_attribute(element, attr))
+                .find(|s| !s.is_empty() && s.to_lowercase().contains(search_lower.as_str()));
+
+            if let Some(text) = matched_text {
+                if let Some((position, size)) = get_position_and_size(element) {
+                    if size.width > 0.0 && size.height > 0.0 {
+                        let bounds = TextBounds {
+                            x: position.x,
+                            y: position.y,
+                            width: size.width,
+                            height: size.height,
+                        };
+                        matches.push(TextMatch {
+                            text,
+                            x: bounds.x + bounds.width / 2.0,
+                            y: bounds.y + bounds.height / 2.0,
+                            confidence: 1.0,
+                            bounds,
+                        });
+                    }
+                }
+            }
+        });
         core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
     }
 
@@ -91,15 +110,14 @@ pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>,
     Ok(matches)
 }
 
-/// Recursively walk the AX element tree and collect matches.
+/// Recursively walk the AX element tree and call `visitor` on each element.
 ///
 /// `depth` limits recursion to prevent runaway traversal of deep trees.
-unsafe fn walk_tree(
+unsafe fn walk_ax_tree(
     element: AXUIElementRef,
-    search_lower: &str,
-    matches: &mut Vec<TextMatch>,
     element_count: &mut usize,
     depth: u32,
+    visitor: &mut dyn FnMut(AXUIElementRef),
 ) {
     // Guard against excessively deep or large trees
     if depth > MAX_DEPTH || *element_count >= MAX_ELEMENTS {
@@ -107,41 +125,7 @@ unsafe fn walk_tree(
     }
 
     *element_count += 1;
-
-    // Check AXTitle, AXValue, AXDescription for a match
-    let title = get_string_attribute(element, "AXTitle");
-    let value = get_string_attribute(element, "AXValue");
-    let description = get_string_attribute(element, "AXDescription");
-
-    let matched_text = [&title, &value, &description]
-        .iter()
-        .filter_map(|s| s.as_ref())
-        .find(|s| !s.is_empty() && s.to_lowercase().contains(search_lower));
-
-    if let Some(text) = matched_text {
-        if let Some((position, size)) = get_position_and_size(element) {
-            // Skip zero-size elements (collapsed/hidden)
-            if size.width > 0.0 && size.height > 0.0 {
-                let bounds = TextBounds {
-                    x: position.x,
-                    y: position.y,
-                    width: size.width,
-                    height: size.height,
-                };
-
-                let center_x = bounds.x + bounds.width / 2.0;
-                let center_y = bounds.y + bounds.height / 2.0;
-
-                matches.push(TextMatch {
-                    text: text.clone(),
-                    x: center_x,
-                    y: center_y,
-                    confidence: 1.0,
-                    bounds,
-                });
-            }
-        }
-    }
+    visitor(element);
 
     // Recurse into children
     let children_attr = CFString::new("AXChildren");
@@ -163,7 +147,7 @@ unsafe fn walk_tree(
         let child = *children.get_unchecked(i) as AXUIElementRef;
         // Retain the child for the duration of our walk since CFArray only gives a get-rule ref
         core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
-        walk_tree(child, search_lower, matches, element_count, depth + 1);
+        walk_ax_tree(child, element_count, depth + 1, visitor);
         core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
     }
 }
@@ -246,6 +230,40 @@ fn frontmost_pid() -> Result<i32, String> {
         let pid: i32 = msg_send![app, processIdentifier];
         Ok(pid)
     }
+}
+
+/// Collect all unique non-empty element names from the accessibility tree.
+/// Used to provide a list of available elements when a search returns no matches.
+pub fn list_element_names(window_id: Option<u32>) -> Result<Vec<String>, String> {
+    let pid = match window_id {
+        Some(wid) => pid_for_window(wid)?,
+        None => frontmost_pid()?,
+    };
+
+    let app_element = unsafe { AXUIElementCreateApplication(pid) };
+    if app_element.is_null() {
+        return Err(format!("Failed to create AXUIElement for pid {}", pid));
+    }
+
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut element_count: usize = 0;
+
+    unsafe {
+        walk_ax_tree(app_element, &mut element_count, 0, &mut |element| {
+            for attr in &["AXTitle", "AXValue", "AXDescription"] {
+                if let Some(text) = get_string_attribute(element, attr) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                        names.push(trimmed.to_string());
+                    }
+                }
+            }
+        });
+        core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
+    }
+
+    Ok(names)
 }
 
 #[cfg(test)]
