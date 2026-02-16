@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "native-devtools-mcp"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "adb_client",
  "base64 0.22.1",

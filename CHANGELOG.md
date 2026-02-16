@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.2
+
+### Smarter `find_text` on empty results
+
+When `find_text` (desktop) or `android_find_text` returns no matches, the response now includes an `available_elements` array listing all visible UI element names from the accessibility tree. This lets LLMs see what's actually on screen and retry with the correct name — solving the common issue where accessibility APIs use semantic names (e.g., "multiply" instead of "×", "All Clear" instead of "AC").
+
+Applies to all platforms: macOS (Accessibility API), Windows (UI Automation), and Android (uiautomator).
+
 ## v0.4.1
 
 - Added MCP Registry publishing to the release workflow
