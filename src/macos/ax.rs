@@ -1,8 +1,8 @@
-//! macOS Accessibility API (AXUIElement) text search.
+//! macOS Accessibility API (AXUIElement) helpers.
 //!
-//! Uses the macOS Accessibility tree to find UI elements by name.
-//! This is faster and more reliable than OCR for standard UI elements
-//! (buttons, labels, menus, etc.).
+//! Uses the macOS Accessibility tree for:
+//! - Text search: find UI elements by name (faster than OCR for standard controls)
+//! - Window raising: bring windows to front via AXRaise (works for bundle-less apps)
 
 use super::ocr::{TextBounds, TextMatch};
 use core_foundation::array::CFArray;
@@ -38,6 +38,15 @@ extern "C" {
         value: *mut core_foundation::base::CFTypeRef,
     ) -> i32;
     fn AXValueGetValue(value: AXValueRef, value_type: u32, value_ptr: *mut c_void) -> bool;
+    fn AXUIElementPerformAction(
+        element: AXUIElementRef,
+        action: core_foundation::string::CFStringRef,
+    ) -> i32;
+    fn AXUIElementSetAttributeValue(
+        element: AXUIElementRef,
+        attribute: core_foundation::string::CFStringRef,
+        value: core_foundation::base::CFTypeRef,
+    ) -> i32;
 }
 
 /// Find text in UI elements of an app's accessibility tree.
@@ -264,6 +273,93 @@ pub fn list_element_names(window_id: Option<u32>) -> Result<Vec<String>, String>
     }
 
     Ok(names)
+}
+
+/// Raise all windows of an application to the front using the Accessibility API.
+///
+/// Two-step approach:
+/// 1. Set AXFrontmost on the app element (equivalent to System Events `set frontmost`)
+/// 2. AXRaise on each window (physically brings windows to front)
+///
+/// Step 1 is critical for apps without a proper macOS app bundle (e.g. Tauri dev builds)
+/// where NSRunningApplication.activate reports success but doesn't bring windows to front.
+pub fn raise_windows(pid: i32) -> bool {
+    let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
+
+    unsafe {
+        let app_element = AXUIElementCreateApplication(pid);
+        if app_element.is_null() {
+            if debug {
+                eprintln!(
+                    "[DEBUG ax::raise_windows] Failed to create AXUIElement for pid {}",
+                    pid
+                );
+            }
+            return false;
+        }
+
+        // Step 1: Set AXFrontmost on the app element to make it the frontmost process.
+        // This is the programmatic equivalent of AppleScript:
+        //   tell application "System Events" to set frontmost of process "X" to true
+        let frontmost_attr = CFString::new("AXFrontmost");
+        let frontmost_err = AXUIElementSetAttributeValue(
+            app_element,
+            frontmost_attr.as_concrete_TypeRef(),
+            core_foundation::boolean::CFBoolean::true_value().as_CFTypeRef(),
+        );
+        if debug {
+            eprintln!(
+                "[DEBUG ax::raise_windows] AXFrontmost set for pid {} (err={})",
+                pid, frontmost_err
+            );
+        }
+
+        // Step 2: AXRaise each window to bring them to front in the window order.
+        let windows_attr = CFString::new("AXWindows");
+        let mut windows_ref: core_foundation::base::CFTypeRef = ptr::null();
+        let err = AXUIElementCopyAttributeValue(
+            app_element,
+            windows_attr.as_concrete_TypeRef(),
+            &mut windows_ref,
+        );
+
+        let mut raised = frontmost_err == K_AX_ERROR_SUCCESS;
+
+        if err == K_AX_ERROR_SUCCESS && !windows_ref.is_null() {
+            let windows: CFArray<*const c_void> = CFArray::wrap_under_create_rule(windows_ref as _);
+            let raise_action = CFString::new("AXRaise");
+
+            for i in 0..windows.len() {
+                let window = *windows.get_unchecked(i) as AXUIElementRef;
+                let result = AXUIElementPerformAction(window, raise_action.as_concrete_TypeRef());
+                if result == K_AX_ERROR_SUCCESS {
+                    raised = true;
+                } else if debug {
+                    eprintln!(
+                        "[DEBUG ax::raise_windows] AXRaise failed for window {} (err={})",
+                        i, result
+                    );
+                }
+            }
+
+            if debug {
+                eprintln!(
+                    "[DEBUG ax::raise_windows] pid={}, windows={}, raised={}",
+                    pid,
+                    windows.len(),
+                    raised
+                );
+            }
+        } else if debug {
+            eprintln!(
+                "[DEBUG ax::raise_windows] No AXWindows for pid {} (err={})",
+                pid, err
+            );
+        }
+
+        core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
+        raised
+    }
 }
 
 #[cfg(test)]

@@ -315,6 +315,12 @@ pub fn launch_app(app_name: &str) -> Result<(), String> {
     }
 }
 
+/// Raise windows by PID. On Windows this is a no-op because `activate_app_by_pid`
+/// already uses `BringWindowToTop` + `SetForegroundWindow` which reliably raise windows.
+pub fn raise_windows(_pid: i32) -> bool {
+    true
+}
+
 /// Focus a window by its handle.
 ///
 /// Uses multiple techniques to bring a window to the foreground since

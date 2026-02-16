@@ -109,6 +109,15 @@ pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
 
 fn focus_by_app_name(app_name: &str) -> CallToolResult {
     if platform::activate_app(app_name) {
+        // AXRaise ensures the window is physically raised even for apps without
+        // a proper macOS bundle (e.g. Tauri dev builds) where NSRunningApplication.activate
+        // reports success but doesn't bring the window to front.
+        let pid = platform::find_windows_by_app(app_name)
+            .ok()
+            .and_then(|w| w.first().map(|win| win.owner_pid as i32));
+        if let Some(pid) = pid {
+            platform::raise_windows(pid);
+        }
         return focused();
     }
 
@@ -120,6 +129,7 @@ fn focus_by_app_name(app_name: &str) -> CallToolResult {
 
     if let Some(pid) = pid {
         if platform::activate_app_by_pid(pid) {
+            platform::raise_windows(pid);
             return focused();
         }
     }
@@ -132,6 +142,7 @@ fn focus_by_app_name(app_name: &str) -> CallToolResult {
 
 fn focus_by_pid(pid: i32) -> CallToolResult {
     if platform::activate_app_by_pid(pid) {
+        platform::raise_windows(pid);
         focused()
     } else {
         error(format!(
@@ -144,7 +155,9 @@ fn focus_by_pid(pid: i32) -> CallToolResult {
 fn focus_by_window_id(window_id: u32) -> CallToolResult {
     match platform::find_window_by_id(window_id) {
         Ok(Some(window)) => {
-            if platform::activate_app_by_pid(window.owner_pid as i32) {
+            let pid = window.owner_pid as i32;
+            if platform::activate_app_by_pid(pid) {
+                platform::raise_windows(pid);
                 focused()
             } else {
                 error(format!(
