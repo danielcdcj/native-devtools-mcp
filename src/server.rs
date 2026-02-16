@@ -412,7 +412,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "find_text",
-                "PREFERRED for clicking buttons/labels by name. Finds text on screen using the platform accessibility API (macOS Accessibility, Windows UI Automation) with OCR fallback, and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Can be scoped to a specific app window for faster, more precise results. Note: accessibility results use semantic element names (e.g., 'All Clear' instead of 'AC', 'Subtract' instead of '\u{2212}'), so search by meaning rather than displayed symbol. Requires macOS 10.15+ or Windows 10 1903+.",
+                "PREFERRED for clicking buttons/labels by name. Finds text on screen using the platform accessibility API (macOS Accessibility, Windows UI Automation) with OCR fallback, and returns screen coordinates ready for the click tool. Use this instead of visually estimating coordinates from screenshots. Can be scoped to a specific app window for faster, more precise results. Note: accessibility results use semantic element names (e.g., 'All Clear' instead of 'AC', 'Subtract' instead of '\u{2212}'), so search by meaning rather than displayed symbol. When no matches are found, the response includes an available_elements array listing all UI element names in the target window — use this to find the correct name and retry. Requires macOS 10.15+ or Windows 10 1903+.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
@@ -899,7 +899,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "android_find_text",
-                "Find UI elements on the Android device screen that match the given text. Uses uiautomator to dump the view hierarchy and search for matching elements. Returns coordinates for clicking.",
+                "Find UI elements on the Android device screen that match the given text. Uses uiautomator to dump the view hierarchy and search for matching elements. Returns coordinates for clicking. When no matches are found, the response includes an available_elements array listing all UI element names on screen — use this to find the correct name and retry.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
