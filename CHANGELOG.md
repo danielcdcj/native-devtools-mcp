@@ -8,6 +8,11 @@ When `find_text` (desktop) or `android_find_text` returns no matches, the respon
 
 Applies to all platforms: macOS (Accessibility API), Windows (UI Automation), and Android (uiautomator).
 
+### Fixes
+
+- Fixed server.json description exceeding MCP Registry 100-character limit
+- Removed outdated Android feature flag references from README
+
 ## v0.4.1
 
 - Added MCP Registry publishing to the release workflow
