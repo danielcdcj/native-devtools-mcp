@@ -25,6 +25,10 @@ pub struct TextMatch {
     pub y: f64,
     pub confidence: f64,
     pub bounds: TextBounds,
+    /// Accessibility role of the element (e.g. "Button", "Text").
+    /// Present for accessibility-tree results, absent for OCR results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// Run OCR on PNG image data and return all detected text with coordinates.
@@ -110,6 +114,7 @@ fn run_winrt_ocr(png_data: &[u8], scale: f64) -> Result<Vec<TextMatch>, String> 
                 y: center_y,
                 confidence: 1.0, // WinRT OCR doesn't provide per-word confidence
                 bounds,
+                role: None,
             });
         }
     }

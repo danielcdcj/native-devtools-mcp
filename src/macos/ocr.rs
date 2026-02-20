@@ -52,6 +52,10 @@ pub struct TextMatch {
     pub y: f64,
     pub confidence: f64,
     pub bounds: TextBounds,
+    /// Accessibility role of the element (e.g. "AXButton", "AXStaticText").
+    /// Present for accessibility-tree results, absent for OCR results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// Run OCR on PNG image data and return all detected text with screen coordinates.
@@ -180,6 +184,7 @@ unsafe fn run_vision_ocr(
             y: center_y,
             confidence,
             bounds,
+            role: None,
         });
     }
 

@@ -414,7 +414,8 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
 
     // Primary: try accessibility tree search
     match find_text_accessibility(&params.text, window_id) {
-        Ok(matches) if !matches.is_empty() => {
+        Ok(mut matches) if !matches.is_empty() => {
+            rank_matches(&mut matches, &params.text);
             return serialize_matches(&matches);
         }
         Ok(_) if debug => {
@@ -532,6 +533,69 @@ fn empty_result_with_available_elements(
 }
 
 /// Serialize text matches to a JSON CallToolResult.
+/// Rank find_text results so that exact matches and interactive elements appear first.
+///
+/// Ranking priority (lower score = higher rank):
+///   0 — exact match + interactive element
+///   1 — exact match + non-interactive element
+///   2 — substring match + interactive element
+///   3 — substring match + non-interactive element
+///
+/// Within the same rank, original tree-traversal order is preserved (stable sort).
+fn rank_matches(matches: &mut [ocr::TextMatch], search: &str) {
+    let search_lower = search.to_lowercase();
+    matches.sort_by_key(|m| {
+        let is_exact = m.text.to_lowercase() == search_lower;
+        let is_interactive = m.role.as_deref().is_some_and(is_interactive_role);
+        match (is_exact, is_interactive) {
+            (true, true) => 0u8,
+            (true, false) => 1,
+            (false, true) => 2,
+            (false, false) => 3,
+        }
+    });
+}
+
+/// Check whether an accessibility role represents an interactive element.
+///
+/// Covers both macOS AXRole names (e.g. "AXButton") and Windows UIA control
+/// type names (e.g. "Button").
+fn is_interactive_role(role: &str) -> bool {
+    matches!(
+        role,
+        // macOS AXRoles
+        "AXButton"
+        | "AXTextField"
+        | "AXTextArea"
+        | "AXLink"
+        | "AXCheckBox"
+        | "AXRadioButton"
+        | "AXPopUpButton"
+        | "AXMenuButton"
+        | "AXSlider"
+        | "AXIncrementor"
+        | "AXComboBox"
+        | "AXMenuItem"
+        | "AXTabGroup"
+        | "AXTab"
+        // Windows UIA control types
+        | "Button"
+        | "Edit"
+        | "Hyperlink"
+        | "CheckBox"
+        | "RadioButton"
+        | "ComboBox"
+        | "Slider"
+        | "Spinner"
+        | "MenuItem"
+        | "TabItem"
+        | "ListItem"
+        | "TreeItem"
+        | "DataItem"
+        | "SplitButton"
+    )
+}
+
 fn serialize_matches(matches: &[ocr::TextMatch]) -> CallToolResult {
     match serde_json::to_string_pretty(matches) {
         Ok(json) => CallToolResult::success(vec![Content::text(json)]),
@@ -578,4 +642,127 @@ fn find_text_in_window(
     });
 
     Ok(matches)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::ocr::{TextBounds, TextMatch};
+
+    fn make_match(text: &str, role: Option<&str>) -> TextMatch {
+        TextMatch {
+            text: text.to_string(),
+            x: 0.0,
+            y: 0.0,
+            confidence: 1.0,
+            bounds: TextBounds {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 20.0,
+            },
+            role: role.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_rank_exact_match_before_substring() {
+        let mut matches = vec![
+            make_match("2×3", None), // substring match, no role
+            make_match("2", None),   // exact match, no role
+        ];
+        rank_matches(&mut matches, "2");
+        assert_eq!(matches[0].text, "2");
+        assert_eq!(matches[1].text, "2×3");
+    }
+
+    #[test]
+    fn test_rank_interactive_before_static() {
+        let mut matches = vec![
+            make_match("Submit", Some("AXStaticText")), // static
+            make_match("Submit", Some("AXButton")),     // interactive
+        ];
+        rank_matches(&mut matches, "Submit");
+        assert_eq!(matches[0].role.as_deref(), Some("AXButton"));
+        assert_eq!(matches[1].role.as_deref(), Some("AXStaticText"));
+    }
+
+    #[test]
+    fn test_rank_exact_interactive_is_top() {
+        let mut matches = vec![
+            make_match("2×3", Some("AXButton")),   // substring + interactive
+            make_match("2", Some("AXStaticText")), // exact + static
+            make_match("2×3", Some("AXStaticText")), // substring + static
+            make_match("2", Some("AXButton")),     // exact + interactive
+        ];
+        rank_matches(&mut matches, "2");
+        assert_eq!(matches[0].text, "2");
+        assert_eq!(matches[0].role.as_deref(), Some("AXButton"));
+        assert_eq!(matches[1].text, "2");
+        assert_eq!(matches[1].role.as_deref(), Some("AXStaticText"));
+        assert_eq!(matches[2].text, "2×3");
+        assert_eq!(matches[2].role.as_deref(), Some("AXButton"));
+        assert_eq!(matches[3].text, "2×3");
+        assert_eq!(matches[3].role.as_deref(), Some("AXStaticText"));
+    }
+
+    #[test]
+    fn test_rank_preserves_order_within_same_rank() {
+        let mut matches = vec![
+            make_match("Open", Some("AXButton")),
+            make_match("Open", Some("AXMenuItem")),
+        ];
+        rank_matches(&mut matches, "Open");
+        // Both are exact + interactive, original order preserved (stable sort)
+        assert_eq!(matches[0].role.as_deref(), Some("AXButton"));
+        assert_eq!(matches[1].role.as_deref(), Some("AXMenuItem"));
+    }
+
+    #[test]
+    fn test_rank_case_insensitive_exact_match() {
+        let mut matches = vec![
+            make_match("SUBMIT button", Some("AXStaticText")),
+            make_match("submit", Some("AXButton")),
+        ];
+        rank_matches(&mut matches, "Submit");
+        assert_eq!(matches[0].text, "submit");
+        assert_eq!(matches[1].text, "SUBMIT button");
+    }
+
+    #[test]
+    fn test_rank_no_role_treated_as_non_interactive() {
+        let mut matches = vec![
+            make_match("OK", None),             // exact, no role (OCR)
+            make_match("OK", Some("AXButton")), // exact, interactive
+        ];
+        rank_matches(&mut matches, "OK");
+        assert_eq!(matches[0].role.as_deref(), Some("AXButton"));
+        assert_eq!(matches[1].role, None);
+    }
+
+    #[test]
+    fn test_is_interactive_role_macos() {
+        assert!(is_interactive_role("AXButton"));
+        assert!(is_interactive_role("AXTextField"));
+        assert!(is_interactive_role("AXLink"));
+        assert!(is_interactive_role("AXCheckBox"));
+        assert!(is_interactive_role("AXMenuItem"));
+        assert!(!is_interactive_role("AXStaticText"));
+        assert!(!is_interactive_role("AXGroup"));
+        assert!(!is_interactive_role("AXImage"));
+        assert!(!is_interactive_role("AXScrollArea"));
+    }
+
+    #[test]
+    fn test_is_interactive_role_windows() {
+        assert!(is_interactive_role("Button"));
+        assert!(is_interactive_role("Edit"));
+        assert!(is_interactive_role("Hyperlink"));
+        assert!(is_interactive_role("CheckBox"));
+        assert!(is_interactive_role("MenuItem"));
+        assert!(!is_interactive_role("Text"));
+        assert!(!is_interactive_role("Group"));
+        assert!(!is_interactive_role("Image"));
+        assert!(!is_interactive_role("Pane"));
+    }
 }

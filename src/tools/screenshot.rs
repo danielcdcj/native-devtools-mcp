@@ -258,6 +258,7 @@ mod tests {
                 width: 50.0,
                 height: 20.0,
             },
+            role: None,
         }
     }
 

@@ -88,6 +88,7 @@ pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>,
             if let Some(text) = matched_text {
                 if let Some((position, size)) = get_position_and_size(element) {
                     if size.width > 0.0 && size.height > 0.0 {
+                        let role = get_string_attribute(element, "AXRole");
                         let bounds = TextBounds {
                             x: position.x,
                             y: position.y,
@@ -100,6 +101,7 @@ pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>,
                             y: bounds.y + bounds.height / 2.0,
                             confidence: 1.0,
                             bounds,
+                            role,
                         });
                     }
                 }

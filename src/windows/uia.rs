@@ -141,6 +141,11 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
                 continue;
             }
 
+            let role = elem
+                .CurrentControlType()
+                .ok()
+                .and_then(|ct| uia_control_type_name(ct.0));
+
             let bounds = TextBounds {
                 x: rect.left as f64,
                 y: rect.top as f64,
@@ -154,6 +159,7 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
                 y: bounds.y + bounds.height / 2.0,
                 confidence: 1.0,
                 bounds,
+                role,
             });
         }
 
@@ -183,4 +189,51 @@ pub fn list_element_names() -> Result<Vec<String>, String> {
     })?;
 
     Ok(names)
+}
+
+/// Map a UIA_*ControlTypeId to a human-readable name.
+fn uia_control_type_name(id: i32) -> Option<String> {
+    let name = match id {
+        50000 => "Button",
+        50001 => "Calendar",
+        50002 => "CheckBox",
+        50003 => "ComboBox",
+        50004 => "Edit",
+        50005 => "Hyperlink",
+        50006 => "Image",
+        50007 => "ListItem",
+        50008 => "List",
+        50009 => "Menu",
+        50010 => "MenuBar",
+        50011 => "MenuItem",
+        50012 => "ProgressBar",
+        50013 => "RadioButton",
+        50014 => "ScrollBar",
+        50015 => "Slider",
+        50016 => "Spinner",
+        50017 => "StatusBar",
+        50018 => "Tab",
+        50019 => "TabItem",
+        50020 => "Text",
+        50021 => "ToolBar",
+        50022 => "ToolTip",
+        50023 => "Tree",
+        50024 => "TreeItem",
+        50025 => "Custom",
+        50026 => "Group",
+        50027 => "Thumb",
+        50028 => "DataGrid",
+        50029 => "DataItem",
+        50030 => "Document",
+        50031 => "SplitButton",
+        50032 => "Window",
+        50033 => "Pane",
+        50034 => "Header",
+        50035 => "HeaderItem",
+        50036 => "Table",
+        50037 => "TitleBar",
+        50038 => "Separator",
+        _ => return None,
+    };
+    Some(name.to_string())
 }
