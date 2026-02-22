@@ -163,6 +163,34 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+
+          # Hash the raw binaries from the npm artifacts
+          sha256sum npm-darwin-arm64/bin/native-devtools-mcp > ../checksums.txt
+          sed -i 's|npm-darwin-arm64/bin/native-devtools-mcp|native-devtools-mcp (aarch64-apple-darwin)|' ../checksums.txt
+
+          sha256sum npm-win32-x64/bin/native-devtools-mcp.exe >> ../checksums.txt
+          sed -i 's|npm-win32-x64/bin/native-devtools-mcp.exe|native-devtools-mcp.exe (x86_64-pc-windows-msvc)|' ../checksums.txt
+
+          # Hash the archive files
+          sha256sum native-devtools-mcp-aarch64-apple-darwin/*.tar.gz >> ../checksums.txt
+          sed -i 's|native-devtools-mcp-aarch64-apple-darwin/||' ../checksums.txt
+
+          sha256sum native-devtools-mcp-x86_64-pc-windows-msvc/*.zip >> ../checksums.txt
+          sed -i 's|native-devtools-mcp-x86_64-pc-windows-msvc/||' ../checksums.txt
+
+          # Hash the DMG if present
+          if ls macos-app-dmg/*.dmg 1>/dev/null 2>&1; then
+            sha256sum macos-app-dmg/*.dmg >> ../checksums.txt
+            sed -i 's|macos-app-dmg/||' ../checksums.txt
+          fi
+
+          cd ..
+          echo "Generated checksums:"
+          cat checksums.txt
+
       - name: Extract changelog for this version
         id: changelog
         run: |
@@ -185,6 +213,7 @@ jobs:
             artifacts/native-devtools-mcp-*/*.tar.gz
             artifacts/native-devtools-mcp-*/*.zip
             artifacts/macos-app-dmg/*.dmg
+            checksums.txt
           body_path: RELEASE_BODY.md
 
       - name: Create GitHub Release (auto-generated)
@@ -195,6 +224,7 @@ jobs:
             artifacts/native-devtools-mcp-*/*.tar.gz
             artifacts/native-devtools-mcp-*/*.zip
             artifacts/macos-app-dmg/*.dmg
+            checksums.txt
           generate_release_notes: true
 
   publish-npm:

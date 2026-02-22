@@ -2,6 +2,7 @@
 #![allow(deprecated)]
 
 mod app_protocol;
+mod cli;
 #[cfg(target_os = "macos")]
 mod macos;
 mod server;
@@ -17,13 +18,23 @@ use macos as platform;
 #[cfg(target_os = "windows")]
 use windows as platform;
 
-use rmcp::ServiceExt;
-use server::MacOSDevToolsServer;
-use tokio::signal;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Check for CLI subcommands before starting the async runtime
+    if cli::handle_subcommand() {
+        return Ok(());
+    }
+
+    // No subcommand — start the MCP server
+    start_server()
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn start_server() -> Result<(), Box<dyn std::error::Error>> {
+    use rmcp::ServiceExt;
+    use server::MacOSDevToolsServer;
+    use tokio::signal;
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
     // Initialize logging to stderr (stdout is used for MCP protocol)
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(std::io::stderr))

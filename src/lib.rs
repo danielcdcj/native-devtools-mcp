@@ -3,6 +3,7 @@
 
 pub mod android;
 pub mod app_protocol;
+pub mod cli;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod server;

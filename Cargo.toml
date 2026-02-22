@@ -40,7 +40,10 @@ thiserror = "2"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2.5"
+
+# Binary verification (verify subcommand)
 sha2 = "0.10.9"
+ureq = "3"
 
 # Optional dependencies for find_image optimization
 rayon = { version = "1.10", optional = true }
