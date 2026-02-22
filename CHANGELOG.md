@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### `find_text` result ranking
+
+Results are now ranked by relevance: exact matches appear before substring matches, and interactive elements (buttons, links, inputs) rank above static text. A `role` field (from AXRole on macOS, UIA ControlType on Windows) is included in the JSON output.
+
+### `focus_window` fix for bundle-less apps
+
+`focus_window` now reliably brings windows to front for apps without a proper macOS bundle (e.g., Tauri dev builds). After activation, it sets AXFrontmost and AXRaise via the Accessibility API as a fallback.
+
+### Security & trust
+
+- **`verify` subcommand** — hashes the running binary and checks it against official checksums from the GitHub release (exit 0 = verified, exit 1 = mismatch, exit 2 = inconclusive)
+- **`setup` subcommand** — guided wizard that checks macOS permissions (Accessibility, Screen Recording) and auto-configures MCP clients (Claude Desktop, Claude Code, Cursor)
+- **CI checksums** — every release now publishes `checksums.txt` with SHA-256 hashes for all binaries, archives, and the DMG
+- **`SECURITY_AUDIT.md`** — documents which permissions are used, where in the code, and includes an LLM audit prompt
+- **`scripts/build-from-source.sh`** — one-liner to clone, review, build, and set up from source
+
+### CLI improvements
+
+- Unknown commands and options now show an error and help text instead of silently starting the MCP server
+
+### Docs
+
+- Added Security & Trust section to README
+- Restructured README: `setup` is now the primary post-install path, manual configuration collapsed into a details block
+
 ## v0.4.2
 
 ### Smarter `find_text` on empty results

@@ -15,7 +15,7 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 
 [//]: # "Search keywords: MCP, MCP server, Model Context Protocol, computer use, desktop automation, UI automation, native app testing, test automation, e2e testing, RPA, screenshots, OCR, template matching, accessibility, mouse, keyboard, screen reading, macOS, Windows, Android, ADB, mobile testing, Claude, Claude Code, Cursor, AI agent, native-devtools-mcp"
 
-[Features](#-features) • [Installation](#-installation) • [For AI Agents](#-for-ai-agents-llms) • [Android](#-android-support) • [Permissions](#-required-permissions-macos)
+[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Android](#-android-support)
 
 <table>
 <tr>
@@ -77,6 +77,14 @@ npm install -g native-devtools-mcp
 <details>
 <summary>Click to expand build instructions</summary>
 
+**Using the build script** (clones, builds, and runs setup):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sh3ll3x3c/native-devtools-mcp/master/scripts/build-from-source.sh | bash
+```
+
+**Or manually:**
+
 ```bash
 git clone https://github.com/sh3ll3x3c/native-devtools-mcp
 cd native-devtools-mcp
@@ -86,17 +94,36 @@ cargo build --release
 
 </details>
 
-## ⚙️ Configuration
+## 🏁 Getting Started
 
-### macOS Configuration
+After installing, run the setup wizard:
 
-**Claude Desktop config file:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+```bash
+npx native-devtools-mcp setup
+```
 
-**Claude Desktop requires the signed app bundle** (npx/npm will not work due to Gatekeeper):
+This will:
+1. **Check permissions** (macOS) — verifies Accessibility and Screen Recording, opens System Settings if needed
+2. **Detect your MCP clients** — finds Claude Desktop, Claude Code, Cursor
+3. **Write the configuration** — generates the correct JSON config and offers to write it for you
 
-1. Download `NativeDevtools-X.X.X.dmg` from [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases)
-2. Open the DMG and drag `NativeDevtools.app` to `/Applications`
-3. Configure Claude Desktop:
+Then restart your MCP client and you're ready to go.
+
+> **Claude Desktop on macOS** requires the signed app bundle (Gatekeeper blocks npx). Download `NativeDevtools-X.X.X.dmg` from [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases), drag to `/Applications`, then run setup — it will detect the app and configure Claude Desktop to use it.
+
+> **VS Code, Windsurf, and other clients:** `setup` doesn't auto-detect these yet. Run `setup` for the permission checks, then see the manual configuration below for the JSON config snippet.
+
+> **Claude Code tip:** To avoid approving every tool call (clicks, screenshots), add this to `.claude/settings.local.json`:
+> ```json
+> { "permissions": { "allow": ["mcp__native-devtools__*"] } }
+> ```
+
+<details>
+<summary><strong>Manual configuration (without setup)</strong></summary>
+
+#### macOS — Claude Desktop
+
+Config file: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -108,17 +135,11 @@ cargo build --release
 }
 ```
 
-4. Restart Claude Desktop - it will prompt for Screen Recording and Accessibility permissions for NativeDevtools
+#### Windows — Claude Desktop
 
-> **Note:** Claude Code (CLI) can use either the signed app or npx - both work.
+Config file: `%APPDATA%\Claude\claude_desktop_config.json`
 
-### Windows Configuration
-
-**Claude Desktop config file:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-### Configuration JSON (Windows and macOS CLI)
-
-For Windows (or macOS with Claude Code CLI):
+#### Claude Code, Cursor, and other MCP clients
 
 ```json
 {
@@ -131,21 +152,42 @@ For Windows (or macOS with Claude Code CLI):
 }
 ```
 
-> **Note:** Requires Node.js 18+ installed.
+Requires Node.js 18+.
 
-### For Claude Code (CLI) Users
+</details>
 
-To avoid approving every single tool call (clicks, screenshots), you can add this wildcard permission to your project's settings or global config:
+## 🔐 Security & Trust
 
-**File:** `.claude/settings.local.json` (or similar)
+This tool requires Accessibility and Screen Recording permissions — that's a lot of trust. Here's how to verify it deserves it.
 
-```json
-{
-  "permissions": {
-    "allow": ["mcp__native-devtools__*"]
-  }
-}
+### Verify your binary
+
+```bash
+native-devtools-mcp verify
 ```
+
+Computes the SHA-256 hash of the running binary and checks it against the official checksums published on the [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases) page. If the hash matches, you're running an unmodified official build.
+
+### Build from source
+
+Don't trust pre-built binaries? Build it yourself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sh3ll3x3c/native-devtools-mcp/master/scripts/build-from-source.sh | bash
+```
+
+The script clones the repo, optionally opens it for review before building, compiles the release binary, and runs setup. See [`scripts/build-from-source.sh`](scripts/build-from-source.sh).
+
+### Audit the code
+
+[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) documents exactly which permissions are used, where in the source code, and includes an LLM audit prompt you can paste into any AI model to perform an independent security review.
+
+### What this server does NOT do
+
+- **No unsolicited network access** — the server never phones home. Network is only used when the MCP client explicitly invokes `app_connect` (WebSocket to a local debug server) or when you run the `verify` subcommand (fetches checksums from GitHub)
+- **No file scanning** — does not read or index your files. The only file reads are `load_image` (reads a path the MCP client explicitly provides) and short-lived temp files for screenshots (deleted immediately after capture)
+- **No background persistence** — exits when the MCP client disconnects
+- **No data exfiltration** — screenshots are returned to the MCP client via stdout, never stored or transmitted elsewhere
 
 ## 🔍 Two Approaches to Interaction
 
@@ -306,28 +348,11 @@ screen_y = screenshot_origin_y + (pixel_y / screenshot_scale)
 
 </details>
 
-## 🛡️ Privacy, Safety & Best Practices
+## ⚠️ Operational Safety
 
-### 🔒 Privacy First
-*   **100% Local:** All processing (screenshots, OCR, logic) happens on your device.
-*   **No Cloud:** Images are never uploaded to any third-party server by this tool.
-*   **Open Source:** You can inspect the code to verify exactly what it does.
-
-### ⚠️ Operational Safety
 *   **Hands Off:** When the agent is "driving" (clicking/typing), **do not move your mouse or type**.
     *   *Why?* Real hardware inputs can conflict with the simulated ones, causing clicks to land in the wrong place.
 *   **Focus Matters:** Ensure the window you want the agent to use is visible. If a popup steals focus, the agent might type into the wrong window unless it checks first.
-
-## 🔐 Required Permissions (macOS)
-
-On macOS, you must grant permissions to the **host application** (e.g., Terminal, VS Code, Claude Desktop) to allow screen recording and input control.
-
-1.  **Screen Recording:** Required for `take_screenshot`.
-    *   *System Settings > Privacy & Security > Screen Recording*
-2.  **Accessibility:** Required for `click`, `type_text`, `scroll`.
-    *   *System Settings > Privacy & Security > Accessibility*
-
-> **Restart Required:** After granting permissions, you must fully quit and restart the host application.
 
 ## 🪟 Windows Notes
 
