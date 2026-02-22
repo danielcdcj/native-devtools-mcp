@@ -75,6 +75,16 @@ pub fn run() {
         println!();
         println!("  {GREEN}✓ Verified{RESET} — binary matches the official GitHub release.");
         println!();
+    } else if is_source_build(&exe_path) {
+        println!();
+        println!("  {YELLOW}!{RESET} Hash does not match the official release (expected for a source build).");
+        println!();
+        println!("  Local:    {local_hash}");
+        println!("  Official: {expected_hash}");
+        println!();
+        println!("  Binaries built from source will differ from CI builds.");
+        println!("  This command is for verifying pre-built binaries (npx, npm, DMG).");
+        println!();
     } else {
         println!();
         println!("  {RED}✗ Mismatch{RESET} — binary does NOT match the official release!");
@@ -84,6 +94,10 @@ pub fn run() {
         println!();
         std::process::exit(1);
     }
+}
+
+fn is_source_build(exe_path: &Path) -> bool {
+    exe_path.components().any(|c| c.as_os_str() == "target")
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
