@@ -38,6 +38,7 @@ mod tool_gating {
         assert!(tool_names.contains(&"list_windows".to_string()));
         assert!(tool_names.contains(&"click".to_string()));
         assert!(tool_names.contains(&"type_text".to_string()));
+        assert!(tool_names.contains(&"element_at_point".to_string()));
 
         // app_connect should always be present
         assert!(tool_names.contains(&"app_connect".to_string()));

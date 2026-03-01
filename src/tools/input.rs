@@ -458,6 +458,46 @@ pub fn find_text(params: FindTextParams) -> CallToolResult {
     }
 }
 
+// ============================================================================
+// Element At Point
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ElementAtPointParams {
+    pub x: f64,
+    pub y: f64,
+    pub app_name: Option<String>,
+}
+
+pub fn element_at_point(params: ElementAtPointParams) -> CallToolResult {
+    let result = element_at_point_platform(params.x, params.y, params.app_name.as_deref());
+    match result {
+        Ok(value) => match serde_json::to_string_pretty(&value) {
+            Ok(json) => CallToolResult::success(vec![Content::text(json)]),
+            Err(e) => {
+                CallToolResult::error(vec![Content::text(format!("Failed to serialize: {}", e))])
+            }
+        },
+        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+    }
+}
+
+fn element_at_point_platform(
+    x: f64,
+    y: f64,
+    app_name: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::ax::element_at_point(x, y, app_name)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app_name; // TODO: support app_name scoping on Windows
+        crate::windows::uia::element_at_point(x, y)
+    }
+}
+
 /// Try to find text using the platform accessibility API.
 fn find_text_accessibility(
     search: &str,

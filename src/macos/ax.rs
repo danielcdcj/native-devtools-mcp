@@ -47,6 +47,14 @@ extern "C" {
         attribute: core_foundation::string::CFStringRef,
         value: core_foundation::base::CFTypeRef,
     ) -> i32;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyElementAtPosition(
+        application: AXUIElementRef,
+        x: f32,
+        y: f32,
+        element: *mut AXUIElementRef,
+    ) -> i32;
+    fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
 }
 
 /// Find text in UI elements of an app's accessibility tree.
@@ -226,6 +234,32 @@ fn pid_for_window(window_id: u32) -> Result<i32, String> {
         .map_err(|_| format!("PID {} exceeds i32 range", window.owner_pid))
 }
 
+/// Get the application name for a PID via NSRunningApplication.
+fn app_name_for_pid(pid: i32) -> Option<String> {
+    unsafe {
+        let app: *mut Object = msg_send![
+            Class::get("NSRunningApplication")?,
+            runningApplicationWithProcessIdentifier: pid
+        ];
+        if app.is_null() {
+            return None;
+        }
+        let name_ns: *mut Object = msg_send![app, localizedName];
+        if name_ns.is_null() {
+            return None;
+        }
+        let utf8_ptr: *const std::ffi::c_char = msg_send![name_ns, UTF8String];
+        if utf8_ptr.is_null() {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr(utf8_ptr)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
 /// Get the PID of the frontmost application via NSWorkspace.
 fn frontmost_pid() -> Result<i32, String> {
     unsafe {
@@ -241,6 +275,118 @@ fn frontmost_pid() -> Result<i32, String> {
         let pid: i32 = msg_send![app, processIdentifier];
         Ok(pid)
     }
+}
+
+/// Resolve app_name to PID by finding the first matching window.
+fn pid_for_app_name(app_name: &str) -> Result<i32, String> {
+    let windows = super::window::find_windows_by_app(app_name)
+        .map_err(|e| format!("Failed to find windows: {}", e))?;
+    let win = windows.first().ok_or_else(|| {
+        format!(
+            "No app found matching '{}'. Use list_apps to find the correct app name.",
+            app_name
+        )
+    })?;
+    i32::try_from(win.owner_pid).map_err(|_| format!("PID {} exceeds i32 range", win.owner_pid))
+}
+
+/// Get the PID of the process that owns an AX element.
+unsafe fn get_pid_for_element(element: AXUIElementRef) -> Option<i32> {
+    let mut pid: i32 = 0;
+    if AXUIElementGetPid(element, &mut pid) == K_AX_ERROR_SUCCESS {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+/// Get the accessibility element at the given screen coordinates.
+///
+/// Uses `AXUIElementCopyElementAtPosition` to find the deepest element
+/// at (x, y). If `app_name` is provided, scopes the lookup to that app;
+/// otherwise uses a system-wide lookup.
+pub fn element_at_point(
+    x: f64,
+    y: f64,
+    app_name: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let root = if let Some(name) = app_name {
+        let pid = pid_for_app_name(name)?;
+        let el = unsafe { AXUIElementCreateApplication(pid) };
+        if el.is_null() {
+            return Err(format!("Failed to create AXUIElement for app '{}'", name));
+        }
+        el
+    } else {
+        let el = unsafe { AXUIElementCreateSystemWide() };
+        if el.is_null() {
+            return Err("Failed to create system-wide AXUIElement".to_string());
+        }
+        el
+    };
+
+    let mut element: AXUIElementRef = ptr::null_mut();
+    let err = unsafe { AXUIElementCopyElementAtPosition(root, x as f32, y as f32, &mut element) };
+
+    unsafe {
+        core_foundation::base::CFRelease(root as core_foundation::base::CFTypeRef);
+    }
+
+    if err != K_AX_ERROR_SUCCESS || element.is_null() {
+        return Err(format!("No accessibility element found at ({}, {})", x, y));
+    }
+
+    // Read attributes from the element
+    let name = unsafe { get_string_attribute(element, "AXTitle") };
+    let role = unsafe { get_string_attribute(element, "AXRole") };
+    let label = unsafe { get_string_attribute(element, "AXDescription") };
+    let value = unsafe { get_string_attribute(element, "AXValue") };
+    let bounds = unsafe { get_position_and_size(element) };
+
+    // Get PID from the element
+    let pid = unsafe { get_pid_for_element(element) };
+
+    unsafe {
+        core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
+    }
+
+    // Resolve app name from PID
+    let resolved_app_name = pid.and_then(app_name_for_pid);
+
+    // Build response, omitting null fields
+    let mut result = serde_json::Map::new();
+
+    if let Some(r) = role {
+        result.insert("role".to_string(), serde_json::Value::String(r));
+    }
+    if let Some(n) = name {
+        result.insert("name".to_string(), serde_json::Value::String(n));
+    }
+    if let Some(l) = label {
+        result.insert("label".to_string(), serde_json::Value::String(l));
+    }
+    if let Some(v) = value {
+        result.insert("value".to_string(), serde_json::Value::String(v));
+    }
+    if let Some((pos, size)) = bounds {
+        result.insert(
+            "bounds".to_string(),
+            serde_json::json!({
+                "x": pos.x,
+                "y": pos.y,
+                "width": size.width,
+                "height": size.height,
+            }),
+        );
+    }
+    if let Some(p) = pid {
+        result.insert("pid".to_string(), serde_json::Value::Number(p.into()));
+    }
+    if let Some(a) = resolved_app_name {
+        result.insert("app_name".to_string(), serde_json::Value::String(a));
+    }
+
+    Ok(serde_json::Value::Object(result))
 }
 
 /// Collect all unique non-empty element names from the accessibility tree.
@@ -422,5 +568,57 @@ mod tests {
             !results.is_empty(),
             "Should find at least one match for '9' with window_id"
         );
+    }
+
+    /// Test element_at_point with Calculator.
+    /// Requires Calculator to be running and visible.
+    /// Run with: cargo test test_ax_element_at_point_calculator -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_ax_element_at_point_calculator() {
+        // First find Calculator's "5" button to get known coordinates
+        let matches = find_text("5", None).expect("find_text should succeed");
+        let button = matches
+            .iter()
+            .find(|m| m.text == "5")
+            .expect("Should find the '5' button");
+
+        // Now query element_at_point at those coordinates
+        let result = element_at_point(button.x, button.y, Some("Calculator"))
+            .expect("element_at_point should succeed");
+
+        println!(
+            "element_at_point result: {}",
+            serde_json::to_string_pretty(&result).unwrap()
+        );
+
+        // Verify we got a meaningful result
+        assert!(result.get("role").is_some(), "Should have a role");
+        assert!(result.get("bounds").is_some(), "Should have bounds");
+        assert!(result.get("pid").is_some(), "Should have a pid");
+        assert!(result.get("app_name").is_some(), "Should have an app_name");
+    }
+
+    /// Test element_at_point with system-wide lookup (no app_name).
+    /// Requires Calculator to be running and in the foreground.
+    /// Run with: cargo test test_ax_element_at_point_system_wide -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_ax_element_at_point_system_wide() {
+        let matches = find_text("5", None).expect("find_text should succeed");
+        let button = matches
+            .iter()
+            .find(|m| m.text == "5")
+            .expect("Should find the '5' button");
+
+        let result =
+            element_at_point(button.x, button.y, None).expect("element_at_point should succeed");
+
+        println!(
+            "element_at_point (system-wide): {}",
+            serde_json::to_string_pretty(&result).unwrap()
+        );
+
+        assert!(result.get("role").is_some(), "Should have a role");
     }
 }

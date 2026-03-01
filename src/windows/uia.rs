@@ -191,6 +191,113 @@ pub fn list_element_names() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Get the UI Automation element at the given screen coordinates.
+///
+/// Uses `IUIAutomation::ElementFromPoint` to find the element at (x, y).
+/// Returns a JSON object with the element's attributes.
+pub fn element_at_point(x: f64, y: f64) -> Result<serde_json::Value, String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
+            .map_err(|e| format!("Failed to create IUIAutomation: {}", e))?;
+
+        let point = windows::Win32::Foundation::POINT {
+            x: x as i32,
+            y: y as i32,
+        };
+
+        let elem = automation
+            .ElementFromPoint(point)
+            .map_err(|e| format!("No accessibility element found at ({}, {}): {}", x, y, e))?;
+
+        let name = elem
+            .CurrentName()
+            .ok()
+            .map(|n| n.to_string())
+            .filter(|n| !n.is_empty());
+        let role = elem
+            .CurrentControlType()
+            .ok()
+            .and_then(|ct| uia_control_type_name(ct.0));
+        let help = elem
+            .CurrentHelpText()
+            .ok()
+            .map(|h| h.to_string())
+            .filter(|h| !h.is_empty());
+        let value_pattern = elem
+            .GetCurrentPropertyValue(windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId)
+            .ok()
+            .and_then(|v| {
+                let s = v.to_string();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            });
+
+        let rect = elem.CurrentBoundingRectangle().ok();
+        let pid = elem.CurrentProcessId().ok();
+
+        // Resolve app name from PID
+        let resolved_app_name = pid.and_then(|p| {
+            use windows::Win32::System::ProcessStatus::GetProcessImageFileNameW;
+            use windows::Win32::System::Threading::{
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            };
+
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, p as u32).ok()?;
+            let mut buf = [0u16; 260];
+            let len = GetProcessImageFileNameW(handle, &mut buf);
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            if len == 0 {
+                return None;
+            }
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            path.rsplit('\\')
+                .next()
+                .map(|s| s.trim_end_matches(".exe").to_string())
+        });
+
+        let mut result = serde_json::Map::new();
+
+        if let Some(r) = role {
+            result.insert("role".to_string(), serde_json::Value::String(r));
+        }
+        if let Some(n) = name {
+            result.insert("name".to_string(), serde_json::Value::String(n));
+        }
+        if let Some(l) = help {
+            result.insert("label".to_string(), serde_json::Value::String(l));
+        }
+        if let Some(v) = value_pattern {
+            result.insert("value".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(r) = rect {
+            let width = (r.right - r.left) as f64;
+            let height = (r.bottom - r.top) as f64;
+            result.insert(
+                "bounds".to_string(),
+                serde_json::json!({
+                    "x": r.left as f64,
+                    "y": r.top as f64,
+                    "width": width,
+                    "height": height,
+                }),
+            );
+        }
+        if let Some(p) = pid {
+            result.insert("pid".to_string(), serde_json::Value::Number(p.into()));
+        }
+        if let Some(a) = resolved_app_name {
+            result.insert("app_name".to_string(), serde_json::Value::String(a));
+        }
+
+        Ok(serde_json::Value::Object(result))
+    }
+}
+
 /// Map a UIA_*ControlTypeId to a human-readable name.
 fn uia_control_type_name(id: i32) -> Option<String> {
     let name = match id {

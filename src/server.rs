@@ -441,6 +441,28 @@ impl MacOSDevToolsServer {
                 }))),
             ),
             Tool::new(
+                "element_at_point",
+                "Given screen coordinates (x, y), return the accessibility element at that point (name, role, label, value, bounds, pid, app_name). Optional app_name param to scope the lookup to a specific application for faster, more precise results.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Screen X coordinate"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Screen Y coordinate"
+                        },
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to scope the lookup to a specific app (e.g., 'Calculator'). Faster and avoids ambiguity at window edges."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
                 "find_image",
                 "Find a template image within a screenshot using template matching. Returns precise click coordinates for non-text UI elements like icons and shapes. Use screenshot_id from take_screenshot or provide screenshot_image_base64. Use template_id from load_image or provide template_image_base64.",
                 Arc::new(json_to_object(serde_json::json!({
@@ -1155,6 +1177,11 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: input_tools::FindTextParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(input_tools::find_text(params))
+            }
+            "element_at_point" => {
+                let params: input_tools::ElementAtPointParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(input_tools::element_at_point(params))
             }
             "find_image" => {
                 let params: find_image::FindImageParams = serde_json::from_value(args)
