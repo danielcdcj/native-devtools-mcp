@@ -129,6 +129,20 @@ pub fn find_text(search: &str, window_id: Option<u32>) -> Result<Vec<TextMatch>,
     Ok(matches)
 }
 
+/// Get the children of an AX element as a CFArray.
+/// Returns `None` if the element has no children or the attribute is unavailable.
+unsafe fn get_ax_children(element: AXUIElementRef) -> Option<CFArray<*const c_void>> {
+    let attr = CFString::new("AXChildren");
+    let mut children_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut children_ref);
+
+    if err != K_AX_ERROR_SUCCESS || children_ref.is_null() {
+        return None;
+    }
+
+    Some(CFArray::wrap_under_create_rule(children_ref as _))
+}
+
 /// Recursively walk the AX element tree and call `visitor` on each element.
 ///
 /// `depth` limits recursion to prevent runaway traversal of deep trees.
@@ -146,28 +160,14 @@ unsafe fn walk_ax_tree(
     *element_count += 1;
     visitor(element);
 
-    // Recurse into children
-    let children_attr = CFString::new("AXChildren");
-    let mut children_ref: core_foundation::base::CFTypeRef = ptr::null();
-    let err = AXUIElementCopyAttributeValue(
-        element,
-        children_attr.as_concrete_TypeRef(),
-        &mut children_ref,
-    );
-
-    if err != K_AX_ERROR_SUCCESS || children_ref.is_null() {
-        return;
-    }
-
-    // children_ref is a CFArray of AXUIElementRef
-    let children: CFArray<*const c_void> = CFArray::wrap_under_create_rule(children_ref as _);
-
-    for i in 0..children.len() {
-        let child = *children.get_unchecked(i) as AXUIElementRef;
-        // Retain the child for the duration of our walk since CFArray only gives a get-rule ref
-        core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
-        walk_ax_tree(child, element_count, depth + 1, visitor);
-        core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
+    if let Some(children) = get_ax_children(element) {
+        for i in 0..children.len() {
+            let child = *children.get_unchecked(i) as AXUIElementRef;
+            // Retain the child for the duration of our walk since CFArray only gives a get-rule ref
+            core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
+            walk_ax_tree(child, element_count, depth + 1, visitor);
+            core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
+        }
     }
 }
 
@@ -300,11 +300,84 @@ unsafe fn get_pid_for_element(element: AXUIElementRef) -> Option<i32> {
     }
 }
 
+/// Container roles where `AXUIElementCopyElementAtPosition` may stop too
+/// early (e.g. Electron/Chromium web views). When the hit element has one of
+/// these roles, we drill deeper into AX children to find the most specific
+/// element at the coordinates.
+fn is_container_role(role: &str) -> bool {
+    matches!(
+        role,
+        "AXScrollArea"
+            | "AXWebArea"
+            | "AXGroup"
+            | "AXSplitGroup"
+            | "AXLayoutArea"
+            | "AXList"
+            | "AXOutline"
+            | "AXTable"
+            | "AXBrowser"
+    )
+}
+
+/// Full tree-walk hit-test: find the smallest-area AX element whose bounds
+/// contain (x, y). Walks the entire tree (no spatial pruning) because
+/// Electron/Chromium apps may have intermediate containers with inaccurate
+/// bounds that don't encompass their children.
+unsafe fn hit_test_tree(root: AXUIElementRef, x: f64, y: f64) -> Option<HitResult> {
+    let mut best: Option<HitResult> = None;
+    let mut element_count: usize = 0;
+
+    walk_ax_tree(root, &mut element_count, 0, &mut |element| {
+        if let Some((pos, size)) = get_position_and_size(element) {
+            if size.width > 0.0
+                && size.height > 0.0
+                && x >= pos.x
+                && x <= pos.x + size.width
+                && y >= pos.y
+                && y <= pos.y + size.height
+            {
+                let area = size.width * size.height;
+                let is_better = match &best {
+                    Some(current) => area < current.area,
+                    None => true,
+                };
+                if is_better {
+                    best = Some(HitResult {
+                        name: get_string_attribute(element, "AXTitle"),
+                        role: get_string_attribute(element, "AXRole"),
+                        label: get_string_attribute(element, "AXDescription"),
+                        value: get_string_attribute(element, "AXValue"),
+                        position: pos,
+                        size,
+                        area,
+                    });
+                }
+            }
+        }
+    });
+
+    best
+}
+
+/// Result of a hit-test tree walk — captures all attributes at visit time
+/// since AX element references from the walk are borrowed, not owned.
+struct HitResult {
+    name: Option<String>,
+    role: Option<String>,
+    label: Option<String>,
+    value: Option<String>,
+    position: CGPoint,
+    size: CGSize,
+    area: f64,
+}
+
 /// Get the accessibility element at the given screen coordinates.
 ///
-/// Uses `AXUIElementCopyElementAtPosition` to find the deepest element
-/// at (x, y). If `app_name` is provided, scopes the lookup to that app;
-/// otherwise uses a system-wide lookup.
+/// Uses `AXUIElementCopyElementAtPosition` to find the element at (x, y).
+/// If the result is a container (e.g. AXScrollArea in Electron apps), drills
+/// deeper into AX children to find the most specific element.
+/// If `app_name` is provided, scopes the lookup to that app; otherwise uses
+/// a system-wide lookup.
 pub fn element_at_point(
     x: f64,
     y: f64,
@@ -336,19 +409,43 @@ pub fn element_at_point(
         return Err(format!("No accessibility element found at ({}, {})", x, y));
     }
 
-    // Read attributes from the element
-    let name = unsafe { get_string_attribute(element, "AXTitle") };
-    let role = unsafe { get_string_attribute(element, "AXRole") };
-    let label = unsafe { get_string_attribute(element, "AXDescription") };
-    let value = unsafe { get_string_attribute(element, "AXValue") };
-    let bounds = unsafe { get_position_and_size(element) };
-
-    // Get PID from the element
+    // Read PID early — needed for both paths and must happen before release.
     let pid = unsafe { get_pid_for_element(element) };
 
-    unsafe {
-        core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
-    }
+    // If the hit element is a container, try a full tree-walk hit-test
+    // from the app root. Needed for Electron/Chromium apps where
+    // AXUIElementCopyElementAtPosition returns a shallow container whose
+    // element reference exposes no children.
+    let role_str = unsafe { get_string_attribute(element, "AXRole") };
+    let is_container = role_str.as_deref().is_some_and(is_container_role);
+
+    let (name, role, label, value, bounds) = if is_container {
+        unsafe {
+            core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
+        }
+        let hit = pid.and_then(|p| unsafe {
+            let app = AXUIElementCreateApplication(p);
+            if app.is_null() {
+                return None;
+            }
+            let result = hit_test_tree(app, x, y);
+            core_foundation::base::CFRelease(app as core_foundation::base::CFTypeRef);
+            result
+        });
+        match hit {
+            Some(h) => (h.name, h.role, h.label, h.value, Some((h.position, h.size))),
+            None => (None, role_str, None, None, None),
+        }
+    } else {
+        let name = unsafe { get_string_attribute(element, "AXTitle") };
+        let label = unsafe { get_string_attribute(element, "AXDescription") };
+        let value = unsafe { get_string_attribute(element, "AXValue") };
+        let bounds = unsafe { get_position_and_size(element) };
+        unsafe {
+            core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
+        }
+        (name, role_str, label, value, bounds)
+    };
 
     // Resolve app name from PID
     let resolved_app_name = pid.and_then(app_name_for_pid);
