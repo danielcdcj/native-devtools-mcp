@@ -27,6 +27,7 @@ Use this table to choose the right tool sequence for the user's goal.
 |-----------|---------------|------|
 | "Click the 'Submit' button" | `find_text(text="Submit")` → `click(x, y)` | Fastest. No visual analysis needed if text is known. |
 | "Click the red icon" | `take_screenshot()` → (Analyze Image) → `click(screenshot_x=..., screenshot_y=..., screenshot_origin_x=..., screenshot_origin_y=..., screenshot_scale=...)` | Visual features require full screenshot analysis. |
+| "What element is at (500, 300)?" | `element_at_point(x=500, y=300)` | Returns the accessibility element at those coordinates (name, role, bounds, etc.). |
 | "Type into the search bar" | `find_text(text="Search")` → `click(x, y)` → `type_text("hello")` | Must click to focus before typing. |
 | "Scroll down" | `scroll(x=500, y=500, delta_y=200)` | Positive `delta_y` scrolls down. |
 | "Find an open window" | `list_windows()` → `focus_window(window_id=...)` | Don't guess window names; list them first. |
@@ -72,6 +73,25 @@ Fast-path to get coordinates without image analysis.
     *   **Both platforms:** Uses the **platform accessibility API** as the primary mechanism — searches the accessibility tree for elements by name. This gives precise element-level coordinates (`confidence: 1.0`). Falls back to OCR automatically if accessibility finds no matches.
     *   **macOS:** Accessibility API (primary), Vision OCR (fallback). Matches against element title, value, and description. Note: accessibility results use semantic names (e.g., "All Clear" instead of "AC", "Subtract" instead of "−"), so search by meaning rather than displayed symbol.
     *   **Windows:** UI Automation (primary), WinRT OCR (fallback). Matches against element Name property only.
+
+#### `element_at_point`
+Inspect the accessibility element at given screen coordinates.
+*   **Inputs:** `x` (number, required), `y` (number, required), `app_name` (string, optional — scope lookup to a specific app for faster, more precise results).
+*   **Returns (JSON object, fields present only when available):**
+    ```json
+    {
+      "role": "AXButton",
+      "name": "Save",
+      "label": "Save document",
+      "value": "...",
+      "bounds": { "x": 480, "y": 290, "width": 40, "height": 20 },
+      "pid": 12345,
+      "app_name": "TextEdit"
+    }
+    ```
+*   **Platform behavior:**
+    *   **macOS:** Uses `AXUIElementCopyElementAtPosition`. With `app_name`, scopes to that app's element tree (useful when windows overlap).
+    *   **Windows:** Uses `IUIAutomation::ElementFromPoint`. `app_name` is not yet supported (ignored).
 
 ### 2. Input & Interaction (The "Hands")
 

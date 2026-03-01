@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### `element_at_point` tool
+
+New tool that returns the accessibility element at given screen coordinates. Given an (x, y) point, returns the element's name, role, label, value, bounds, pid, and app_name. Optional `app_name` parameter scopes the lookup to a specific application (useful when windows overlap). Uses `AXUIElementCopyElementAtPosition` on macOS and `IUIAutomation::ElementFromPoint` on Windows.
+
 ## v0.4.3
 
 ### `find_text` result ranking
