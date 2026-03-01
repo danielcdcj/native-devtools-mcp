@@ -54,7 +54,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).
 2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
 3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately. Uses the platform **accessibility API** (macOS Accessibility / Windows UI Automation) for precise element-level matching, with OCR fallback.
-4.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name.
+4.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
 5.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
 
 ## 📦 Installation
@@ -318,7 +318,7 @@ graph TD
 | **macOS** | Screenshots | `screencapture` (CLI) |
 | | Input | `CGEvent` (CoreGraphics) |
 | | Text Search (`find_text`) | `Accessibility API` (primary), Vision OCR (fallback) |
-| | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` (Accessibility API) |
+| | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback (Accessibility API) |
 | | OCR | `VNRecognizeTextRequest` (Vision Framework) |
 | **Windows** | Screenshots | `BitBlt` (GDI) |
 | | Input | `SendInput` (Win32) |

@@ -90,8 +90,9 @@ Inspect the accessibility element at given screen coordinates.
     }
     ```
 *   **Platform behavior:**
-    *   **macOS:** Uses `AXUIElementCopyElementAtPosition`. With `app_name`, scopes to that app's element tree (useful when windows overlap).
+    *   **macOS:** Uses `AXUIElementCopyElementAtPosition`. When the result is a container (e.g. AXScrollArea in Electron apps), automatically walks the full AX tree to find the most specific element at the coordinates. With `app_name`, scopes to that app's element tree (useful when windows overlap).
     *   **Windows:** Uses `IUIAutomation::ElementFromPoint`. `app_name` is not yet supported (ignored).
+*   **Known limitation:** Some privacy-focused Electron apps (e.g. Signal) intentionally restrict their accessibility tree, exposing only top-level containers without individual UI elements. In these cases, `element_at_point` returns the outermost container (e.g. AXScrollArea or AXWindow). **Workaround:** If the returned element is a large container, use `take_screenshot(app_name=..., include_ocr=true)` and check the OCR results to identify the text/element at those coordinates.
 
 ### 2. Input & Interaction (The "Hands")
 
