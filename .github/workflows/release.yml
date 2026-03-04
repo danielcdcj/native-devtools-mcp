@@ -196,7 +196,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           # Extract the section between "## vX.Y.Z" and the next "## v" heading (or EOF)
-          NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '1d;$d' | sed '/^$/N;/^\n$/d')
+          NOTES=$(awk "/^## v${VERSION}\$/ { found=1; next } found && /^## v/ { exit } found { print }" CHANGELOG.md | sed '/^$/N;/^\n$/d')
           if [ -n "$NOTES" ]; then
             echo "has_notes=true" >> "$GITHUB_OUTPUT"
             # Write to file for body_path (handles multiline safely)
