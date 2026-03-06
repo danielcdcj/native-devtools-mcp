@@ -233,6 +233,24 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "quit_app",
+                "Quit a running application by name. Graceful by default (app can save state). Use force=true to kill immediately.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["app_name"],
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to quit (e.g., 'Calculator', 'Safari')"
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Force kill instead of graceful quit (default: false)"
+                        }
+                    }
+                }))),
+            ),
             // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
@@ -1082,6 +1100,11 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: navigation::LaunchAppParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(navigation::launch_app(params))
+            }
+            "quit_app" => {
+                let params: navigation::QuitAppParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(navigation::quit_app(params))
             }
             // App Debug Protocol tools
             "app_connect" => {

@@ -8,13 +8,13 @@ use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, TRUE};
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow, GetWindowTextLengthW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, GW_OWNER,
-    SW_RESTORE, SW_SHOW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW, SetForegroundWindow,
+    ShowWindow, GW_OWNER, SW_RESTORE, SW_SHOW, WM_CLOSE,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,6 +324,94 @@ pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
             "Failed to launch '{}': {}",
             app_name,
             stderr.trim()
+        ))
+    }
+}
+
+/// Quit an application by name.
+///
+/// Graceful: sends WM_CLOSE to all matching windows.
+/// Force: calls TerminateProcess on the matching PIDs.
+/// Returns the number of app instances terminated.
+pub fn quit_app(app_name: &str, force: bool) -> Result<u32, String> {
+    let needle = app_name.to_lowercase();
+    let mut terminated = 0u32;
+
+    if force {
+        // Force kill: find PIDs and terminate processes
+        let mut killed_pids = std::collections::HashSet::new();
+        let apps = list_apps();
+        for app in &apps {
+            if app.name.to_lowercase().contains(&needle) && killed_pids.insert(app.pid) {
+                unsafe {
+                    if let Ok(handle) = OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                        false,
+                        app.pid as u32,
+                    ) {
+                        let _ = TerminateProcess(handle, 1);
+                        let _ = CloseHandle(handle);
+                        terminated += 1;
+                    }
+                }
+            }
+        }
+    } else {
+        // Graceful: enumerate windows and send WM_CLOSE to matching ones
+        struct QuitData {
+            needle: String,
+            terminated: u32,
+        }
+
+        let mut data = QuitData {
+            needle,
+            terminated: 0,
+        };
+
+        unsafe extern "system" fn quit_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let data = &mut *(lparam.0 as *mut QuitData);
+
+            if !IsWindowVisible(hwnd).as_bool() {
+                return TRUE;
+            }
+
+            let title_len = GetWindowTextLengthW(hwnd);
+            if title_len == 0 {
+                return TRUE;
+            }
+
+            if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+                if !owner.is_invalid() {
+                    return TRUE;
+                }
+            }
+
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+            if let Some(name) = get_process_name_static(pid) {
+                if name.to_lowercase().contains(&data.needle) {
+                    let _ = PostMessageW(hwnd, WM_CLOSE, None, None);
+                    data.terminated += 1;
+                }
+            }
+
+            TRUE
+        }
+
+        unsafe {
+            let _ = EnumWindows(Some(quit_callback), LPARAM(&mut data as *mut _ as isize));
+        }
+
+        terminated = data.terminated;
+    }
+
+    if terminated > 0 {
+        Ok(terminated)
+    } else {
+        Err(format!(
+            "No running app found matching '{}'. Use list_apps to find the correct app name.",
+            app_name
         ))
     }
 }

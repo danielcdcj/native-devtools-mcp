@@ -88,6 +88,31 @@ pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct QuitAppParams {
+    /// Application name to quit
+    pub app_name: String,
+    /// Force kill instead of graceful termination (default: false)
+    pub force: Option<bool>,
+}
+
+pub fn quit_app(params: QuitAppParams) -> CallToolResult {
+    let force = params.force.unwrap_or(false);
+    match platform::quit_app(&params.app_name, force) {
+        Ok(count) => {
+            let method = if force { "Force-killed" } else { "Quit" };
+            CallToolResult::success(vec![Content::text(format!(
+                "{} '{}' ({} instance{})",
+                method,
+                params.app_name,
+                count,
+                if count == 1 { "" } else { "s" }
+            ))])
+        }
+        Err(e) => CallToolResult::error(vec![Content::text(e)]),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FocusWindowParams {
     /// Window ID to focus (optional, use with window_id)
     pub window_id: Option<u32>,

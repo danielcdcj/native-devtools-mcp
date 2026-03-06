@@ -167,6 +167,49 @@ pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Quit an application by name.
+///
+/// By default performs a graceful termination (NSRunningApplication.terminate).
+/// If `force` is true, uses forceTerminate which kills immediately without cleanup.
+/// Returns the number of app instances terminated.
+pub fn quit_app(app_name: &str, force: bool) -> Result<u32, String> {
+    let mut terminated = 0u32;
+
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let running_apps: id = msg_send![workspace, runningApplications];
+        let count: usize = msg_send![running_apps, count];
+
+        let needle = app_name.to_lowercase();
+        for i in 0..count {
+            let app: id = msg_send![running_apps, objectAtIndex: i];
+            let name_ns: id = msg_send![app, localizedName];
+            if name_ns != nil {
+                let name = nsstring_to_string(name_ns);
+                if name.to_lowercase().contains(&needle) {
+                    let success: bool = if force {
+                        msg_send![app, forceTerminate]
+                    } else {
+                        msg_send![app, terminate]
+                    };
+                    if success {
+                        terminated += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if terminated > 0 {
+        Ok(terminated)
+    } else {
+        Err(format!(
+            "No running app found matching '{}'. Use list_apps to find the correct app name.",
+            app_name
+        ))
+    }
+}
+
 unsafe fn nsstring_to_string(ns_string: id) -> String {
     let utf8_ptr: *const i8 = msg_send![ns_string, UTF8String];
     if utf8_ptr.is_null() {
