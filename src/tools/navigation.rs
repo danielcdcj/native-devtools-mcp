@@ -63,10 +63,22 @@ pub fn list_apps(params: ListAppsParams) -> CallToolResult {
 pub struct LaunchAppParams {
     /// Application name to launch (e.g., "Calculator", "Safari")
     pub app_name: String,
+    /// Optional CLI arguments to pass to the app (e.g., ["--remote-debugging-port=9222"])
+    pub args: Option<Vec<String>>,
 }
 
 pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
-    match platform::launch_app(&params.app_name) {
+    let args = params.args.as_deref().unwrap_or(&[]);
+
+    // If args are provided, check if the app is already running — args only apply on fresh launch
+    if !args.is_empty() && platform::is_app_running(&params.app_name) {
+        return CallToolResult::error(vec![Content::text(format!(
+            "'{}' is already running. CLI args only apply on fresh launch. Use quit_app to quit it first, then retry.",
+            params.app_name
+        ))]);
+    }
+
+    match platform::launch_app(&params.app_name, args) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Launched '{}'",
             params.app_name

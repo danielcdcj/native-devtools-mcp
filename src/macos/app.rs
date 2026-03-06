@@ -115,14 +115,43 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
     false
 }
 
+/// Check if an application is currently running (case-insensitive name match).
+pub fn is_app_running(app_name: &str) -> bool {
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let running_apps: id = msg_send![workspace, runningApplications];
+        let count: usize = msg_send![running_apps, count];
+
+        let needle = app_name.to_lowercase();
+        for i in 0..count {
+            let app: id = msg_send![running_apps, objectAtIndex: i];
+            let name_ns: id = msg_send![app, localizedName];
+            if name_ns != nil {
+                let name = nsstring_to_string(name_ns);
+                if name.to_lowercase().contains(&needle) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Launch an application by name using `open -a`.
 ///
-/// This finds the app in standard locations (/Applications, ~/Applications, etc.)
-/// and launches it. If the app is already running, it is brought to the front.
-pub fn launch_app(app_name: &str) -> Result<(), String> {
-    let output = std::process::Command::new("open")
-        .arg("-a")
-        .arg(app_name)
+/// Finds the app in standard locations (/Applications, ~/Applications, etc.)
+/// and launches it. If args is non-empty, passes them via `--args`.
+/// If the app is already running and no args are given, it is brought to the front.
+pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("open");
+    cmd.arg("-a").arg(app_name);
+
+    if !args.is_empty() {
+        cmd.arg("--args");
+        cmd.args(args);
+    }
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run 'open' command: {}", e))?;
 

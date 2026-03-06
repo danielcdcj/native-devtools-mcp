@@ -216,7 +216,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "launch_app",
-                "Launch an application by name. On macOS, finds apps in /Applications and other standard locations. If the app is already running, brings it to the front.",
+                "Launch an application by name. On macOS, finds apps in /Applications and other standard locations. If the app is already running and no args are provided, brings it to the front. If args are provided and the app is already running, returns an error — use quit_app first.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["app_name"],
@@ -224,6 +224,11 @@ impl MacOSDevToolsServer {
                         "app_name": {
                             "type": "string",
                             "description": "Application name to launch (e.g., 'Calculator', 'Safari')"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "CLI arguments to pass to the app (e.g., ['--remote-debugging-port=9222']). Only applied on fresh launch — if the app is already running, returns an error."
                         }
                     }
                 }))),

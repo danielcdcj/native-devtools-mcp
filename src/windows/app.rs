@@ -293,13 +293,26 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
     data.found
 }
 
+/// Check if an application is currently running (case-insensitive name match).
+pub fn is_app_running(app_name: &str) -> bool {
+    let needle = app_name.to_lowercase();
+    list_apps()
+        .iter()
+        .any(|app| app.name.to_lowercase().contains(&needle))
+}
+
 /// Launch an application by name.
 ///
 /// Uses `cmd /c start "" "app_name"` which searches PATH and App Paths registry.
 /// For apps not in PATH, provide the full executable path.
-pub fn launch_app(app_name: &str) -> Result<(), String> {
+/// If args is non-empty, they are appended after the app name.
+pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
+    let mut cmd_args = vec!["/C", "start", "", app_name];
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    cmd_args.extend(arg_refs);
+
     let output = std::process::Command::new("cmd")
-        .args(["/C", "start", "", app_name])
+        .args(&cmd_args)
         .output()
         .map_err(|e| format!("Failed to run start command: {}", e))?;
 
