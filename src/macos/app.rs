@@ -115,7 +115,10 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
     false
 }
 
-/// Check if an application is currently running (case-insensitive name match).
+/// Check if a user-facing application is currently running (case-insensitive name match).
+///
+/// Only considers apps with NSApplicationActivationPolicyRegular (i.e., apps that
+/// appear in the Dock). Ignores background agents, helpers, and accessory processes.
 pub fn is_app_running(app_name: &str) -> bool {
     unsafe {
         let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
@@ -125,6 +128,13 @@ pub fn is_app_running(app_name: &str) -> bool {
         let needle = app_name.to_lowercase();
         for i in 0..count {
             let app: id = msg_send![running_apps, objectAtIndex: i];
+
+            // Only consider user-facing apps (NSApplicationActivationPolicyRegular = 0)
+            let activation_policy: i64 = msg_send![app, activationPolicy];
+            if activation_policy != 0 {
+                continue;
+            }
+
             let name_ns: id = msg_send![app, localizedName];
             if name_ns != nil {
                 let name = nsstring_to_string(name_ns);
