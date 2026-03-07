@@ -1,6 +1,16 @@
 use cocoa::base::{id, nil};
+use core_foundation::array::CFArray;
+use core_foundation::base::TCFType;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_graphics::window::{
+    kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+    kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+};
 use objc::{class, msg_send, sel, sel_impl};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::ffi::c_void;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
@@ -15,18 +25,76 @@ pub struct AppInfo {
     pub is_user_app: bool,
 }
 
-/// Returns all NSRunningApplication handles from NSWorkspace.
+/// Returns NSRunningApplication handles by merging two sources:
+/// 1. `NSWorkspace.runningApplications` — may contain stale entries and miss recently
+///    launched apps (requires run loop events to update, which our server doesn't process)
+/// 2. `CGWindowListCopyWindowInfo` — always fresh, but only includes apps with windows
+///
+/// Apps from source 1 are filtered by `is_app_alive` to remove stale entries.
+/// PIDs from source 2 that aren't in source 1 are looked up via
+/// `NSRunningApplication.runningApplicationWithProcessIdentifier:` and added.
 unsafe fn get_running_apps() -> Vec<id> {
     let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
     let running_apps: id = msg_send![workspace, runningApplications];
     let count: usize = msg_send![running_apps, count];
 
-    (0..count)
-        .map(|i| {
-            let app: id = msg_send![running_apps, objectAtIndex: i];
-            app
-        })
-        .collect()
+    let mut apps: Vec<id> = Vec::new();
+    let mut seen_pids: HashSet<i32> = HashSet::new();
+
+    // Source 1: NSWorkspace (filter dead processes)
+    for i in 0..count {
+        let app: id = msg_send![running_apps, objectAtIndex: i];
+        if is_app_alive(app) {
+            let pid: i32 = msg_send![app, processIdentifier];
+            seen_pids.insert(pid);
+            apps.push(app);
+        }
+    }
+
+    // Source 2: CGWindowList (catch apps NSWorkspace hasn't registered yet)
+    for pid in get_window_owner_pids() {
+        if pid > 0 && !seen_pids.contains(&pid) {
+            let app: id = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            if app != nil {
+                seen_pids.insert(pid);
+                apps.push(app);
+            }
+        }
+    }
+
+    apps
+}
+
+/// Returns unique owner PIDs from all on-screen windows via CGWindowListCopyWindowInfo.
+unsafe fn get_window_owner_pids() -> HashSet<i32> {
+    let mut pids = HashSet::new();
+
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let ptr = CGWindowListCopyWindowInfo(options, kCGNullWindowID);
+    if ptr.is_null() {
+        return pids;
+    }
+
+    let list: CFArray<*const c_void> = CFArray::wrap_under_create_rule(ptr);
+    for i in 0..list.len() {
+        let dict: CFDictionary<*const c_void, *const c_void> =
+            CFDictionary::wrap_under_get_rule(*list.get_unchecked(i) as *const _);
+
+        if let Some(val) = dict.find(kCGWindowOwnerPID as *const c_void) {
+            let num: CFNumber =
+                core_foundation::base::CFType::wrap_under_get_rule(*val as *const _)
+                    .downcast_into()
+                    .unwrap();
+            if let Some(pid) = num.to_i32() {
+                pids.insert(pid);
+            }
+        }
+    }
+
+    pids
 }
 
 /// Checks if the process behind an NSRunningApplication is still alive.
@@ -299,6 +367,23 @@ mod tests {
             result.is_err(),
             "quit_app should error when app is not running"
         );
+
+        // Relaunch and verify it appears (via CGWindowList supplement)
+        launch_app(app, &[]).ok();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let apps = list_apps();
+        let new = apps.iter().find(|a| a.name == app);
+        assert!(
+            new.is_some(),
+            "Calculator should appear in list_apps after relaunch"
+        );
+        let new_pid = new.unwrap().pid;
+        assert_ne!(
+            old_pid, new_pid,
+            "Relaunched Calculator should have a new PID"
+        );
+        println!("Calculator relaunched at PID {}", new_pid);
 
         // Cleanup
         quit_app(app, true).ok();
