@@ -15,17 +15,42 @@ pub struct AppInfo {
     pub is_user_app: bool,
 }
 
+/// Returns all NSRunningApplication handles from NSWorkspace.
+unsafe fn get_running_apps() -> Vec<id> {
+    let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+    let running_apps: id = msg_send![workspace, runningApplications];
+    let count: usize = msg_send![running_apps, count];
+
+    (0..count)
+        .map(|i| {
+            let app: id = msg_send![running_apps, objectAtIndex: i];
+            app
+        })
+        .collect()
+}
+
+/// Checks if the process behind an NSRunningApplication is still alive.
+///
+/// macOS keeps stale entries in `runningApplications` for several seconds after
+/// termination. `NSRunningApplication.isTerminated` requires run loop events to
+/// update, which our server doesn't process, so we check liveness via `kill(pid, 0)`.
+unsafe fn is_app_alive(app: id) -> bool {
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    let pid: i32 = msg_send![app, processIdentifier];
+    kill(pid, 0) == 0
+}
+
 /// List all running applications
 pub fn list_apps() -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
     unsafe {
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let running_apps: id = msg_send![workspace, runningApplications];
-        let count: usize = msg_send![running_apps, count];
-
-        for i in 0..count {
-            let app: id = msg_send![running_apps, objectAtIndex: i];
+        for app in get_running_apps() {
+            if !is_app_alive(app) {
+                continue;
+            }
 
             // Get localized name
             let name_ns: id = msg_send![app, localizedName];
@@ -77,12 +102,7 @@ pub fn list_apps() -> Vec<AppInfo> {
 /// Activate (focus) an application by name
 pub fn activate_app(app_name: &str) -> bool {
     unsafe {
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let running_apps: id = msg_send![workspace, runningApplications];
-        let count: usize = msg_send![running_apps, count];
-
-        for i in 0..count {
-            let app: id = msg_send![running_apps, objectAtIndex: i];
+        for app in get_running_apps() {
             let name_ns: id = msg_send![app, localizedName];
 
             if name_ns != nil {
@@ -121,13 +141,11 @@ pub fn activate_app_by_pid(pid: i32) -> bool {
 /// appear in the Dock). Ignores background agents, helpers, and accessory processes.
 pub fn is_app_running(app_name: &str) -> bool {
     unsafe {
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let running_apps: id = msg_send![workspace, runningApplications];
-        let count: usize = msg_send![running_apps, count];
-
         let needle = app_name.to_lowercase();
-        for i in 0..count {
-            let app: id = msg_send![running_apps, objectAtIndex: i];
+        for app in get_running_apps() {
+            if !is_app_alive(app) {
+                continue;
+            }
 
             // Only consider user-facing apps (NSApplicationActivationPolicyRegular = 0)
             let activation_policy: i64 = msg_send![app, activationPolicy];
@@ -186,13 +204,12 @@ pub fn quit_app(app_name: &str, force: bool) -> Result<u32, String> {
     let mut terminated = 0u32;
 
     unsafe {
-        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let running_apps: id = msg_send![workspace, runningApplications];
-        let count: usize = msg_send![running_apps, count];
-
         let needle = app_name.to_lowercase();
-        for i in 0..count {
-            let app: id = msg_send![running_apps, objectAtIndex: i];
+        for app in get_running_apps() {
+            if !is_app_alive(app) {
+                continue;
+            }
+
             let name_ns: id = msg_send![app, localizedName];
             if name_ns != nil {
                 let name = nsstring_to_string(name_ns);
@@ -228,5 +245,62 @@ unsafe fn nsstring_to_string(ns_string: id) -> String {
         std::ffi::CStr::from_ptr(utf8_ptr)
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests that quit_app + list_apps doesn't return stale entries.
+    ///
+    /// Requires Calculator.app — run with: cargo test test_no_stale_entries -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_no_stale_entries_after_quit() {
+        let app = "Calculator";
+
+        // Ensure Calculator is running
+        launch_app(app, &[]).ok();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let apps = list_apps();
+        let found = apps.iter().find(|a| a.name == app);
+        assert!(
+            found.is_some(),
+            "Calculator should appear in list_apps after launch"
+        );
+        let old_pid = found.unwrap().pid;
+        println!("Calculator running at PID {}", old_pid);
+
+        // Force quit to ensure immediate termination
+        let result = quit_app(app, true);
+        assert!(result.is_ok(), "quit_app should succeed");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Stale entry should be filtered by is_app_alive
+        let apps = list_apps();
+        let stale = apps.iter().find(|a| a.name == app && a.pid == old_pid);
+        assert!(
+            stale.is_none(),
+            "Stale Calculator entry (PID {}) should be filtered from list_apps",
+            old_pid
+        );
+
+        // is_app_running should return false
+        assert!(
+            !is_app_running(app),
+            "is_app_running should return false after quit"
+        );
+
+        // quit_app on an already-dead app should return an error
+        let result = quit_app(app, false);
+        assert!(
+            result.is_err(),
+            "quit_app should error when app is not running"
+        );
+
+        // Cleanup
+        quit_app(app, true).ok();
     }
 }
