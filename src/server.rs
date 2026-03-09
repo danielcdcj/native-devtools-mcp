@@ -59,6 +59,7 @@ pub struct MacOSDevToolsServer {
     screenshot_cache: Arc<RwLock<ScreenshotCache>>,
     image_cache: Arc<RwLock<ImageCache>>,
     android_device: Arc<RwLock<Option<AndroidDevice>>>,
+    hover_tracker: Arc<RwLock<Option<crate::tools::hover_tracker::HoverTracker>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -74,6 +75,7 @@ impl MacOSDevToolsServer {
             screenshot_cache: Arc::new(RwLock::new(ScreenshotCache::default())),
             image_cache: Arc::new(RwLock::new(ImageCache::default())),
             android_device: Arc::new(RwLock::new(None)),
+            hover_tracker: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -83,6 +85,10 @@ impl MacOSDevToolsServer {
 
     async fn is_android_connected(&self) -> bool {
         self.android_device.read().await.is_some()
+    }
+
+    async fn is_hover_tracking(&self) -> bool {
+        self.hover_tracker.read().await.is_some()
     }
 
     /// Acquire the android device lock and call `f` with a mutable reference.
