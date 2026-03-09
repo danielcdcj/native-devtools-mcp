@@ -445,6 +445,20 @@ pub fn type_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the current cursor position in screen coordinates.
+///
+/// Creates a dummy CGEvent and reads its location, which reflects
+/// the current mouse position.
+pub fn get_cursor_position() -> Result<(f64, f64), String> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "Failed to create event source")?;
+
+    let event = CGEvent::new(source).map_err(|_| "Failed to create CGEvent")?;
+
+    let point = event.location();
+    Ok((point.x, point.y))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +469,12 @@ mod tests {
         assert!(key_name_to_code("return").is_some());
         assert!(key_name_to_code("f1").is_some());
         assert!(key_name_to_code("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_get_cursor_position_returns_coordinates() {
+        let (x, y) = get_cursor_position().expect("should get cursor position");
+        assert!(x >= 0.0, "x should be >= 0, got {}", x);
+        assert!(y >= 0.0, "y should be >= 0, got {}", y);
     }
 }
