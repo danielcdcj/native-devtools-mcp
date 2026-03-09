@@ -1560,13 +1560,34 @@ impl ServerHandler for MacOSDevToolsServer {
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             "get_hover_events" => {
+                // Check if tracking has auto-stopped (task finished due to timeout)
+                let auto_stopped = {
+                    let guard = self.hover_tracker.read().await;
+                    guard.as_ref().map_or(false, |t| t.is_finished())
+                };
+
                 let guard = self.hover_tracker.read().await;
                 match guard.as_ref() {
                     Some(tracker) => {
                         let events = tracker.drain_events();
+                        drop(guard);
+
                         let json = serde_json::to_string_pretty(&events)
                             .unwrap_or_else(|e| format!("Failed to serialize events: {}", e));
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+
+                        if auto_stopped {
+                            // Clean up the finished tracker
+                            self.hover_tracker.write().await.take();
+                            let _ = context.peer.notify_tool_list_changed().await;
+                            let msg = format!(
+                                "Hover tracking has auto-stopped (max duration reached). {} remaining event(s):\n{}",
+                                events.len(),
+                                json,
+                            );
+                            Ok(CallToolResult::success(vec![Content::text(msg)]))
+                        } else {
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(
                         "No hover tracking session is active. Use start_hover_tracking first.",
