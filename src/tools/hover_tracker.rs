@@ -5,6 +5,7 @@
 
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -110,6 +111,146 @@ pub fn parse_hover_element(value: &serde_json::Value) -> HoverElement {
 /// Check if two elements are the same (by role + name + bounds).
 pub fn elements_equal(a: &HoverElement, b: &HoverElement) -> bool {
     a.role == b.role && a.name == b.name && a.bounds == b.bounds
+}
+
+/// Start the hover polling background task.
+///
+/// Polls cursor position + element_at_point every `poll_interval_ms`,
+/// pushing a `HoverEvent` whenever the element under the cursor changes.
+/// Stops when `cancel` is triggered or `max_duration_ms` elapses.
+pub fn start_polling(
+    events: Arc<Mutex<Vec<HoverEvent>>>,
+    cancel: CancellationToken,
+    app_name: Option<String>,
+    poll_interval_ms: u32,
+    max_duration_ms: u32,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let start = Instant::now();
+        let max_duration = std::time::Duration::from_millis(max_duration_ms as u64);
+        let poll_interval = std::time::Duration::from_millis(poll_interval_ms as u64);
+        let mut previous_element: Option<HoverElement> = None;
+        let mut last_change = Instant::now();
+
+        loop {
+            // Check cancellation
+            if cancel.is_cancelled() {
+                return;
+            }
+
+            // Check max duration
+            if start.elapsed() >= max_duration {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let cursor = get_cursor_position_async().await.unwrap_or((0.0, 0.0));
+                let previous_dwell = last_change.elapsed().as_millis() as u64;
+                let event = HoverEvent {
+                    timestamp_ms: elapsed,
+                    cursor: CursorPosition {
+                        x: cursor.0,
+                        y: cursor.1,
+                    },
+                    element: previous_element.unwrap_or(HoverElement {
+                        name: None,
+                        role: None,
+                        label: None,
+                        value: None,
+                        bounds: None,
+                        app_name: None,
+                        pid: None,
+                    }),
+                    previous_dwell_ms: previous_dwell,
+                    timeout: true,
+                };
+                events.lock().unwrap().push(event);
+                return;
+            }
+
+            // Get cursor position
+            let cursor = match get_cursor_position_async().await {
+                Ok(pos) => pos,
+                Err(_) => {
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+            };
+
+            // Get element at cursor position
+            let app = app_name.clone();
+            let element_result = tokio::task::spawn_blocking(move || {
+                element_at_point_for_hover(cursor.0, cursor.1, app.as_deref())
+            })
+            .await;
+
+            let current_element = match element_result {
+                Ok(Ok(el)) => el,
+                _ => {
+                    // AX query failed — skip this tick
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+            };
+
+            // Check if element changed
+            let changed = match &previous_element {
+                Some(prev) => !elements_equal(prev, &current_element),
+                None => true, // First element is always a "change"
+            };
+
+            if changed {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let previous_dwell = last_change.elapsed().as_millis() as u64;
+                let event = HoverEvent {
+                    timestamp_ms: elapsed,
+                    cursor: CursorPosition {
+                        x: cursor.0,
+                        y: cursor.1,
+                    },
+                    element: current_element.clone(),
+                    previous_dwell_ms: previous_dwell,
+                    timeout: false,
+                };
+                events.lock().unwrap().push(event);
+                previous_element = Some(current_element);
+                last_change = Instant::now();
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    })
+}
+
+/// Get cursor position asynchronously (wraps platform call in spawn_blocking).
+async fn get_cursor_position_async() -> Result<(f64, f64), String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos::input::get_cursor_position()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Err("Hover tracking is not yet supported on Windows".to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Query element_at_point for hover tracking (wraps platform call).
+fn element_at_point_for_hover(
+    x: f64,
+    y: f64,
+    app_name: Option<&str>,
+) -> Result<HoverElement, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = crate::macos::ax::element_at_point(x, y, app_name)?;
+        Ok(parse_hover_element(&value))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (x, y, app_name);
+        Err("Hover tracking is not yet supported on Windows".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -285,6 +426,55 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(!json.contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn test_start_polling_cancellation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+
+        let handle = start_polling(
+            events.clone(),
+            cancel.clone(),
+            None, // no app_name
+            50,   // 50ms poll interval
+            1000, // 1s max duration
+        );
+
+        // Cancel immediately
+        cancel.cancel();
+        // Task should finish promptly
+        tokio::time::timeout(std::time::Duration::from_millis(500), handle)
+            .await
+            .expect("task should finish after cancel")
+            .expect("task should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_start_polling_max_duration_timeout() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+
+        let handle = start_polling(
+            events.clone(),
+            cancel.clone(),
+            None,
+            50,  // 50ms poll interval
+            500, // 500ms max duration
+        );
+
+        // AX queries can be slow; allow generous margin
+        tokio::time::timeout(std::time::Duration::from_millis(3000), handle)
+            .await
+            .expect("task should auto-stop after max duration")
+            .expect("task should not panic");
+
+        // Should have a timeout sentinel event
+        let evts = events.lock().unwrap();
+        assert!(
+            evts.last().map_or(false, |e| e.timeout),
+            "last event should be a timeout sentinel"
+        );
     }
 
     #[test]
