@@ -109,7 +109,11 @@ impl MacOSDevToolsServer {
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
-    pub fn get_tools(app_connected: bool, android_connected: bool) -> Vec<Tool> {
+    pub fn get_tools(
+        app_connected: bool,
+        android_connected: bool,
+        hover_tracking: bool,
+    ) -> Vec<Tool> {
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
         if app_connected {
@@ -119,6 +123,7 @@ impl MacOSDevToolsServer {
         if android_connected {
             tools.extend(Self::get_android_tools());
         }
+        tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools
     }
 
@@ -1007,6 +1012,53 @@ impl MacOSDevToolsServer {
             ),
         ]
     }
+
+    /// Hover tracking tools. `start_hover_tracking` is always visible.
+    /// `get_hover_events` and `stop_hover_tracking` only appear while tracking is active.
+    fn get_hover_tracking_tools(tracking_active: bool) -> Vec<Tool> {
+        let mut tools = vec![Tool::new(
+            "start_hover_tracking",
+            "Start tracking hover state changes. Polls cursor position and accessibility element at configurable intervals, recording transitions. Use get_hover_events to retrieve recorded events, and stop_hover_tracking to end the session. Only one tracking session can be active at a time.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "app_name": {
+                        "type": "string",
+                        "description": "Scope element lookup to a specific application (e.g., 'Safari'). Faster and avoids ambiguity."
+                    },
+                    "poll_interval_ms": {
+                        "type": "integer",
+                        "description": "Polling interval in milliseconds (default: 100)",
+                        "default": 100
+                    },
+                    "max_duration_ms": {
+                        "type": "integer",
+                        "description": "Auto-stop after this many milliseconds (default: 60000 = 60s)",
+                        "default": 60000
+                    }
+                }
+            }))),
+        )];
+        if tracking_active {
+            tools.push(Tool::new(
+                "get_hover_events",
+                "Retrieve and drain buffered hover events since the last call. Returns a JSON array of transition events, each with cursor position, element info, timestamp, and dwell time. Events are consumed — subsequent calls return only new events.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ));
+            tools.push(Tool::new(
+                "stop_hover_tracking",
+                "Stop hover tracking and return any remaining buffered events. Ends the background polling task.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ));
+        }
+        tools
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
@@ -1066,7 +1118,11 @@ impl ServerHandler for MacOSDevToolsServer {
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
         Ok(ListToolsResult {
-            tools: Self::get_tools(connected, self.is_android_connected().await),
+            tools: Self::get_tools(
+                connected,
+                self.is_android_connected().await,
+                self.is_hover_tracking().await,
+            ),
             next_cursor: None,
         })
     }

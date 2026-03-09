@@ -30,7 +30,7 @@ mod tool_gating {
         // app_* tools (except app_connect) should NOT be present
 
         // This tests the get_tools(false) case
-        let tools = MacOSDevToolsServer::get_tools(false, false);
+        let tools = MacOSDevToolsServer::get_tools(false, false, false);
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools should be present
@@ -55,7 +55,7 @@ mod tool_gating {
     fn test_app_tools_present_when_connected() {
         // When connected, should have base tools + app_connect + all app_* tools
 
-        let connected_tools = MacOSDevToolsServer::get_tools(true, false);
+        let connected_tools = MacOSDevToolsServer::get_tools(true, false, false);
         let tool_names: Vec<String> = connected_tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools should still be present
@@ -80,7 +80,7 @@ mod tool_gating {
         assert!(tool_names.contains(&"app_focus_window".to_string()));
 
         // Connected state should have more tools than disconnected
-        let disconnected_tools = MacOSDevToolsServer::get_tools(false, false);
+        let disconnected_tools = MacOSDevToolsServer::get_tools(false, false, false);
         assert!(
             connected_tools.len() > disconnected_tools.len(),
             "Connected state should expose more tools than disconnected state"
@@ -94,7 +94,7 @@ mod android_tool_gating {
 
     #[test]
     fn test_android_base_tools_always_present() {
-        let tools = MacOSDevToolsServer::get_tools(false, false);
+        let tools = MacOSDevToolsServer::get_tools(false, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         assert!(names.contains(&"android_list_devices".to_string()));
@@ -103,7 +103,7 @@ mod android_tool_gating {
 
     #[test]
     fn test_android_tools_hidden_when_disconnected() {
-        let tools = MacOSDevToolsServer::get_tools(false, false);
+        let tools = MacOSDevToolsServer::get_tools(false, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         assert!(!names.contains(&"android_disconnect".to_string()));
@@ -121,7 +121,7 @@ mod android_tool_gating {
 
     #[test]
     fn test_android_tools_visible_when_connected() {
-        let tools = MacOSDevToolsServer::get_tools(false, true);
+        let tools = MacOSDevToolsServer::get_tools(false, true, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         // Base tools
@@ -144,8 +144,8 @@ mod android_tool_gating {
 
     #[test]
     fn test_android_connection_adds_tools() {
-        let disconnected = MacOSDevToolsServer::get_tools(false, false);
-        let connected = MacOSDevToolsServer::get_tools(false, true);
+        let disconnected = MacOSDevToolsServer::get_tools(false, false, false);
+        let connected = MacOSDevToolsServer::get_tools(false, true, false);
 
         assert!(
             connected.len() > disconnected.len(),
@@ -401,5 +401,41 @@ mod identity_validation {
             validate_identity(None, Some("  testapp  "), &info),
             IdentityValidationResult::Ok
         );
+    }
+}
+
+#[cfg(test)]
+mod hover_tracking_tool_gating {
+    use super::*;
+
+    #[test]
+    fn test_start_hover_tracking_always_visible() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.contains(&"start_hover_tracking".to_string()));
+    }
+
+    #[test]
+    fn test_hover_tools_hidden_when_not_tracking() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(!names.contains(&"get_hover_events".to_string()));
+        assert!(!names.contains(&"stop_hover_tracking".to_string()));
+    }
+
+    #[test]
+    fn test_hover_tools_visible_when_tracking() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, true);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.contains(&"start_hover_tracking".to_string()));
+        assert!(names.contains(&"get_hover_events".to_string()));
+        assert!(names.contains(&"stop_hover_tracking".to_string()));
+    }
+
+    #[test]
+    fn test_hover_tracking_adds_two_tools() {
+        let not_tracking = MacOSDevToolsServer::get_tools(false, false, false);
+        let tracking = MacOSDevToolsServer::get_tools(false, false, true);
+        assert_eq!(tracking.len() - not_tracking.len(), 2);
     }
 }
