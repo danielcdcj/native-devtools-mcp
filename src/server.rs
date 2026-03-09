@@ -1512,6 +1512,94 @@ impl ServerHandler for MacOSDevToolsServer {
                     },
                 )
                 .await),
+            "start_hover_tracking" => {
+                if self.is_hover_tracking().await {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Hover tracking is already active. Use stop_hover_tracking to end the current session first.",
+                    )]));
+                }
+
+                let app_name = args
+                    .get("app_name")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let poll_interval_ms = args
+                    .get("poll_interval_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(100) as u32;
+                let max_duration_ms = args
+                    .get("max_duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(60000) as u32;
+
+                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let cancel = tokio_util::sync::CancellationToken::new();
+
+                let task_handle = crate::tools::hover_tracker::start_polling(
+                    events.clone(),
+                    cancel.clone(),
+                    app_name.clone(),
+                    poll_interval_ms,
+                    max_duration_ms,
+                );
+
+                let tracker = crate::tools::hover_tracker::HoverTracker {
+                    events,
+                    task_handle,
+                    cancel,
+                };
+                *self.hover_tracker.write().await = Some(tracker);
+                let _ = context.peer.notify_tool_list_changed().await;
+
+                let msg = format!(
+                    "Hover tracking started (poll: {}ms, max: {}ms{}). Use get_hover_events to read transitions, stop_hover_tracking to end.",
+                    poll_interval_ms,
+                    max_duration_ms,
+                    app_name.map_or(String::new(), |a| format!(", app: {}", a)),
+                );
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
+            }
+            "get_hover_events" => {
+                let guard = self.hover_tracker.read().await;
+                match guard.as_ref() {
+                    Some(tracker) => {
+                        let events = tracker.drain_events();
+                        let json = serde_json::to_string_pretty(&events)
+                            .unwrap_or_else(|e| format!("Failed to serialize events: {}", e));
+                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                    }
+                    None => Ok(CallToolResult::error(vec![Content::text(
+                        "No hover tracking session is active. Use start_hover_tracking first.",
+                    )])),
+                }
+            }
+            "stop_hover_tracking" => {
+                let tracker = self.hover_tracker.write().await.take();
+                match tracker {
+                    Some(tracker) => {
+                        tracker.cancel.cancel();
+                        // Drain events before consuming task_handle
+                        let events = tracker.drain_events();
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_millis(500),
+                            tracker.task_handle,
+                        )
+                        .await;
+                        let _ = context.peer.notify_tool_list_changed().await;
+                        let json = serde_json::to_string_pretty(&events)
+                            .unwrap_or_else(|e| format!("Failed to serialize events: {}", e));
+                        let msg = format!(
+                            "Hover tracking stopped. {} remaining event(s):\n{}",
+                            events.len(),
+                            json,
+                        );
+                        Ok(CallToolResult::success(vec![Content::text(msg)]))
+                    }
+                    None => Ok(CallToolResult::error(vec![Content::text(
+                        "No hover tracking session is active.",
+                    )])),
+                }
+            }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
                 None,
