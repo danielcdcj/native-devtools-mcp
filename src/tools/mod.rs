@@ -1,5 +1,6 @@
 pub mod app_protocol;
 pub mod find_image;
+pub mod hover_tracker;
 pub mod image_cache;
 pub mod input;
 pub mod load_image;
