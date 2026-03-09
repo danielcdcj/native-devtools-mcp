@@ -123,7 +123,9 @@ impl MacOSDevToolsServer {
         if android_connected {
             tools.extend(Self::get_android_tools());
         }
-        tools.extend(Self::get_hover_tracking_tools(hover_tracking));
+        if cfg!(target_os = "macos") {
+            tools.extend(Self::get_hover_tracking_tools(hover_tracking));
+        }
         tools
     }
 
@@ -1513,10 +1515,29 @@ impl ServerHandler for MacOSDevToolsServer {
                 )
                 .await),
             "start_hover_tracking" => {
-                if self.is_hover_tracking().await {
+                if cfg!(not(target_os = "macos")) {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Hover tracking is only supported on macOS.",
+                    )]));
+                }
+
+                // Auto-clean finished tracker (e.g. from max duration timeout)
+                let already_active = {
+                    let guard = self.hover_tracker.read().await;
+                    match guard.as_ref() {
+                        Some(t) if t.is_finished() => false, // will clean up below
+                        Some(_) => true,
+                        None => false,
+                    }
+                };
+                if already_active {
                     return Ok(CallToolResult::error(vec![Content::text(
                         "Hover tracking is already active. Use stop_hover_tracking to end the current session first.",
                     )]));
+                }
+                // Clean up any finished tracker before starting a new one
+                if self.hover_tracker.read().await.is_some() {
+                    self.hover_tracker.write().await.take();
                 }
 
                 let app_name = args
@@ -1526,13 +1547,15 @@ impl ServerHandler for MacOSDevToolsServer {
                 let poll_interval_ms = args
                     .get("poll_interval_ms")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(100) as u32;
+                    .unwrap_or(100)
+                    .clamp(10, 10_000) as u32;
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(60000) as u32;
+                    .unwrap_or(60000)
+                    .clamp(100, 300_000) as u32;
 
-                let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let events = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let cancel = tokio_util::sync::CancellationToken::new();
 
                 let task_handle = crate::tools::hover_tracker::start_polling(
@@ -1543,11 +1566,8 @@ impl ServerHandler for MacOSDevToolsServer {
                     max_duration_ms,
                 );
 
-                let tracker = crate::tools::hover_tracker::HoverTracker {
-                    events,
-                    task_handle,
-                    cancel,
-                };
+                let tracker =
+                    crate::tools::hover_tracker::HoverTracker::new(events, task_handle, cancel);
                 *self.hover_tracker.write().await = Some(tracker);
                 let _ = context.peer.notify_tool_list_changed().await;
 
@@ -1560,34 +1580,29 @@ impl ServerHandler for MacOSDevToolsServer {
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             "get_hover_events" => {
-                // Check if tracking has auto-stopped (task finished due to timeout)
-                let auto_stopped = {
+                // Single lock: check auto-stop and drain events together
+                let result = {
                     let guard = self.hover_tracker.read().await;
-                    guard.as_ref().is_some_and(|t| t.is_finished())
+                    guard.as_ref().map(|t| {
+                        let auto_stopped = t.is_finished();
+                        let events = t.drain_events();
+                        (auto_stopped, events)
+                    })
                 };
 
-                let guard = self.hover_tracker.read().await;
-                match guard.as_ref() {
-                    Some(tracker) => {
-                        let events = tracker.drain_events();
-                        drop(guard);
-
-                        let json = serde_json::to_string_pretty(&events)
-                            .unwrap_or_else(|e| format!("Failed to serialize events: {}", e));
+                match result {
+                    Some((auto_stopped, events)) => {
+                        let json = to_json_pretty(&events);
 
                         if auto_stopped {
-                            // Clean up the finished tracker
                             self.hover_tracker.write().await.take();
                             let _ = context.peer.notify_tool_list_changed().await;
-                            let msg = format!(
-                                "Hover tracking has auto-stopped (max duration reached). {} remaining event(s):\n{}",
-                                events.len(),
-                                json,
-                            );
-                            Ok(CallToolResult::success(vec![Content::text(msg)]))
-                        } else {
-                            Ok(CallToolResult::success(vec![Content::text(json)]))
                         }
+
+                        // Always return the JSON array for consistent parsing.
+                        // The timeout sentinel event (with timeout: true) signals
+                        // auto-stop within the event stream itself.
+                        Ok(CallToolResult::success(vec![Content::text(json)]))
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(
                         "No hover tracking session is active. Use start_hover_tracking first.",
@@ -1598,23 +1613,12 @@ impl ServerHandler for MacOSDevToolsServer {
                 let tracker = self.hover_tracker.write().await.take();
                 match tracker {
                     Some(tracker) => {
-                        tracker.cancel.cancel();
-                        // Drain events before consuming task_handle
-                        let events = tracker.drain_events();
-                        let _ = tokio::time::timeout(
-                            std::time::Duration::from_millis(500),
-                            tracker.task_handle,
-                        )
-                        .await;
+                        let events = tracker.cancel_and_drain().await;
                         let _ = context.peer.notify_tool_list_changed().await;
-                        let json = serde_json::to_string_pretty(&events)
-                            .unwrap_or_else(|e| format!("Failed to serialize events: {}", e));
-                        let msg = format!(
-                            "Hover tracking stopped. {} remaining event(s):\n{}",
-                            events.len(),
-                            json,
-                        );
-                        Ok(CallToolResult::success(vec![Content::text(msg)]))
+                        // Return raw JSON array for consistent parsing with get_hover_events
+                        Ok(CallToolResult::success(vec![Content::text(
+                            to_json_pretty(&events),
+                        )]))
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(
                         "No hover tracking session is active.",

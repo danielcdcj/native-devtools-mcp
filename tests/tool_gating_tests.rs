@@ -405,6 +405,7 @@ mod identity_validation {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 mod hover_tracking_tool_gating {
     use super::*;
 

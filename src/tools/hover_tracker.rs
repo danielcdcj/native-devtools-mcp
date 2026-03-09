@@ -32,7 +32,7 @@ pub struct CursorPosition {
 }
 
 /// Accessibility element info captured during hover.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct HoverElement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -60,15 +60,24 @@ pub struct ElementBounds {
 
 /// Active hover tracking session.
 pub struct HoverTracker {
-    /// Shared buffer of hover events (drained on read)
-    pub events: Arc<Mutex<Vec<HoverEvent>>>,
-    /// Handle to the background polling task
-    pub task_handle: JoinHandle<()>,
-    /// Token to cancel the polling loop
-    pub cancel: CancellationToken,
+    events: Arc<Mutex<Vec<HoverEvent>>>,
+    task_handle: JoinHandle<()>,
+    cancel: CancellationToken,
 }
 
 impl HoverTracker {
+    pub fn new(
+        events: Arc<Mutex<Vec<HoverEvent>>>,
+        task_handle: JoinHandle<()>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self {
+            events,
+            task_handle,
+            cancel,
+        }
+    }
+
     /// Check if the background polling task has finished (due to timeout or error).
     pub fn is_finished(&self) -> bool {
         self.task_handle.is_finished()
@@ -78,6 +87,28 @@ impl HoverTracker {
     pub fn drain_events(&self) -> Vec<HoverEvent> {
         let mut events = self.events.lock().unwrap();
         events.drain(..).collect()
+    }
+
+    /// Cancel tracking, await task shutdown, then drain remaining events.
+    ///
+    /// Drains after the task finishes to avoid losing late events from
+    /// in-flight `spawn_blocking` calls. Aborts the task if it doesn't
+    /// stop within 500ms (e.g. slow AX query).
+    pub async fn cancel_and_drain(self) -> Vec<HoverEvent> {
+        self.cancel.cancel();
+        let Self {
+            events,
+            mut task_handle,
+            ..
+        } = self;
+        if tokio::time::timeout(std::time::Duration::from_millis(500), &mut task_handle)
+            .await
+            .is_err()
+        {
+            task_handle.abort();
+        }
+        let mut buf = events.lock().unwrap();
+        buf.drain(..).collect()
     }
 }
 
@@ -125,6 +156,9 @@ pub fn start_polling(
     poll_interval_ms: u32,
     max_duration_ms: u32,
 ) -> JoinHandle<()> {
+    // Use Arc<str> to avoid cloning the string on every poll tick
+    let app_name: Option<Arc<str>> = app_name.map(|s| Arc::from(s.as_str()));
+
     tokio::spawn(async move {
         let start = Instant::now();
         let max_duration = std::time::Duration::from_millis(max_duration_ms as u64);
@@ -141,7 +175,7 @@ pub fn start_polling(
             // Check max duration
             if start.elapsed() >= max_duration {
                 let elapsed = start.elapsed().as_millis() as u64;
-                let cursor = get_cursor_position_async().await.unwrap_or((0.0, 0.0));
+                let cursor = get_cursor_position_sync().unwrap_or((0.0, 0.0));
                 let previous_dwell = last_change.elapsed().as_millis() as u64;
                 let event = HoverEvent {
                     timestamp_ms: elapsed,
@@ -149,15 +183,7 @@ pub fn start_polling(
                         x: cursor.0,
                         y: cursor.1,
                     },
-                    element: previous_element.unwrap_or(HoverElement {
-                        name: None,
-                        role: None,
-                        label: None,
-                        value: None,
-                        bounds: None,
-                        app_name: None,
-                        pid: None,
-                    }),
+                    element: previous_element.unwrap_or_default(),
                     previous_dwell_ms: previous_dwell,
                     timeout: true,
                 };
@@ -165,26 +191,18 @@ pub fn start_polling(
                 return;
             }
 
-            // Get cursor position
-            let cursor = match get_cursor_position_async().await {
-                Ok(pos) => pos,
-                Err(_) => {
-                    tokio::time::sleep(poll_interval).await;
-                    continue;
-                }
-            };
-
-            // Get element at cursor position
+            // Get cursor position + element in a single spawn_blocking call
             let app = app_name.clone();
-            let element_result = tokio::task::spawn_blocking(move || {
-                element_at_point_for_hover(cursor.0, cursor.1, app.as_deref())
+            let poll_result = tokio::task::spawn_blocking(move || {
+                let cursor = get_cursor_position_sync()?;
+                let element = element_at_point_for_hover(cursor.0, cursor.1, app.as_deref())?;
+                Ok::<_, String>((cursor, element))
             })
             .await;
 
-            let current_element = match element_result {
-                Ok(Ok(el)) => el,
+            let (cursor, current_element) = match poll_result {
+                Ok(Ok(result)) => result,
                 _ => {
-                    // AX query failed — skip this tick
                     tokio::time::sleep(poll_interval).await;
                     continue;
                 }
@@ -219,20 +237,16 @@ pub fn start_polling(
     })
 }
 
-/// Get cursor position asynchronously (wraps platform call in spawn_blocking).
-async fn get_cursor_position_async() -> Result<(f64, f64), String> {
-    tokio::task::spawn_blocking(|| {
-        #[cfg(target_os = "macos")]
-        {
-            crate::macos::input::get_cursor_position()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Err("Hover tracking is not yet supported on Windows".to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+/// Get cursor position synchronously (fast CGEvent read, no spawn_blocking needed).
+fn get_cursor_position_sync() -> Result<(f64, f64), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::input::get_cursor_position()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Err("Hover tracking is not yet supported on Windows".to_string())
+    }
 }
 
 /// Query element_at_point for hover tracking (wraps platform call).
@@ -392,11 +406,11 @@ mod tests {
             timeout: false,
         }]));
         let cancel = CancellationToken::new();
-        let tracker = HoverTracker {
-            events: events.clone(),
-            task_handle: tokio::runtime::Runtime::new().unwrap().spawn(async {}),
+        let tracker = HoverTracker::new(
+            events.clone(),
+            tokio::runtime::Runtime::new().unwrap().spawn(async {}),
             cancel,
-        };
+        );
 
         let drained = tracker.drain_events();
         assert_eq!(drained.len(), 1);

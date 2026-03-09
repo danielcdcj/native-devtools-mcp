@@ -473,8 +473,8 @@ mod tests {
 
     #[test]
     fn test_get_cursor_position_returns_coordinates() {
-        let (x, y) = get_cursor_position().expect("should get cursor position");
-        assert!(x >= 0.0, "x should be >= 0, got {}", x);
-        assert!(y >= 0.0, "y should be >= 0, got {}", y);
+        // Just verify it returns successfully; coordinates can be negative
+        // on multi-monitor setups where a display is above/left of primary.
+        let (_x, _y) = get_cursor_position().expect("should get cursor position");
     }
 }
