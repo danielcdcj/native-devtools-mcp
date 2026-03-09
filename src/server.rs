@@ -1563,7 +1563,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 // Check if tracking has auto-stopped (task finished due to timeout)
                 let auto_stopped = {
                     let guard = self.hover_tracker.read().await;
-                    guard.as_ref().map_or(false, |t| t.is_finished())
+                    guard.as_ref().is_some_and(|t| t.is_finished())
                 };
 
                 let guard = self.hover_tracker.read().await;

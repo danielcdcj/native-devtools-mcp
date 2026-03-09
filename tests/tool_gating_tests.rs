@@ -438,4 +438,31 @@ mod hover_tracking_tool_gating {
         let tracking = MacOSDevToolsServer::get_tools(false, false, true);
         assert_eq!(tracking.len() - not_tracking.len(), 2);
     }
+
+    #[test]
+    fn test_all_states_independent() {
+        // Hover tracking state should be independent of app/android connection
+        let base = MacOSDevToolsServer::get_tools(false, false, false);
+        let hover_only = MacOSDevToolsServer::get_tools(false, false, true);
+        let app_and_hover = MacOSDevToolsServer::get_tools(true, false, true);
+        let all_connected = MacOSDevToolsServer::get_tools(true, true, true);
+
+        // Hover adds exactly 2 tools regardless of other state
+        assert_eq!(hover_only.len() - base.len(), 2);
+
+        // App connection adds the same number of tools regardless of hover state
+        let app_only = MacOSDevToolsServer::get_tools(true, false, false);
+        assert_eq!(
+            app_and_hover.len() - hover_only.len(),
+            app_only.len() - base.len()
+        );
+
+        // All three states are additive
+        let android_only = MacOSDevToolsServer::get_tools(false, true, false);
+        let expected_total = base.len()
+            + (app_only.len() - base.len())
+            + (android_only.len() - base.len())
+            + (hover_only.len() - base.len());
+        assert_eq!(all_connected.len(), expected_total);
+    }
 }
