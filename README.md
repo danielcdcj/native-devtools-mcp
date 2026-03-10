@@ -1,22 +1,33 @@
 # native-devtools-mcp
 
-<div align="center">
+`native-devtools-mcp` is a Model Context Protocol (MCP) server for computer use on macOS, Windows, and Android. It gives AI agents and MCP clients direct control over native desktop apps and Android devices through screenshots, OCR, accessibility-based text lookup, input simulation, window management, and ADB.
+
+Use it when browser-only automation is not enough: Electron apps, system dialogs, desktop tools, native app testing, and Android device workflows. It works with [Claude Desktop](https://claude.ai/download), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and other MCP-compatible clients.
+
+Useful for MCP-based computer use, desktop automation, UI automation, native app testing, e2e testing, RPA, screen reading, mouse and keyboard control, and Android device automation.
+
+```bash
+npx -y native-devtools-mcp
+```
+
+**Core capabilities**
+- Screenshots, OCR, and accessibility-first `find_text`
+- `click`, `type_text`, `scroll`, `launch_app`, `quit_app`, and window management
+- `element_at_point` for inspecting accessible UI elements at screen coordinates
+- `load_image` + `find_image` for non-text UI elements such as icons and custom controls
+- Android screenshots, text lookup, input, and app control over ADB
+- Local execution: screenshots and input stay on the machine
+
+**For AI agents:** Read [`AGENTS.md`](./AGENTS.md) for tool definitions, workflow patterns, and machine-readable usage guidance.
 
 ![Version](https://img.shields.io/npm/v/native-devtools-mcp?style=flat-square)
 ![License](https://img.shields.io/npm/l/native-devtools-mcp?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-blue?style=flat-square)
 ![Downloads](https://img.shields.io/npm/dt/native-devtools-mcp?style=flat-square)
 
-**Give your AI agent "eyes" and "hands" for native desktop and mobile applications.**
+[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Recipes](#-recipes-and-examples) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Android](#-android-support)
 
-A Model Context Protocol (MCP) server that provides **Computer Use** capabilities: screenshots, OCR, input simulation, and window management — for **native desktop apps** and **Android devices**, not just browsers.
-
-**Works with:** [Claude Desktop](https://claude.ai/download) • [Claude Code](https://docs.anthropic.com/en/docs/claude-code) • [Cursor](https://cursor.com) • Any MCP-compatible client
-
-[//]: # "Search keywords: MCP, MCP server, Model Context Protocol, computer use, desktop automation, UI automation, native app testing, test automation, e2e testing, RPA, screenshots, OCR, template matching, accessibility, mouse, keyboard, screen reading, macOS, Windows, Android, ADB, mobile testing, Claude, Claude Code, Cursor, AI agent, native-devtools-mcp"
-
-[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Android](#-android-support)
-
+<div align="center">
 <table>
 <tr>
 <td align="center"><strong>macOS</strong></td>
@@ -27,7 +38,6 @@ A Model Context Protocol (MCP) server that provides **Computer Use** capabilitie
 <td><img src="windows-demo-1.gif" width="450" alt="Windows Demo"></td>
 </tr>
 </table>
-
 </div>
 
 ---
@@ -121,6 +131,18 @@ Then restart your MCP client and you're ready to go.
 > ```json
 > { "permissions": { "allow": ["mcp__native-devtools__*"] } }
 > ```
+
+## 📚 Recipes and Examples
+
+- [Recipes and Examples Index](./examples/README.md)
+- [Claude Desktop Setup](./examples/claude-desktop-setup.md)
+- [Claude Code Setup](./examples/claude-code-setup.md)
+- [Cursor Setup](./examples/cursor-setup.md)
+- [End-to-End Desktop Flow](./examples/end-to-end-desktop-flow.md)
+- [Native App Click Flow](./examples/native-app-click-flow.md)
+- [OCR Fallback and Element Inspection](./examples/ocr-fallback-and-element-inspection.md)
+- [Template Matching Flow](./examples/template-matching-flow.md)
+- [Android Quickstart](./examples/android-quickstart.md)
 
 <details>
 <summary><strong>Manual configuration (without setup)</strong></summary>

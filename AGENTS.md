@@ -143,7 +143,9 @@ Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only s
 4. stop_hover_tracking → [remaining events]
 ```
 
-### 5. Android Device Control (requires `android` feature flag)
+### 5. Android Device Control
+
+Android support is built into every release. No feature flag or separate build is required.
 
 Android tools use the `android_` prefix. Device management tools are always available; all other tools appear after connecting to a device.
 
