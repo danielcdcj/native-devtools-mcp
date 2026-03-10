@@ -1037,6 +1037,11 @@ impl MacOSDevToolsServer {
                         "type": "integer",
                         "description": "Auto-stop after this many milliseconds (default: 60000 = 60s)",
                         "default": 60000
+                    },
+                    "min_dwell_ms": {
+                        "type": "integer",
+                        "description": "Minimum time (ms) cursor must stay on a new element before recording a transition. Filters out pass-through elements during fast mouse movement. 0 = record every change immediately. (default: 300)",
+                        "default": 300
                     }
                 }
             }))),
@@ -1554,6 +1559,11 @@ impl ServerHandler for MacOSDevToolsServer {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(60000)
                     .clamp(100, 300_000) as u32;
+                let min_dwell_ms = args
+                    .get("min_dwell_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(300)
+                    .clamp(0, 10_000) as u32;
 
                 let events = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let cancel = tokio_util::sync::CancellationToken::new();
@@ -1564,6 +1574,7 @@ impl ServerHandler for MacOSDevToolsServer {
                     app_name.clone(),
                     poll_interval_ms,
                     max_duration_ms,
+                    min_dwell_ms,
                 );
 
                 let tracker =
@@ -1572,9 +1583,10 @@ impl ServerHandler for MacOSDevToolsServer {
                 let _ = context.peer.notify_tool_list_changed().await;
 
                 let msg = format!(
-                    "Hover tracking started (poll: {}ms, max: {}ms{}). Use get_hover_events to read transitions, stop_hover_tracking to end.",
+                    "Hover tracking started (poll: {}ms, max: {}ms, dwell: {}ms{}). Use get_hover_events to read transitions, stop_hover_tracking to end.",
                     poll_interval_ms,
                     max_duration_ms,
+                    min_dwell_ms,
                     app_name.map_or(String::new(), |a| format!(", app: {}", a)),
                 );
                 Ok(CallToolResult::success(vec![Content::text(msg)]))

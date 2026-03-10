@@ -41,8 +41,6 @@ pub struct HoverElement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<ElementBounds>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
@@ -112,29 +110,41 @@ impl HoverTracker {
     }
 }
 
+/// Max characters for string fields in hover events.
+/// Keeps output compact — full element text (e.g. terminal buffers) is noise for hover tracking.
+const MAX_FIELD_LEN: usize = 100;
+
+/// Truncate a string to `MAX_FIELD_LEN`, appending "…" if truncated.
+fn truncate_field(s: &str) -> String {
+    if s.len() <= MAX_FIELD_LEN {
+        s.to_string()
+    } else {
+        // Find a char boundary at or before MAX_FIELD_LEN
+        let mut end = MAX_FIELD_LEN;
+        while !s.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
+    }
+}
+
 /// Parse a `serde_json::Value` (from `element_at_point`) into a `HoverElement`.
 pub fn parse_hover_element(value: &serde_json::Value) -> HoverElement {
+    let str_field = |key: &str| -> Option<String> {
+        value.get(key).and_then(|v| v.as_str()).map(truncate_field)
+    };
+
     HoverElement {
-        name: value.get("name").and_then(|v| v.as_str()).map(String::from),
-        role: value.get("role").and_then(|v| v.as_str()).map(String::from),
-        label: value
-            .get("label")
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        value: value
-            .get("value")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        name: str_field("name"),
+        role: str_field("role"),
+        label: str_field("label"),
         bounds: value.get("bounds").map(|b| ElementBounds {
             x: b.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
             y: b.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
             width: b.get("width").and_then(|v| v.as_f64()).unwrap_or(0.0),
             height: b.get("height").and_then(|v| v.as_f64()).unwrap_or(0.0),
         }),
-        app_name: value
-            .get("app_name")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        app_name: str_field("app_name"),
         pid: value.get("pid").and_then(|v| v.as_i64()).map(|p| p as i32),
     }
 }
@@ -147,7 +157,9 @@ pub fn elements_equal(a: &HoverElement, b: &HoverElement) -> bool {
 /// Start the hover polling background task.
 ///
 /// Polls cursor position + element_at_point every `poll_interval_ms`,
-/// pushing a `HoverEvent` whenever the element under the cursor changes.
+/// pushing a `HoverEvent` when the element under the cursor changes and
+/// the cursor has dwelled on the new element for at least `min_dwell_ms`.
+/// This filters out pass-through elements during fast mouse movement.
 /// Stops when `cancel` is triggered or `max_duration_ms` elapses.
 pub fn start_polling(
     events: Arc<Mutex<Vec<HoverEvent>>>,
@@ -155,6 +167,7 @@ pub fn start_polling(
     app_name: Option<String>,
     poll_interval_ms: u32,
     max_duration_ms: u32,
+    min_dwell_ms: u32,
 ) -> JoinHandle<()> {
     // Use Arc<str> to avoid cloning the string on every poll tick
     let app_name: Option<Arc<str>> = app_name.map(|s| Arc::from(s.as_str()));
@@ -163,8 +176,14 @@ pub fn start_polling(
         let start = Instant::now();
         let max_duration = std::time::Duration::from_millis(max_duration_ms as u64);
         let poll_interval = std::time::Duration::from_millis(poll_interval_ms as u64);
-        let mut previous_element: Option<HoverElement> = None;
-        let mut last_change = Instant::now();
+        let min_dwell = std::time::Duration::from_millis(min_dwell_ms as u64);
+
+        // The last element we emitted an event for
+        let mut confirmed_element: Option<HoverElement> = None;
+        let mut last_confirmed_change = Instant::now();
+
+        // A candidate element that differs from confirmed but hasn't met dwell threshold yet
+        let mut candidate: Option<(HoverElement, Instant)> = None;
 
         loop {
             // Check cancellation
@@ -176,14 +195,14 @@ pub fn start_polling(
             if start.elapsed() >= max_duration {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let cursor = get_cursor_position_sync().unwrap_or((0.0, 0.0));
-                let previous_dwell = last_change.elapsed().as_millis() as u64;
+                let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
                 let event = HoverEvent {
                     timestamp_ms: elapsed,
                     cursor: CursorPosition {
                         x: cursor.0,
                         y: cursor.1,
                     },
-                    element: previous_element.unwrap_or_default(),
+                    element: confirmed_element.unwrap_or_default(),
                     previous_dwell_ms: previous_dwell,
                     timeout: true,
                 };
@@ -208,28 +227,47 @@ pub fn start_polling(
                 }
             };
 
-            // Check if element changed
-            let changed = match &previous_element {
+            // Is this element different from the last confirmed one?
+            let differs_from_confirmed = match &confirmed_element {
                 Some(prev) => !elements_equal(prev, &current_element),
-                None => true, // First element is always a "change"
+                None => true, // First element is always new
             };
 
-            if changed {
-                let elapsed = start.elapsed().as_millis() as u64;
-                let previous_dwell = last_change.elapsed().as_millis() as u64;
-                let event = HoverEvent {
-                    timestamp_ms: elapsed,
-                    cursor: CursorPosition {
-                        x: cursor.0,
-                        y: cursor.1,
-                    },
-                    element: current_element.clone(),
-                    previous_dwell_ms: previous_dwell,
-                    timeout: false,
-                };
-                events.lock().unwrap().push(event);
-                previous_element = Some(current_element);
-                last_change = Instant::now();
+            if !differs_from_confirmed {
+                // Cursor moved back to confirmed element — discard candidate
+                candidate = None;
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+
+            // Element differs from confirmed — check candidate state
+            match &candidate {
+                Some((cand_elem, cand_since)) if elements_equal(cand_elem, &current_element) => {
+                    // Same candidate — check if dwell threshold met
+                    if cand_since.elapsed() >= min_dwell {
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
+                        let event = HoverEvent {
+                            timestamp_ms: elapsed,
+                            cursor: CursorPosition {
+                                x: cursor.0,
+                                y: cursor.1,
+                            },
+                            element: current_element.clone(),
+                            previous_dwell_ms: previous_dwell,
+                            timeout: false,
+                        };
+                        events.lock().unwrap().push(event);
+                        confirmed_element = Some(current_element);
+                        last_confirmed_change = Instant::now();
+                        candidate = None;
+                    }
+                    // else: keep waiting
+                }
+                _ => {
+                    // New candidate (or different from previous candidate)
+                    candidate = Some((current_element, Instant::now()));
+                }
             }
 
             tokio::time::sleep(poll_interval).await;
@@ -286,7 +324,6 @@ mod tests {
         assert_eq!(el.name, Some("File".to_string()));
         assert_eq!(el.role, Some("AXMenuBarItem".to_string()));
         assert_eq!(el.label, Some("File menu".to_string()));
-        assert_eq!(el.value, None);
         assert_eq!(el.app_name, Some("Finder".to_string()));
         assert_eq!(el.pid, Some(1234));
         assert_eq!(
@@ -315,7 +352,6 @@ mod tests {
             name: Some("File".into()),
             role: Some("AXMenuBarItem".into()),
             label: Some("label".into()),
-            value: None,
             bounds: Some(ElementBounds {
                 x: 10.0,
                 y: 20.0,
@@ -329,7 +365,6 @@ mod tests {
             name: Some("File".into()),
             role: Some("AXMenuBarItem".into()),
             label: Some("different label".into()),
-            value: Some("val".into()),
             bounds: Some(ElementBounds {
                 x: 10.0,
                 y: 20.0,
@@ -348,7 +383,6 @@ mod tests {
             name: Some("File".into()),
             role: Some("AXMenuBarItem".into()),
             label: None,
-            value: None,
             bounds: None,
             app_name: None,
             pid: None,
@@ -357,7 +391,6 @@ mod tests {
             name: Some("File".into()),
             role: Some("AXButton".into()),
             label: None,
-            value: None,
             bounds: None,
             app_name: None,
             pid: None,
@@ -371,7 +404,6 @@ mod tests {
             name: Some("File".into()),
             role: Some("AXMenuBarItem".into()),
             label: None,
-            value: None,
             bounds: None,
             app_name: None,
             pid: None,
@@ -380,7 +412,6 @@ mod tests {
             name: Some("Edit".into()),
             role: Some("AXMenuBarItem".into()),
             label: None,
-            value: None,
             bounds: None,
             app_name: None,
             pid: None,
@@ -397,7 +428,7 @@ mod tests {
                 name: Some("A".into()),
                 role: None,
                 label: None,
-                value: None,
+
                 bounds: None,
                 app_name: None,
                 pid: None,
@@ -430,7 +461,7 @@ mod tests {
                 name: Some("A".into()),
                 role: None,
                 label: None,
-                value: None,
+
                 bounds: None,
                 app_name: None,
                 pid: None,
@@ -453,6 +484,7 @@ mod tests {
             None, // no app_name
             50,   // 50ms poll interval
             1000, // 1s max duration
+            0,    // no dwell threshold
         );
 
         // Cancel immediately
@@ -475,6 +507,7 @@ mod tests {
             None,
             50,  // 50ms poll interval
             500, // 500ms max duration
+            0,   // no dwell threshold
         );
 
         // AX queries can be slow; allow generous margin
@@ -492,6 +525,57 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_field_short_string() {
+        assert_eq!(truncate_field("hello"), "hello");
+    }
+
+    #[test]
+    fn test_truncate_field_exact_limit() {
+        let s = "a".repeat(MAX_FIELD_LEN);
+        assert_eq!(truncate_field(&s), s);
+    }
+
+    #[test]
+    fn test_truncate_field_long_string() {
+        let s = "a".repeat(MAX_FIELD_LEN + 50);
+        let result = truncate_field(&s);
+        assert!(result.len() <= MAX_FIELD_LEN + "…".len());
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_truncate_field_multibyte() {
+        // Ensure we don't panic on multi-byte chars at the boundary
+        let s = "é".repeat(MAX_FIELD_LEN); // each é is 2 bytes
+        let result = truncate_field(&s);
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn test_parse_hover_element_truncates_long_name() {
+        let long_name = "x".repeat(500);
+        let json = serde_json::json!({
+            "role": "AXStaticText",
+            "name": long_name,
+        });
+        let el = parse_hover_element(&json);
+        let name = el.name.unwrap();
+        assert!(name.len() <= MAX_FIELD_LEN + "…".len());
+        assert!(name.ends_with('…'));
+    }
+
+    #[test]
+    fn test_parse_hover_element_drops_value() {
+        let json = serde_json::json!({
+            "role": "AXTextArea",
+            "value": "some text content",
+        });
+        let el = parse_hover_element(&json);
+        // value field is not captured in HoverElement
+        assert_eq!(el.role, Some("AXTextArea".to_string()));
+    }
+
+    #[test]
     fn test_hover_event_serialization_includes_timeout_when_true() {
         let event = HoverEvent {
             timestamp_ms: 60000,
@@ -500,7 +584,7 @@ mod tests {
                 name: None,
                 role: None,
                 label: None,
-                value: None,
+
                 bounds: None,
                 app_name: None,
                 pid: None,
