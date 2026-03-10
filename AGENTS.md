@@ -31,6 +31,9 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Type into the search bar" | `find_text(text="Search")` → `click(x, y)` → `type_text("hello")` | Must click to focus before typing. |
 | "Scroll down" | `scroll(x=500, y=500, delta_y=200)` | Positive `delta_y` scrolls down. |
 | "Find an open window" | `list_windows()` → `focus_window(window_id=...)` | Don't guess window names; list them first. |
+| "Track what I hover over" | `start_hover_tracking(min_dwell_ms=300)` → user moves mouse → `stop_hover_tracking()` | Records element transitions with dwell filtering. macOS only. |
+| "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
+| "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
 
 ---
 
@@ -119,8 +122,28 @@ Scrolls at a specific screen position.
 
 *   `list_windows`: Returns array of `{ id, title, bounds, app_name }`.
 *   `focus_window`: Accepts `{ window_id: 123 }`, `{ app_name: "Code" }`, or `{ pid: 999 }`.
+*   `launch_app`: Launch an app by name. Optional `args` parameter for CLI arguments. If app is already running with no args, brings to front; with args, returns error (use `quit_app` first).
+*   `quit_app`: Quit a running app. Accepts `app_name` (required) and `force` (boolean, default false).
 
-### 4. Android Device Control (requires `android` feature flag)
+### 4. Hover Tracking (macOS only)
+
+Track cursor hover transitions across UI elements. Designed for observing user navigation patterns (tooltip triggers, dropdown reveals, panel expansions).
+
+* `start_hover_tracking`: Begin polling session. Inputs: `app_name` (optional), `poll_interval_ms` (default 100), `max_duration_ms` (default 60000), `min_dwell_ms` (default 300 — cursor must stay on element this long before recording).
+* `get_hover_events`: Drain buffered events since last call. Returns JSON array of transitions: `{ timestamp_ms, cursor: {x, y}, element: {role, name, label, bounds, app_name, pid}, previous_dwell_ms }`.
+* `stop_hover_tracking`: End session, return remaining events.
+
+Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only show while tracking is active. Use `element_at_point` with event cursor coordinates for full element details (value, etc.).
+
+#### Hover Tracking Example
+```
+1. start_hover_tracking(min_dwell_ms=500, app_name="Safari")
+2. (user moves mouse around)
+3. get_hover_events  → [{timestamp_ms: 1200, cursor: {x: 500, y: 300}, element: {role: "AXLink", name: "Home", ...}, previous_dwell_ms: 800}]
+4. stop_hover_tracking → [remaining events]
+```
+
+### 5. Android Device Control (requires `android` feature flag)
 
 Android tools use the `android_` prefix. Device management tools are always available; all other tools appear after connecting to a device.
 

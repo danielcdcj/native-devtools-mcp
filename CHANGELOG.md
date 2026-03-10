@@ -12,6 +12,7 @@ New `start_hover_tracking` tool that continuously polls cursor position and the 
 - **Dwell threshold** (`min_dwell_ms`, default 300ms) — filters out pass-through elements during fast mouse movement, so only intentional hovers are recorded
 - **Compact output** — element `value` field is dropped to avoid bloat (e.g., terminal buffers); remaining string fields are truncated to 100 chars. Use `element_at_point` with the event's cursor coordinates for full element details
 - Tools appear dynamically: `get_hover_events` and `stop_hover_tracking` only show up while a session is active
+- **macOS only** for now; Windows support planned
 
 ### App lifecycle tools
 
