@@ -345,6 +345,7 @@ unsafe fn hit_test_tree(root: AXUIElementRef, x: f64, y: f64) -> Option<HitResul
                     best = Some(HitResult {
                         name: get_string_attribute(element, "AXTitle"),
                         role: get_string_attribute(element, "AXRole"),
+                        subrole: get_string_attribute(element, "AXSubrole"),
                         label: get_string_attribute(element, "AXDescription"),
                         value: get_string_attribute(element, "AXValue"),
                         position: pos,
@@ -364,6 +365,7 @@ unsafe fn hit_test_tree(root: AXUIElementRef, x: f64, y: f64) -> Option<HitResul
 struct HitResult {
     name: Option<String>,
     role: Option<String>,
+    subrole: Option<String>,
     label: Option<String>,
     value: Option<String>,
     position: CGPoint,
@@ -419,7 +421,7 @@ pub fn element_at_point(
     let role_str = unsafe { get_string_attribute(element, "AXRole") };
     let is_container = role_str.as_deref().is_some_and(is_container_role);
 
-    let (name, role, label, value, bounds) = if is_container {
+    let (name, role, subrole, label, value, bounds) = if is_container {
         unsafe {
             core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
         }
@@ -433,18 +435,26 @@ pub fn element_at_point(
             result
         });
         match hit {
-            Some(h) => (h.name, h.role, h.label, h.value, Some((h.position, h.size))),
-            None => (None, role_str, None, None, None),
+            Some(h) => (
+                h.name,
+                h.role,
+                h.subrole,
+                h.label,
+                h.value,
+                Some((h.position, h.size)),
+            ),
+            None => (None, role_str, None, None, None, None),
         }
     } else {
         let name = unsafe { get_string_attribute(element, "AXTitle") };
+        let subrole = unsafe { get_string_attribute(element, "AXSubrole") };
         let label = unsafe { get_string_attribute(element, "AXDescription") };
         let value = unsafe { get_string_attribute(element, "AXValue") };
         let bounds = unsafe { get_position_and_size(element) };
         unsafe {
             core_foundation::base::CFRelease(element as core_foundation::base::CFTypeRef);
         }
-        (name, role_str, label, value, bounds)
+        (name, role_str, subrole, label, value, bounds)
     };
 
     // Resolve app name from PID
@@ -455,6 +465,9 @@ pub fn element_at_point(
 
     if let Some(r) = role {
         result.insert("role".to_string(), serde_json::Value::String(r));
+    }
+    if let Some(sr) = subrole {
+        result.insert("subrole".to_string(), serde_json::Value::String(sr));
     }
     if let Some(n) = name {
         result.insert("name".to_string(), serde_json::Value::String(n));
