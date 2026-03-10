@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.0
+
+### Hover tracking
+
+New `start_hover_tracking` tool that continuously polls cursor position and the accessibility element under it, recording transitions as the user moves between UI elements. Designed for LLMs to observe user navigation patterns (e.g., tooltip triggers, dropdown reveals, panel expansions).
+
+- **`start_hover_tracking`** — begins a polling session with configurable interval, max duration, and dwell threshold
+- **`get_hover_events`** — drains buffered transition events (cursor position, element role/name/bounds, dwell time)
+- **`stop_hover_tracking`** — ends the session and returns remaining events
+- **Dwell threshold** (`min_dwell_ms`, default 300ms) — filters out pass-through elements during fast mouse movement, so only intentional hovers are recorded
+- **Compact output** — element `value` field is dropped to avoid bloat (e.g., terminal buffers); remaining string fields are truncated to 100 chars. Use `element_at_point` with the event's cursor coordinates for full element details
+- Tools appear dynamically: `get_hover_events` and `stop_hover_tracking` only show up while a session is active
+
+### App lifecycle tools
+
+- **`launch_app`** — now accepts optional `args` parameter for CLI arguments (e.g., `--remote-debugging-port=9222`). Returns an error if the app is already running with args specified
+- **`quit_app`** — new tool for graceful or force termination of running applications
+
+### Fixes
+
+- `list_apps` / `is_app_running` now uses `CGWindowListCopyWindowInfo` to supplement `NSWorkspace.runningApplications`, fixing stale data for recently launched apps
+- `list_apps` filters to user-facing apps only, excluding system agents and daemons
+- CI changelog extraction in release workflow fixed
+
 ## v0.4.4
 
 ### `element_at_point` tool
