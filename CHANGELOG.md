@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.1
+
+### `element_at_point` improvements
+
+- **AXSubrole** — `element_at_point` now includes the `subrole` field (from `AXSubrole`) in its response on macOS, giving LLMs finer-grained element classification (e.g., distinguishing "AXCloseButton" from a generic button)
+
+### Hover tracking
+
+- **Absolute timestamps** — hover events now use absolute Unix milliseconds instead of relative "ms since tracking started", making it easier to correlate events with external timelines and logs
+
 ## v0.5.0
 
 ### Hover tracking
