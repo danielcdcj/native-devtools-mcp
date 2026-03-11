@@ -5,14 +5,22 @@
 
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// Current time as Unix milliseconds.
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// A single hover transition event.
 #[derive(Debug, Clone, Serialize)]
 pub struct HoverEvent {
-    /// Milliseconds since tracking started
+    /// Absolute Unix milliseconds when this transition was detected
     pub timestamp_ms: u64,
     /// Cursor position at time of transition
     pub cursor: CursorPosition,
@@ -193,11 +201,10 @@ pub fn start_polling(
 
             // Check max duration
             if start.elapsed() >= max_duration {
-                let elapsed = start.elapsed().as_millis() as u64;
                 let cursor = get_cursor_position_sync().unwrap_or((0.0, 0.0));
                 let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
                 let event = HoverEvent {
-                    timestamp_ms: elapsed,
+                    timestamp_ms: now_millis(),
                     cursor: CursorPosition {
                         x: cursor.0,
                         y: cursor.1,
@@ -245,10 +252,9 @@ pub fn start_polling(
                 Some((cand_elem, cand_since)) if elements_equal(cand_elem, &current_element) => {
                     // Same candidate — check if dwell threshold met
                     if cand_since.elapsed() >= min_dwell {
-                        let elapsed = start.elapsed().as_millis() as u64;
                         let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
                         let event = HoverEvent {
-                            timestamp_ms: elapsed,
+                            timestamp_ms: now_millis(),
                             cursor: CursorPosition {
                                 x: cursor.0,
                                 y: cursor.1,
@@ -421,8 +427,9 @@ mod tests {
 
     #[test]
     fn test_drain_events_clears_buffer() {
+        let ts = now_millis();
         let events = Arc::new(Mutex::new(vec![HoverEvent {
-            timestamp_ms: 100,
+            timestamp_ms: ts,
             cursor: CursorPosition { x: 1.0, y: 2.0 },
             element: HoverElement {
                 name: Some("A".into()),
@@ -445,7 +452,7 @@ mod tests {
 
         let drained = tracker.drain_events();
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].timestamp_ms, 100);
+        assert_eq!(drained[0].timestamp_ms, ts);
 
         // Second drain should be empty
         let drained2 = tracker.drain_events();
@@ -455,7 +462,7 @@ mod tests {
     #[test]
     fn test_hover_event_serialization_omits_timeout_when_false() {
         let event = HoverEvent {
-            timestamp_ms: 100,
+            timestamp_ms: now_millis(),
             cursor: CursorPosition { x: 1.0, y: 2.0 },
             element: HoverElement {
                 name: Some("A".into()),
@@ -578,7 +585,7 @@ mod tests {
     #[test]
     fn test_hover_event_serialization_includes_timeout_when_true() {
         let event = HoverEvent {
-            timestamp_ms: 60000,
+            timestamp_ms: now_millis(),
             cursor: CursorPosition { x: 1.0, y: 2.0 },
             element: HoverElement {
                 name: None,
