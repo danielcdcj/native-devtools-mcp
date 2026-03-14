@@ -5,5 +5,6 @@ pub mod image_cache;
 pub mod input;
 pub mod load_image;
 pub mod navigation;
+pub mod screen_recorder;
 pub mod screenshot;
 pub mod screenshot_cache;
