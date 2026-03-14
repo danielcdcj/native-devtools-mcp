@@ -121,27 +121,19 @@ pub fn start_recording(
                 return;
             }
 
-            // Resolve PID on the async side to avoid cloning state into
-            // spawn_blocking.
-            #[cfg(target_os = "macos")]
-            let pid = crate::macos::ax::frontmost_pid().ok();
-            #[cfg(not(target_os = "macos"))]
-            let pid: Option<i32> = None;
-
-            let Some(pid) = pid else {
-                continue;
-            };
-
-            let cached_name = app_name_cache.get(&pid).cloned();
+            let app_cache_snapshot = app_name_cache.clone();
             let dir = output_dir.clone();
 
+            // All OS calls (frontmost_pid, list_windows, CGWindowListCreateImage)
+            // run inside spawn_blocking so they have a proper thread context
+            // for Objective-C/AppKit APIs (autorelease pools, etc.).
             let result = tokio::task::spawn_blocking(move || {
-                capture_frame(pid, cached_name.as_deref(), &dir)
+                capture_frontmost_frame(&app_cache_snapshot, &dir)
             })
             .await;
 
             match result {
-                Ok(Ok((frame, app_name))) => {
+                Ok(Ok((frame, pid, app_name))) => {
                     app_name_cache.insert(pid, app_name);
                     frames.lock().unwrap().push(frame);
                 }
@@ -156,29 +148,37 @@ pub fn start_recording(
     })
 }
 
-/// Capture a single frame for the given PID.
+/// Capture a single frame from the frontmost app's window.
 ///
-/// Always resolves the frontmost window for the PID (window ID is not
-/// cached because the user may switch windows within the same app).
-/// Returns the frame and the app name for cache update.
-fn capture_frame(
-    pid: i32,
-    cached_app_name: Option<&str>,
+/// Determines the frontmost app from `CGWindowListCopyWindowInfo` (which
+/// returns windows in front-to-back stacking order) rather than
+/// `NSWorkspace.frontmostApplication`, because NSWorkspace requires run
+/// loop events to stay current and our CLI server never processes them.
+///
+/// Returns the frame, the frontmost PID, and the app name (for cache update).
+fn capture_frontmost_frame(
+    app_name_cache: &std::collections::HashMap<i32, String>,
     output_dir: &Path,
-) -> Result<(RecordedFrame, String), String> {
+) -> Result<(RecordedFrame, i32, String), String> {
     #[cfg(target_os = "macos")]
     {
         use crate::macos;
 
+        // list_windows() returns windows in front-to-back order via
+        // CGWindowListCopyWindowInfo.  The first layer-0 window is the
+        // frontmost user app — no NSWorkspace needed.
         let windows = macos::window::list_windows()
             .map_err(|e| format!("Failed to list windows: {e}"))?;
         let win = windows
             .iter()
-            .find(|w| w.owner_pid == pid as i64 && w.is_on_screen)
-            .ok_or_else(|| format!("No on-screen window for PID {pid}"))?;
+            .find(|w| w.layer == 0)
+            .ok_or_else(|| "No layer-0 window found".to_string())?;
+
         let window_id = win.id;
-        let app_name = cached_app_name
-            .map(|s| s.to_string())
+        let pid = win.owner_pid as i32;
+        let app_name = app_name_cache
+            .get(&pid)
+            .cloned()
             .unwrap_or_else(|| win.owner_name.clone());
 
         let timestamp_ms = now_millis();
@@ -202,13 +202,14 @@ fn capture_frame(
                 pixel_width: meta.pixel_width,
                 pixel_height: meta.pixel_height,
             },
+            pid,
             app_name,
         ))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (pid, cached_app_name, output_dir);
+        let _ = (app_name_cache, output_dir);
         Err("Screen recording is only supported on macOS".to_string())
     }
 }
@@ -283,5 +284,39 @@ mod tests {
             .await
             .expect("task should finish after cancel")
             .expect("task should not panic");
+    }
+
+    #[tokio::test]
+    #[ignore] // requires a running desktop
+    async fn test_recording_captures_frames() {
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+        let dir = tempfile::tempdir().unwrap();
+
+        let handle = start_recording(
+            frames.clone(),
+            cancel.clone(),
+            dir.path().to_path_buf(),
+            3,
+            10000,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        cancel.cancel();
+        let _ = handle.await;
+
+        let captured = frames.lock().unwrap();
+        eprintln!("Captured {} frames", captured.len());
+        for f in captured.iter() {
+            eprintln!("  {} wid={} {}x{} {}", f.app_name, f.window_id, f.pixel_width, f.pixel_height, f.path);
+        }
+
+        // List files on disk
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            eprintln!("  file: {:?} ({} bytes)", entry.file_name(), entry.metadata().unwrap().len());
+        }
+
+        assert!(!captured.is_empty(), "Should have captured at least one frame");
     }
 }
