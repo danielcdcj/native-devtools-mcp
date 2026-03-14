@@ -185,13 +185,14 @@ pub struct WindowCaptureMeta {
 /// Capture a window via `CGWindowListCreateImage` and return JPEG bytes directly.
 ///
 /// Much faster than `capture_window` (no process spawn, no PNG roundtrip).
-/// Used by the screen recorder for sustained ~3fps capture.
+/// Uses a direct single-window query for metadata instead of enumerating all
+/// windows.  Unlike [`super::super::tools::screenshot::png_to_jpeg`], this
+/// operates on raw CGImage data to avoid the PNG encode/decode roundtrip.
 pub fn capture_window_cg_jpeg(
     window_id: u32,
-    quality: u8,
 ) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
-    let window_info = super::window::find_window_by_id(window_id)
-        .map_err(|e| ScreenshotError::CaptureError(e))?
+    let window_info = super::window::find_window_by_id_direct(window_id)
+        .map_err(ScreenshotError::CaptureError)?
         .ok_or(ScreenshotError::WindowNotFound(window_id))?;
 
     let null_rect = unsafe { core_graphics::display::CGRectNull };
@@ -213,7 +214,7 @@ pub fn capture_window_cg_jpeg(
         display::backing_scale_for_point(window_info.bounds.x, window_info.bounds.y)
     };
 
-    let jpeg_data = cg_image_to_jpeg(&cg_image, quality)?;
+    let jpeg_data = cg_image_to_jpeg(&cg_image)?;
 
     Ok((
         jpeg_data,
@@ -229,40 +230,47 @@ pub fn capture_window_cg_jpeg(
 
 /// Convert a CGImage to JPEG bytes via the `image` crate.
 ///
-/// Extracts raw pixel data from the CGImage, handles BGRA→RGBA conversion
+/// Extracts raw pixel data from the CGImage, handles BGRA→RGB conversion
 /// (macOS uses BGRA byte order), and encodes directly to JPEG.
-fn cg_image_to_jpeg(
-    cg_image: &core_graphics::image::CGImage,
-    quality: u8,
-) -> Result<Vec<u8>, ScreenshotError> {
-    let width = cg_image.width() as u32;
-    let height = cg_image.height() as u32;
+/// Uses `chunks_exact` for the inner loop to let the compiler auto-vectorize.
+fn cg_image_to_jpeg(cg_image: &core_graphics::image::CGImage) -> Result<Vec<u8>, ScreenshotError> {
+    let width = cg_image.width() as usize;
+    let height = cg_image.height() as usize;
     let bytes_per_row = cg_image.bytes_per_row();
     let data = cg_image.data();
     let raw_bytes = data.bytes();
 
-    // CGImage typically returns 32-bit BGRA with premultiplied alpha.
-    // Convert to RGB for JPEG (which doesn't support alpha).
-    let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-    for y in 0..height as usize {
-        let row_start = y * bytes_per_row;
-        for x in 0..width as usize {
-            let offset = row_start + x * 4;
-            if offset + 2 < raw_bytes.len() {
-                // BGRA → RGB
-                rgb_data.push(raw_bytes[offset + 2]); // R
-                rgb_data.push(raw_bytes[offset + 1]); // G
-                rgb_data.push(raw_bytes[offset]);     // B
-            }
+    // Validate buffer size up front instead of checking per-pixel.
+    let expected_len = height * bytes_per_row;
+    if raw_bytes.len() < expected_len {
+        return Err(ScreenshotError::CaptureError(format!(
+            "CGImage data too short: {} < {}",
+            raw_bytes.len(),
+            expected_len
+        )));
+    }
+
+    // CGImage returns 32-bit BGRA. Convert to RGB for JPEG (no alpha).
+    let mut rgb_data = vec![0u8; width * height * 3];
+    for y in 0..height {
+        let row = &raw_bytes[y * bytes_per_row..][..width * 4];
+        let out = &mut rgb_data[y * width * 3..][..width * 3];
+        for (src, dst) in row.chunks_exact(4).zip(out.chunks_exact_mut(3)) {
+            dst[0] = src[2]; // R
+            dst[1] = src[1]; // G
+            dst[2] = src[0]; // B
         }
     }
 
-    let img = image::RgbImage::from_raw(width, height, rgb_data).ok_or_else(|| {
+    let img = image::RgbImage::from_raw(width as u32, height as u32, rgb_data).ok_or_else(|| {
         ScreenshotError::CaptureError("Failed to create image from CGImage pixel data".into())
     })?;
 
     let mut jpeg_buf = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, quality);
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut jpeg_buf,
+        crate::tools::JPEG_QUALITY,
+    );
     img.write_with_encoder(encoder)
         .map_err(|e| ScreenshotError::CaptureError(format!("JPEG encode failed: {e}")))?;
 
@@ -280,7 +288,7 @@ mod tests {
             .expect("find_windows_by_app should succeed");
         let window = windows.first().expect("Finder must be running");
         let (jpeg, meta) =
-            capture_window_cg_jpeg(window.id, 80).expect("capture_window_cg_jpeg should succeed");
+            capture_window_cg_jpeg(window.id).expect("capture_window_cg_jpeg should succeed");
         assert!(!jpeg.is_empty(), "JPEG data should not be empty");
         assert!(meta.pixel_width > 0);
         assert!(meta.pixel_height > 0);
@@ -289,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_capture_window_cg_jpeg_invalid_window() {
-        let result = capture_window_cg_jpeg(999_999_999, 80);
+        let result = capture_window_cg_jpeg(999_999_999);
         assert!(result.is_err());
     }
 }

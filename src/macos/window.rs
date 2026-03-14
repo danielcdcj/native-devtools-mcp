@@ -61,9 +61,41 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
     Ok(windows)
 }
 
-/// Find a window by its ID.
+/// Find a window by its ID (enumerates all windows — use `find_window_by_id_direct`
+/// on hot paths).
 pub fn find_window_by_id(window_id: u32) -> Result<Option<WindowInfo>, String> {
     Ok(list_windows()?.into_iter().find(|w| w.id == window_id))
+}
+
+/// Find a window by its ID using a direct single-window query.
+///
+/// Much faster than `find_window_by_id` — asks the window server for just
+/// the one window instead of enumerating all visible windows.
+pub fn find_window_by_id_direct(window_id: u32) -> Result<Option<WindowInfo>, String> {
+    use core_graphics::window::kCGWindowListOptionIncludingWindow;
+
+    let ptr = unsafe { CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, window_id) };
+    if ptr.is_null() {
+        return Err("CGWindowListCopyWindowInfo failed".to_string());
+    }
+
+    let list: CFArray<*const c_void> = unsafe { CFArray::wrap_under_create_rule(ptr) };
+    if list.len() == 0 {
+        return Ok(None);
+    }
+
+    let dict: CFDict =
+        unsafe { CFDictionary::wrap_under_get_rule(*list.get_unchecked(0) as *const _) };
+
+    Ok(Some(WindowInfo {
+        id: get_i64(&dict, unsafe { kCGWindowNumber }).unwrap_or(0) as u32,
+        name: get_string(&dict, unsafe { kCGWindowName }),
+        owner_name: get_string(&dict, unsafe { kCGWindowOwnerName }).unwrap_or_default(),
+        owner_pid: get_i64(&dict, unsafe { kCGWindowOwnerPID }).unwrap_or(0),
+        layer: get_i64(&dict, unsafe { kCGWindowLayer }).unwrap_or(0),
+        is_on_screen: get_i64(&dict, unsafe { kCGWindowIsOnscreen }).unwrap_or(0) != 0,
+        bounds: get_bounds(&dict, unsafe { kCGWindowBounds }).unwrap_or_default(),
+    }))
 }
 
 /// Find windows by application name (case-insensitive substring match).

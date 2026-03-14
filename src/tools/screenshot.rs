@@ -40,7 +40,7 @@ fn default_include_ocr() -> bool {
     true
 }
 
-const JPEG_QUALITY: u8 = 80;
+use super::JPEG_QUALITY;
 
 /// Convert PNG data to JPEG.
 pub(crate) fn png_to_jpeg(png_data: &[u8]) -> Result<Vec<u8>, String> {
