@@ -261,7 +261,7 @@ fn app_name_for_pid(pid: i32) -> Option<String> {
 }
 
 /// Get the PID of the frontmost application via NSWorkspace.
-fn frontmost_pid() -> Result<i32, String> {
+pub(crate) fn frontmost_pid() -> Result<i32, String> {
     unsafe {
         let cls = Class::get("NSWorkspace").ok_or("NSWorkspace class not available")?;
         let workspace: *mut Object = msg_send![cls, sharedWorkspace];

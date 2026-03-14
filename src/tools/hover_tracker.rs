@@ -5,17 +5,11 @@
 
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Current time as Unix milliseconds.
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
+use super::now_millis;
 
 /// A single hover transition event.
 #[derive(Debug, Clone, Serialize)]

@@ -60,6 +60,7 @@ pub struct MacOSDevToolsServer {
     image_cache: Arc<RwLock<ImageCache>>,
     android_device: Arc<RwLock<Option<AndroidDevice>>>,
     hover_tracker: Arc<RwLock<Option<crate::tools::hover_tracker::HoverTracker>>>,
+    screen_recorder: Arc<RwLock<Option<crate::tools::screen_recorder::ScreenRecorder>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -76,6 +77,7 @@ impl MacOSDevToolsServer {
             image_cache: Arc::new(RwLock::new(ImageCache::default())),
             android_device: Arc::new(RwLock::new(None)),
             hover_tracker: Arc::new(RwLock::new(None)),
+            screen_recorder: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -89,6 +91,10 @@ impl MacOSDevToolsServer {
 
     async fn is_hover_tracking(&self) -> bool {
         self.hover_tracker.read().await.is_some()
+    }
+
+    async fn is_recording(&self) -> bool {
+        self.screen_recorder.read().await.is_some()
     }
 
     /// Acquire the android device lock and call `f` with a mutable reference.
@@ -113,6 +119,7 @@ impl MacOSDevToolsServer {
         app_connected: bool,
         android_connected: bool,
         hover_tracking: bool,
+        recording: bool,
     ) -> Vec<Tool> {
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
@@ -125,6 +132,7 @@ impl MacOSDevToolsServer {
         }
         if cfg!(target_os = "macos") {
             tools.extend(Self::get_hover_tracking_tools(hover_tracking));
+            tools.extend(Self::get_recording_tools(recording));
         }
         tools
     }
@@ -1066,6 +1074,46 @@ impl MacOSDevToolsServer {
         }
         tools
     }
+
+    /// Screen recording tools. `start_recording` always visible,
+    /// `stop_recording` only while recording is active.
+    fn get_recording_tools(recording_active: bool) -> Vec<Tool> {
+        let mut tools = vec![Tool::new(
+            "start_recording",
+            "Start recording the frontmost app's window at ~5fps. Writes timestamped JPEG frames to the specified output directory. Use stop_recording to end the session and get the frame list.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "output_dir": {
+                        "type": "string",
+                        "description": "Directory to write JPEG frames to (created if needed)"
+                    },
+                    "fps": {
+                        "type": "integer",
+                        "description": "Frames per second (default: 5)",
+                        "default": 5
+                    },
+                    "max_duration_ms": {
+                        "type": "integer",
+                        "description": "Auto-stop after this many milliseconds (default: 300000 = 5 min)",
+                        "default": 300000
+                    }
+                },
+                "required": ["output_dir"]
+            }))),
+        )];
+        if recording_active {
+            tools.push(Tool::new(
+                "stop_recording",
+                "Stop screen recording and return all frame metadata as a JSON array.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ));
+        }
+        tools
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
@@ -1129,6 +1177,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 connected,
                 self.is_android_connected().await,
                 self.is_hover_tracking().await,
+                self.is_recording().await,
             ),
             next_cursor: None,
         })
@@ -1634,6 +1683,99 @@ impl ServerHandler for MacOSDevToolsServer {
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(
                         "No hover tracking session is active.",
+                    )])),
+                }
+            }
+            "start_recording" => {
+                if cfg!(not(target_os = "macos")) {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Screen recording is only supported on macOS.",
+                    )]));
+                }
+
+                // Check if a previous recording auto-stopped (max_duration elapsed).
+                // If so, drain remaining frames (log count) and clear stale state.
+                {
+                    let guard = self.screen_recorder.read().await;
+                    if let Some(recorder) = guard.as_ref() {
+                        if recorder.is_finished() {
+                            let stale_count = recorder.drain_frames().len();
+                            if stale_count > 0 {
+                                tracing::warn!(
+                                    "Discarding {stale_count} frames from auto-stopped recording \
+                                     (stop_recording was not called)"
+                                );
+                            }
+                            drop(guard);
+                            self.screen_recorder.write().await.take();
+                            let _ = context.peer.notify_tool_list_changed().await;
+                        } else {
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                "Recording is already active. Use stop_recording to end the current session first.",
+                            )]));
+                        }
+                    }
+                }
+
+                let output_dir = parse_string_field(&args, "output_dir")?;
+                let fps = args
+                    .get("fps")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as u32;
+                let max_duration_ms = args
+                    .get("max_duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(300_000)
+                    .clamp(1_000, u32::MAX as u64) as u32;
+
+                let output_path = std::path::PathBuf::from(&output_dir);
+                if let Err(e) = std::fs::create_dir_all(&output_path) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Failed to create output directory: {e}"
+                    ))]));
+                }
+                // Probe-write to fail fast if the directory is not writable.
+                match tempfile::tempfile_in(&output_path) {
+                    Ok(_) => {} // drops and deletes automatically
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Output directory is not writable: {e}"
+                        ))]));
+                    }
+                }
+
+                let frames = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let cancel = tokio_util::sync::CancellationToken::new();
+
+                let task_handle = crate::tools::screen_recorder::start_recording(
+                    frames.clone(),
+                    cancel.clone(),
+                    output_path,
+                    fps,
+                    max_duration_ms,
+                );
+
+                let recorder =
+                    crate::tools::screen_recorder::ScreenRecorder::new(frames, task_handle, cancel);
+                *self.screen_recorder.write().await = Some(recorder);
+                let _ = context.peer.notify_tool_list_changed().await;
+
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Recording started ({fps}fps, max: {max_duration_ms}ms, dir: {output_dir}). Use stop_recording to end.",
+                ))]))
+            }
+            "stop_recording" => {
+                let recorder = self.screen_recorder.write().await.take();
+                match recorder {
+                    Some(recorder) => {
+                        let frames = recorder.cancel_and_drain().await;
+                        let _ = context.peer.notify_tool_list_changed().await;
+                        Ok(CallToolResult::success(vec![Content::text(
+                            to_json_pretty(&frames),
+                        )]))
+                    }
+                    None => Ok(CallToolResult::error(vec![Content::text(
+                        "No recording session is active.",
                     )])),
                 }
             }
