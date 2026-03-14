@@ -1,5 +1,5 @@
 //! Screen recording: captures the frontmost app's window at a configurable
-//! frame rate, writing timestamped JPEG frames to an output directory.
+//! frame rate (default 5fps), writing timestamped JPEG frames to an output directory.
 //!
 //! Follows the same lifecycle pattern as [`super::hover_tracker::HoverTracker`]:
 //! a background task captures frames, a shared buffer stores metadata, and the

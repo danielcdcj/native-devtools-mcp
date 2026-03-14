@@ -1080,7 +1080,7 @@ impl MacOSDevToolsServer {
     fn get_recording_tools(recording_active: bool) -> Vec<Tool> {
         let mut tools = vec![Tool::new(
             "start_recording",
-            "Start recording the frontmost app's window at ~3fps. Writes timestamped JPEG frames to the specified output directory. Use stop_recording to end the session and get the frame list.",
+            "Start recording the frontmost app's window at ~5fps. Writes timestamped JPEG frames to the specified output directory. Use stop_recording to end the session and get the frame list.",
             Arc::new(json_to_object(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1090,8 +1090,8 @@ impl MacOSDevToolsServer {
                     },
                     "fps": {
                         "type": "integer",
-                        "description": "Frames per second (default: 3)",
-                        "default": 3
+                        "description": "Frames per second (default: 5)",
+                        "default": 5
                     },
                     "max_duration_ms": {
                         "type": "integer",
@@ -1721,7 +1721,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 let fps = args
                     .get("fps")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(3) as u32;
+                    .unwrap_or(5) as u32;
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())

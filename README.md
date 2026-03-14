@@ -68,7 +68,8 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 4.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
 5.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
 6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs. macOS only.
-7.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
+7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches. macOS only.
+8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
 
 ## 📦 Installation
 
@@ -345,6 +346,7 @@ graph TD
 | | Text Search (`find_text`) | `Accessibility API` (primary), Vision OCR (fallback) |
 | | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback (Accessibility API) |
 | | Hover Tracking (`start_hover_tracking`) | `CGEvent` cursor + Accessibility API polling (macOS only) |
+| | Screen Recording (`start_recording`) | `CGWindowListCreateImage` at configurable fps (macOS only) |
 | | OCR | `VNRecognizeTextRequest` (Vision Framework) |
 | **Windows** | Screenshots | `BitBlt` (GDI) |
 | | Input | `SendInput` (Win32) |
