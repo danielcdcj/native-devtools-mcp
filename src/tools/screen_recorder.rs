@@ -55,6 +55,11 @@ impl ScreenRecorder {
         }
     }
 
+    /// Check if the background task has finished (due to max_duration or error).
+    pub fn is_finished(&self) -> bool {
+        self.task_handle.is_finished()
+    }
+
     /// Drain all buffered frame metadata, returning them and clearing the buffer.
     pub fn drain_frames(&self) -> Vec<RecordedFrame> {
         let mut frames = self.frames.lock().unwrap();
@@ -94,17 +99,18 @@ pub fn start_recording(
     fps: u32,
     max_duration_ms: u32,
 ) -> JoinHandle<()> {
+    let fps = fps.clamp(1, 30);
     tokio::spawn(async move {
         let start = Instant::now();
         let max_duration = std::time::Duration::from_millis(max_duration_ms as u64);
-        let tick_interval = std::time::Duration::from_millis(1000 / fps.max(1) as u64);
+        let tick_interval = std::time::Duration::from_millis(1000 / fps as u64);
 
         let mut interval = tokio::time::interval(tick_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        // Cache PID→(app_name, window_id) to avoid repeated window list lookups
-        // when the frontmost app hasn't changed.
-        let mut pid_cache: std::collections::HashMap<i32, (String, u32)> =
+        // Cache PID→app_name only. Window ID is resolved fresh each tick
+        // since the user may switch windows within the same app.
+        let mut app_name_cache: std::collections::HashMap<i32, String> =
             std::collections::HashMap::new();
         let output_dir: Arc<Path> = Arc::from(output_dir.as_path());
 
@@ -115,8 +121,8 @@ pub fn start_recording(
                 return;
             }
 
-            // Resolve PID on the async side so we only pass the relevant
-            // cache entry into spawn_blocking (avoids cloning the full map).
+            // Resolve PID on the async side to avoid cloning state into
+            // spawn_blocking.
             #[cfg(target_os = "macos")]
             let pid = crate::macos::ax::frontmost_pid().ok();
             #[cfg(not(target_os = "macos"))]
@@ -126,17 +132,17 @@ pub fn start_recording(
                 continue;
             };
 
-            let cached = pid_cache.get(&pid).cloned();
+            let cached_name = app_name_cache.get(&pid).cloned();
             let dir = output_dir.clone();
 
             let result = tokio::task::spawn_blocking(move || {
-                capture_frame(pid, cached.as_ref(), &dir)
+                capture_frame(pid, cached_name.as_deref(), &dir)
             })
             .await;
 
             match result {
-                Ok(Ok((frame, resolved))) => {
-                    pid_cache.insert(pid, (resolved.0, resolved.1));
+                Ok(Ok((frame, app_name))) => {
+                    app_name_cache.insert(pid, app_name);
                     frames.lock().unwrap().push(frame);
                 }
                 Ok(Err(e)) => {
@@ -152,27 +158,28 @@ pub fn start_recording(
 
 /// Capture a single frame for the given PID.
 ///
-/// Returns the recorded frame and the resolved (app_name, window_id) for cache update.
+/// Always resolves the frontmost window for the PID (window ID is not
+/// cached because the user may switch windows within the same app).
+/// Returns the frame and the app name for cache update.
 fn capture_frame(
     pid: i32,
-    cached: Option<&(String, u32)>,
+    cached_app_name: Option<&str>,
     output_dir: &Path,
-) -> Result<(RecordedFrame, (String, u32)), String> {
+) -> Result<(RecordedFrame, String), String> {
     #[cfg(target_os = "macos")]
     {
         use crate::macos;
 
-        let (app_name, window_id) = if let Some((name, wid)) = cached {
-            (name.clone(), *wid)
-        } else {
-            let windows = macos::window::list_windows()
-                .map_err(|e| format!("Failed to list windows: {e}"))?;
-            let win = windows
-                .iter()
-                .find(|w| w.owner_pid == pid as i64 && w.is_on_screen)
-                .ok_or_else(|| format!("No on-screen window for PID {pid}"))?;
-            (win.owner_name.clone(), win.id)
-        };
+        let windows = macos::window::list_windows()
+            .map_err(|e| format!("Failed to list windows: {e}"))?;
+        let win = windows
+            .iter()
+            .find(|w| w.owner_pid == pid as i64 && w.is_on_screen)
+            .ok_or_else(|| format!("No on-screen window for PID {pid}"))?;
+        let window_id = win.id;
+        let app_name = cached_app_name
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| win.owner_name.clone());
 
         let timestamp_ms = now_millis();
         let (jpeg_data, meta) = macos::screenshot::capture_window_cg_jpeg(window_id)
@@ -183,12 +190,11 @@ fn capture_frame(
         std::fs::write(&path, &jpeg_data)
             .map_err(|e| format!("Failed to write frame: {e}"))?;
 
-        let key = (app_name.clone(), window_id);
         Ok((
             RecordedFrame {
                 timestamp_ms,
                 path: path.to_string_lossy().to_string(),
-                app_name,
+                app_name: app_name.clone(),
                 window_id,
                 origin_x: meta.origin_x,
                 origin_y: meta.origin_y,
@@ -196,13 +202,13 @@ fn capture_frame(
                 pixel_width: meta.pixel_width,
                 pixel_height: meta.pixel_height,
             },
-            key,
+            app_name,
         ))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (pid, cached, output_dir);
+        let _ = (pid, cached_app_name, output_dir);
         Err("Screen recording is only supported on macOS".to_string())
     }
 }

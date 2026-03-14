@@ -1687,10 +1687,34 @@ impl ServerHandler for MacOSDevToolsServer {
                 }
             }
             "start_recording" => {
-                if self.is_recording().await {
+                if cfg!(not(target_os = "macos")) {
                     return Ok(CallToolResult::error(vec![Content::text(
-                        "Recording is already active. Use stop_recording to end the current session first.",
+                        "Screen recording is only supported on macOS.",
                     )]));
+                }
+
+                // Check if a previous recording auto-stopped (max_duration elapsed).
+                // If so, drain remaining frames (log count) and clear stale state.
+                {
+                    let guard = self.screen_recorder.read().await;
+                    if let Some(recorder) = guard.as_ref() {
+                        if recorder.is_finished() {
+                            let stale_count = recorder.drain_frames().len();
+                            if stale_count > 0 {
+                                tracing::warn!(
+                                    "Discarding {stale_count} frames from auto-stopped recording \
+                                     (stop_recording was not called)"
+                                );
+                            }
+                            drop(guard);
+                            self.screen_recorder.write().await.take();
+                            let _ = context.peer.notify_tool_list_changed().await;
+                        } else {
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                "Recording is already active. Use stop_recording to end the current session first.",
+                            )]));
+                        }
+                    }
                 }
 
                 let output_dir = parse_string_field(&args, "output_dir")?;
@@ -1701,13 +1725,23 @@ impl ServerHandler for MacOSDevToolsServer {
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(300_000) as u32;
+                    .unwrap_or(300_000)
+                    .clamp(1_000, u32::MAX as u64) as u32;
 
                 let output_path = std::path::PathBuf::from(&output_dir);
                 if let Err(e) = std::fs::create_dir_all(&output_path) {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Failed to create output directory: {e}"
                     ))]));
+                }
+                // Probe-write to fail fast if the directory is not writable.
+                match tempfile::tempfile_in(&output_path) {
+                    Ok(_) => {} // drops and deletes automatically
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Output directory is not writable: {e}"
+                        ))]));
+                    }
                 }
 
                 let frames = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
