@@ -11,17 +11,17 @@ use tokio_util::sync::CancellationToken;
 
 use super::now_millis;
 
-/// A single hover transition event.
+/// A hover dwell event — emitted when the cursor leaves an element (or tracking ends).
 #[derive(Debug, Clone, Serialize)]
 pub struct HoverEvent {
-    /// Absolute Unix milliseconds when this transition was detected
+    /// Absolute Unix milliseconds when the cursor first arrived at this element
     pub timestamp_ms: u64,
-    /// Cursor position at time of transition
+    /// Cursor position when the element was first entered
     pub cursor: CursorPosition,
-    /// The accessibility element now under the cursor
+    /// The accessibility element that was hovered
     pub element: HoverElement,
-    /// How long the cursor stayed on the previous element (ms)
-    pub previous_dwell_ms: u64,
+    /// How long the cursor stayed on this element (ms)
+    pub dwell_ms: u64,
     /// If true, tracking auto-stopped due to max duration
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub timeout: bool,
@@ -156,6 +156,31 @@ pub fn elements_equal(a: &HoverElement, b: &HoverElement) -> bool {
     a.role == b.role && a.name == b.name && a.bounds == b.bounds
 }
 
+/// Snapshot of an element that has met (or is being evaluated against) the dwell threshold.
+/// Used for both the confirmed hover and the candidate hover.
+struct HoverEntry {
+    element: HoverElement,
+    since: Instant,
+    enter_ms: u64,
+    cursor: (f64, f64),
+}
+
+impl HoverEntry {
+    /// Build a leave/timeout event from this entry's stored state.
+    fn into_event(self, last_change: Instant, timeout: bool) -> HoverEvent {
+        HoverEvent {
+            timestamp_ms: self.enter_ms,
+            cursor: CursorPosition {
+                x: self.cursor.0,
+                y: self.cursor.1,
+            },
+            element: self.element,
+            dwell_ms: last_change.elapsed().as_millis() as u64,
+            timeout,
+        }
+    }
+}
+
 /// Start the hover polling background task.
 ///
 /// Polls cursor position + element_at_point every `poll_interval_ms`,
@@ -180,13 +205,13 @@ pub fn start_polling(
         let poll_interval = std::time::Duration::from_millis(poll_interval_ms as u64);
         let min_dwell = std::time::Duration::from_millis(min_dwell_ms as u64);
 
-        // The last element we emitted an event for
-        let mut confirmed_element: Option<HoverElement> = None;
+        // The element currently being hovered (confirmed after meeting dwell threshold).
+        // We emit an event about this element when the cursor leaves it.
+        let mut confirmed: Option<HoverEntry> = None;
         let mut last_confirmed_change = Instant::now();
 
         // A candidate element that differs from confirmed but hasn't met dwell threshold yet.
-        // Tuple: (element, monotonic enter time, wall-clock enter time ms)
-        let mut candidate: Option<(HoverElement, Instant, u64)> = None;
+        let mut candidate: Option<HoverEntry> = None;
 
         loop {
             // Check cancellation
@@ -196,19 +221,13 @@ pub fn start_polling(
 
             // Check max duration
             if start.elapsed() >= max_duration {
-                let cursor = get_cursor_position_sync().unwrap_or((0.0, 0.0));
-                let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
-                let event = HoverEvent {
-                    timestamp_ms: now_millis(),
-                    cursor: CursorPosition {
-                        x: cursor.0,
-                        y: cursor.1,
-                    },
-                    element: confirmed_element.unwrap_or_default(),
-                    previous_dwell_ms: previous_dwell,
-                    timeout: true,
-                };
-                events.lock().unwrap().push(event);
+                // Emit the confirmed element's dwell before stopping
+                if let Some(entry) = confirmed {
+                    events
+                        .lock()
+                        .unwrap()
+                        .push(entry.into_event(last_confirmed_change, true));
+                }
                 return;
             }
 
@@ -230,8 +249,8 @@ pub fn start_polling(
             };
 
             // Is this element different from the last confirmed one?
-            let differs_from_confirmed = match &confirmed_element {
-                Some(prev) => !elements_equal(prev, &current_element),
+            let differs_from_confirmed = match &confirmed {
+                Some(c) => !elements_equal(&c.element, &current_element),
                 None => true, // First element is always new
             };
 
@@ -243,34 +262,34 @@ pub fn start_polling(
             }
 
             // Element differs from confirmed — check candidate state
-            match &candidate {
-                Some((cand_elem, cand_since, cand_enter_ms))
-                    if elements_equal(cand_elem, &current_element) =>
-                {
-                    // Same candidate — check if dwell threshold met
-                    if cand_since.elapsed() >= min_dwell {
-                        let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
-                        let event = HoverEvent {
-                            timestamp_ms: *cand_enter_ms,
-                            cursor: CursorPosition {
-                                x: cursor.0,
-                                y: cursor.1,
-                            },
-                            element: current_element.clone(),
-                            previous_dwell_ms: previous_dwell,
-                            timeout: false,
-                        };
-                        events.lock().unwrap().push(event);
-                        confirmed_element = Some(current_element);
-                        last_confirmed_change = Instant::now();
-                        candidate = None;
+            let cand_matches = candidate
+                .as_ref()
+                .map_or(false, |c| elements_equal(&c.element, &current_element));
+
+            if cand_matches {
+                let cand = candidate.as_ref().unwrap();
+                // Same candidate — check if dwell threshold met
+                if cand.since.elapsed() >= min_dwell {
+                    // Emit event about the element being LEFT
+                    if let Some(prev) = confirmed.take() {
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(prev.into_event(last_confirmed_change, false));
                     }
-                    // else: keep waiting
+                    // Promote candidate to confirmed
+                    confirmed = candidate.take();
+                    last_confirmed_change = Instant::now();
                 }
-                _ => {
-                    // New candidate (or different from previous candidate)
-                    candidate = Some((current_element, Instant::now(), now_millis()));
-                }
+                // else: keep waiting
+            } else {
+                // New candidate (or different from previous candidate)
+                candidate = Some(HoverEntry {
+                    element: current_element,
+                    since: Instant::now(),
+                    enter_ms: now_millis(),
+                    cursor,
+                });
             }
 
             tokio::time::sleep(poll_interval).await;
@@ -437,7 +456,7 @@ mod tests {
                 app_name: None,
                 pid: None,
             },
-            previous_dwell_ms: 50,
+            dwell_ms: 50,
             timeout: false,
         }]));
         let cancel = CancellationToken::new();
@@ -470,7 +489,7 @@ mod tests {
                 app_name: None,
                 pid: None,
             },
-            previous_dwell_ms: 50,
+            dwell_ms: 50,
             timeout: false,
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -520,12 +539,13 @@ mod tests {
             .expect("task should auto-stop after max duration")
             .expect("task should not panic");
 
-        // Should have a timeout sentinel event
+        // If any element was confirmed before timeout, the last event should be
+        // a timeout sentinel. If no element was confirmed (e.g. AX was too slow),
+        // there may be no events at all — both are valid outcomes.
         let evts = events.lock().unwrap();
-        assert!(
-            evts.last().map_or(false, |e| e.timeout),
-            "last event should be a timeout sentinel"
-        );
+        if let Some(last) = evts.last() {
+            assert!(last.timeout, "last event should be a timeout sentinel");
+        }
     }
 
     #[test]
@@ -593,7 +613,7 @@ mod tests {
                 app_name: None,
                 pid: None,
             },
-            previous_dwell_ms: 500,
+            dwell_ms: 500,
             timeout: true,
         };
         let json = serde_json::to_string(&event).unwrap();

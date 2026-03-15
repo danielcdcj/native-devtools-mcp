@@ -131,7 +131,7 @@ Scrolls at a specific screen position.
 Track cursor hover transitions across UI elements. Designed for observing user navigation patterns (tooltip triggers, dropdown reveals, panel expansions).
 
 * `start_hover_tracking`: Begin polling session. Inputs: `app_name` (optional), `poll_interval_ms` (default 100), `max_duration_ms` (default 60000), `min_dwell_ms` (default 300 — cursor must stay on element this long before recording).
-* `get_hover_events`: Drain buffered events since last call. Returns JSON array of transitions: `{ timestamp_ms, cursor: {x, y}, element: {role, name, label, bounds, app_name, pid}, previous_dwell_ms }`.
+* `get_hover_events`: Drain buffered events since last call. Returns JSON array of dwell events: `{ timestamp_ms, cursor: {x, y}, element: {role, name, label, bounds, app_name, pid}, dwell_ms }`.
 * `stop_hover_tracking`: End session, return remaining events.
 
 Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only show while tracking is active. Use `element_at_point` with event cursor coordinates for full element details (value, etc.).
@@ -140,7 +140,7 @@ Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only s
 ```
 1. start_hover_tracking(min_dwell_ms=500, app_name="Safari")
 2. (user moves mouse around)
-3. get_hover_events  → [{timestamp_ms: 1200, cursor: {x: 500, y: 300}, element: {role: "AXLink", name: "Home", ...}, previous_dwell_ms: 800}]
+3. get_hover_events  → [{timestamp_ms: 1200, cursor: {x: 500, y: 300}, element: {role: "AXLink", name: "Home", ...}, dwell_ms: 800}]
 4. stop_hover_tracking → [remaining events]
 ```
 
