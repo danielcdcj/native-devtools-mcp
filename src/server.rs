@@ -1607,7 +1607,7 @@ impl ServerHandler for MacOSDevToolsServer {
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(60000)
-                    .clamp(100, 300_000) as u32;
+                    .clamp(100, u32::MAX as u64) as u32;
                 let min_dwell_ms = args
                     .get("min_dwell_ms")
                     .and_then(|v| v.as_u64())

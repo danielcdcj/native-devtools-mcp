@@ -184,8 +184,9 @@ pub fn start_polling(
         let mut confirmed_element: Option<HoverElement> = None;
         let mut last_confirmed_change = Instant::now();
 
-        // A candidate element that differs from confirmed but hasn't met dwell threshold yet
-        let mut candidate: Option<(HoverElement, Instant)> = None;
+        // A candidate element that differs from confirmed but hasn't met dwell threshold yet.
+        // Tuple: (element, monotonic enter time, wall-clock enter time ms)
+        let mut candidate: Option<(HoverElement, Instant, u64)> = None;
 
         loop {
             // Check cancellation
@@ -243,12 +244,14 @@ pub fn start_polling(
 
             // Element differs from confirmed — check candidate state
             match &candidate {
-                Some((cand_elem, cand_since)) if elements_equal(cand_elem, &current_element) => {
+                Some((cand_elem, cand_since, cand_enter_ms))
+                    if elements_equal(cand_elem, &current_element) =>
+                {
                     // Same candidate — check if dwell threshold met
                     if cand_since.elapsed() >= min_dwell {
                         let previous_dwell = last_confirmed_change.elapsed().as_millis() as u64;
                         let event = HoverEvent {
-                            timestamp_ms: now_millis(),
+                            timestamp_ms: *cand_enter_ms,
                             cursor: CursorPosition {
                                 x: cursor.0,
                                 y: cursor.1,
@@ -266,7 +269,7 @@ pub fn start_polling(
                 }
                 _ => {
                     // New candidate (or different from previous candidate)
-                    candidate = Some((current_element, Instant::now()));
+                    candidate = Some((current_element, Instant::now(), now_millis()));
                 }
             }
 
