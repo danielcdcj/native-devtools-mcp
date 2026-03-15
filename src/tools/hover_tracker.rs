@@ -167,7 +167,8 @@ struct HoverEntry {
 
 impl HoverEntry {
     /// Build a leave/timeout event from this entry's stored state.
-    fn into_event(self, timeout: bool) -> HoverEvent {
+    /// `left_at` is the monotonic instant the cursor departed this element.
+    fn into_event(self, left_at: Instant, timeout: bool) -> HoverEvent {
         HoverEvent {
             timestamp_ms: self.enter_ms,
             cursor: CursorPosition {
@@ -175,7 +176,7 @@ impl HoverEntry {
                 y: self.cursor.1,
             },
             element: self.element,
-            dwell_ms: self.since.elapsed().as_millis() as u64,
+            dwell_ms: left_at.duration_since(self.since).as_millis() as u64,
             timeout,
         }
     }
@@ -222,7 +223,10 @@ pub fn start_polling(
             if start.elapsed() >= max_duration {
                 // Emit the confirmed element's dwell before stopping
                 if let Some(entry) = confirmed {
-                    events.lock().unwrap().push(entry.into_event(true));
+                    events
+                        .lock()
+                        .unwrap()
+                        .push(entry.into_event(Instant::now(), true));
                 }
                 return;
             }
@@ -268,7 +272,10 @@ pub fn start_polling(
                 if cand.since.elapsed() >= min_dwell {
                     // Emit event about the element being LEFT
                     if let Some(prev) = confirmed.take() {
-                        events.lock().unwrap().push(prev.into_event(false));
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(prev.into_event(cand.since, false));
                     }
                     // Promote candidate to confirmed
                     confirmed = candidate.take();
