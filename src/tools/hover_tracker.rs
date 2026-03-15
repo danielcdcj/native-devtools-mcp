@@ -167,7 +167,7 @@ struct HoverEntry {
 
 impl HoverEntry {
     /// Build a leave/timeout event from this entry's stored state.
-    fn into_event(self, last_change: Instant, timeout: bool) -> HoverEvent {
+    fn into_event(self, timeout: bool) -> HoverEvent {
         HoverEvent {
             timestamp_ms: self.enter_ms,
             cursor: CursorPosition {
@@ -175,7 +175,7 @@ impl HoverEntry {
                 y: self.cursor.1,
             },
             element: self.element,
-            dwell_ms: last_change.elapsed().as_millis() as u64,
+            dwell_ms: self.since.elapsed().as_millis() as u64,
             timeout,
         }
     }
@@ -208,7 +208,6 @@ pub fn start_polling(
         // The element currently being hovered (confirmed after meeting dwell threshold).
         // We emit an event about this element when the cursor leaves it.
         let mut confirmed: Option<HoverEntry> = None;
-        let mut last_confirmed_change = Instant::now();
 
         // A candidate element that differs from confirmed but hasn't met dwell threshold yet.
         let mut candidate: Option<HoverEntry> = None;
@@ -223,10 +222,7 @@ pub fn start_polling(
             if start.elapsed() >= max_duration {
                 // Emit the confirmed element's dwell before stopping
                 if let Some(entry) = confirmed {
-                    events
-                        .lock()
-                        .unwrap()
-                        .push(entry.into_event(last_confirmed_change, true));
+                    events.lock().unwrap().push(entry.into_event(true));
                 }
                 return;
             }
@@ -272,14 +268,10 @@ pub fn start_polling(
                 if cand.since.elapsed() >= min_dwell {
                     // Emit event about the element being LEFT
                     if let Some(prev) = confirmed.take() {
-                        events
-                            .lock()
-                            .unwrap()
-                            .push(prev.into_event(last_confirmed_change, false));
+                        events.lock().unwrap().push(prev.into_event(false));
                     }
                     // Promote candidate to confirmed
                     confirmed = candidate.take();
-                    last_confirmed_change = Instant::now();
                 }
                 // else: keep waiting
             } else {
