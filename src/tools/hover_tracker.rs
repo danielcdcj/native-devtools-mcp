@@ -209,6 +209,10 @@ pub fn start_polling(
         // The element currently being hovered (confirmed after meeting dwell threshold).
         // We emit an event about this element when the cursor leaves it.
         let mut confirmed: Option<HoverEntry> = None;
+        // Monotonic instant when the cursor first left the confirmed element
+        // (i.e. when the first candidate appeared). Persists across candidate
+        // replacements so pass-through elements don't inflate the dwell.
+        let mut first_departure: Option<Instant> = None;
 
         // A candidate element that differs from confirmed but hasn't met dwell threshold yet.
         let mut candidate: Option<HoverEntry> = None;
@@ -221,12 +225,11 @@ pub fn start_polling(
 
             // Check max duration
             if start.elapsed() >= max_duration {
-                // Emit the confirmed element's dwell before stopping
+                // Emit the confirmed element's dwell before stopping.
+                // Use first_departure if cursor had already left, otherwise now.
                 if let Some(entry) = confirmed {
-                    events
-                        .lock()
-                        .unwrap()
-                        .push(entry.into_event(Instant::now(), true));
+                    let left_at = first_departure.unwrap_or_else(Instant::now);
+                    events.lock().unwrap().push(entry.into_event(left_at, true));
                 }
                 return;
             }
@@ -257,6 +260,7 @@ pub fn start_polling(
             if !differs_from_confirmed {
                 // Cursor moved back to confirmed element — discard candidate
                 candidate = None;
+                first_departure = None;
                 tokio::time::sleep(poll_interval).await;
                 continue;
             }
@@ -270,19 +274,26 @@ pub fn start_polling(
                 let cand = candidate.as_ref().unwrap();
                 // Same candidate — check if dwell threshold met
                 if cand.since.elapsed() >= min_dwell {
-                    // Emit event about the element being LEFT
+                    // Emit event about the element being LEFT.
+                    // Use first_departure (when cursor first left) rather than
+                    // cand.since (when cursor arrived at the final candidate),
+                    // so pass-through elements don't inflate the dwell.
                     if let Some(prev) = confirmed.take() {
-                        events
-                            .lock()
-                            .unwrap()
-                            .push(prev.into_event(cand.since, false));
+                        let departed = first_departure.unwrap_or(cand.since);
+                        events.lock().unwrap().push(prev.into_event(departed, false));
                     }
                     // Promote candidate to confirmed
                     confirmed = candidate.take();
+                    first_departure = None;
                 }
                 // else: keep waiting
             } else {
-                // New candidate (or different from previous candidate)
+                // New candidate (or different from previous candidate).
+                // Record first departure time only on the initial candidate
+                // after a confirmed element — subsequent replacements keep it.
+                if first_departure.is_none() && confirmed.is_some() {
+                    first_departure = Some(Instant::now());
+                }
                 candidate = Some(HoverEntry {
                     element: current_element,
                     since: Instant::now(),
