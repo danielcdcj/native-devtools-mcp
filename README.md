@@ -392,6 +392,7 @@ Works out of the box on **Windows 10/11**.
 *   `find_text` uses **UI Automation (UIA)** as the primary search mechanism, querying the accessibility tree for element names. This is the same accessibility-first approach used on macOS (with the Accessibility API). Falls back to OCR automatically when UIA finds no matches.
 *   OCR uses the built-in Windows Media OCR engine (offline).
 *   **Note:** Cannot interact with "Run as Administrator" windows unless the MCP server itself is also running as Administrator.
+*   **Screen Recording Performance:** Screen recording uses GDI/BitBlt at configurable fps (default 5). For higher fps requirements or game capture scenarios, DXGI Desktop Duplication API would provide hardware-accelerated capture — this is a planned future upgrade.
 
 ## 📜 License
 
