@@ -191,6 +191,62 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
     })
 }
 
+/// Metadata from a window capture for the screen recorder.
+pub struct WindowCaptureMeta {
+    pub origin_x: f64,
+    pub origin_y: f64,
+    pub scale: f64,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+}
+
+/// Capture a window by ID and return JPEG bytes + metadata.
+///
+/// Uses BitBlt to capture the window's screen region, then converts to JPEG.
+/// DPI scale is computed from actual captured pixels vs logical window bounds.
+pub fn capture_window_jpeg(window_id: u32) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
+    let _window = find_window_by_id(window_id)
+        .map_err(ScreenshotError::CaptureError)?
+        .ok_or(ScreenshotError::WindowNotFound(window_id))?;
+
+    let hwnd = hwnd_from_id(window_id);
+    let bounds = get_window_bounds_for_capture(hwnd);
+
+    let width = bounds.width as i32;
+    let height = bounds.height as i32;
+    if width <= 0 || height <= 0 {
+        return Err(ScreenshotError::WindowNotFound(window_id));
+    }
+
+    let png_data = capture_region_to_png(bounds.x as i32, bounds.y as i32, width, height)?;
+    let (pixel_width, pixel_height) = png_dimensions_or(&png_data, width as u32, height as u32);
+
+    let effective_scale = if width > 0 && height > 0 {
+        let scale = pixel_width as f64 / width as f64;
+        if (scale - 1.0).abs() < 0.01 {
+            1.0
+        } else {
+            scale
+        }
+    } else {
+        1.0
+    };
+
+    // Convert PNG to JPEG using the existing shared helper
+    let jpeg_data =
+        crate::tools::screenshot::png_to_jpeg(&png_data).map_err(ScreenshotError::CaptureError)?;
+
+    let meta = WindowCaptureMeta {
+        origin_x: bounds.x,
+        origin_y: bounds.y,
+        scale: effective_scale,
+        pixel_width,
+        pixel_height,
+    };
+
+    Ok((jpeg_data, meta))
+}
+
 fn get_window_bounds_for_capture(hwnd: HWND) -> WindowBounds {
     let mut rect = RECT::default();
 
@@ -499,3 +555,22 @@ static CRC32_TABLE: [u32; 256] = {
     }
     table
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore] // requires a running desktop with visible windows
+    fn test_capture_window_jpeg() {
+        let windows = crate::windows::window::list_windows().expect("list_windows should succeed");
+        let win = windows
+            .first()
+            .expect("at least one window must be visible");
+        let (jpeg, meta) = capture_window_jpeg(win.id).expect("capture should succeed");
+        assert!(!jpeg.is_empty());
+        assert!(meta.pixel_width > 0);
+        assert!(meta.pixel_height > 0);
+        assert!(meta.scale > 0.0);
+    }
+}

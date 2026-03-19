@@ -207,10 +207,55 @@ fn capture_frontmost_frame(
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        use crate::windows;
+
+        // EnumWindows returns windows in z-order, so the first is the foreground.
+        let windows_list = windows::window::list_windows()
+            .map_err(|e| format!("Failed to list windows: {e}"))?;
+
+        let win = windows_list
+            .first()
+            .ok_or_else(|| "No visible windows found".to_string())?;
+
+        let window_id = win.id;
+        let pid = win.owner_pid as i32;
+        let app_name = app_name_cache
+            .get(&pid)
+            .cloned()
+            .unwrap_or_else(|| win.owner_name.clone());
+
+        let timestamp_ms = now_millis();
+        let (jpeg_data, meta) = windows::screenshot::capture_window_jpeg(window_id)
+            .map_err(|e| format!("Capture failed: {e}"))?;
+
+        let filename = format!("frame_{timestamp_ms}.jpg");
+        let path = output_dir.join(&filename);
+        std::fs::write(&path, &jpeg_data)
+            .map_err(|e| format!("Failed to write frame: {e}"))?;
+
+        Ok((
+            RecordedFrame {
+                timestamp_ms,
+                path: path.to_string_lossy().to_string(),
+                app_name: app_name.clone(),
+                window_id,
+                origin_x: meta.origin_x,
+                origin_y: meta.origin_y,
+                scale: meta.scale,
+                pixel_width: meta.pixel_width,
+                pixel_height: meta.pixel_height,
+            },
+            pid,
+            app_name,
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app_name_cache, output_dir);
-        Err("Screen recording is only supported on macOS".to_string())
+        Err("Screen recording is only supported on macOS and Windows".to_string())
     }
 }
 
