@@ -9,7 +9,8 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, TreeScope, TreeScope_Descendants, TreeScope_Element,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope, TreeScope_Descendants,
+    TreeScope_Element,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -248,11 +249,27 @@ pub fn list_element_names() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Container control types that warrant a descendant search for a more specific element.
+const CONTAINER_TYPES: &[i32] = &[
+    50032, // Window
+    50033, // Pane
+    50026, // Group
+    50014, // ScrollBar
+];
+
 /// Get the UI Automation element at the given screen coordinates.
 ///
 /// Uses `IUIAutomation::ElementFromPoint` to find the element at (x, y).
+/// When `app_name` is provided, verifies the element belongs to that app by PID;
+/// if not, walks descendants filtered by PID.
+/// When the result is a container type (Window, Pane, Group, ScrollBar), walks
+/// descendants to find the smallest-area element containing the point.
 /// Returns a JSON object with the element's attributes.
-pub fn element_at_point(x: f64, y: f64) -> Result<serde_json::Value, String> {
+pub fn element_at_point(
+    x: f64,
+    y: f64,
+    app_name: Option<&str>,
+) -> Result<serde_json::Value, String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
@@ -264,95 +281,224 @@ pub fn element_at_point(x: f64, y: f64) -> Result<serde_json::Value, String> {
             y: y as i32,
         };
 
-        let elem = automation
+        let mut elem = automation
             .ElementFromPoint(point)
             .map_err(|e| format!("No accessibility element found at ({}, {}): {}", x, y, e))?;
 
-        let name = elem
-            .CurrentName()
-            .ok()
-            .map(|n| n.to_string())
-            .filter(|n| !n.is_empty());
-        let role = elem
-            .CurrentControlType()
-            .ok()
-            .and_then(|ct| uia_control_type_name(ct.0));
-        let help = elem
-            .CurrentHelpText()
-            .ok()
-            .map(|h| h.to_string())
-            .filter(|h| !h.is_empty());
-        let value_pattern = elem
-            .GetCurrentPropertyValue(windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId)
-            .ok()
-            .and_then(|v| {
-                let s = v.to_string();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
+        // Step 1: App-name scoping — verify the element belongs to the target app.
+        if let Some(name) = app_name {
+            let target_pids = resolve_app_pids(name);
+            if !target_pids.is_empty() {
+                let elem_pid = elem.CurrentProcessId().unwrap_or(0);
+                if !target_pids.contains(&elem_pid) {
+                    // Element doesn't belong to target app — walk descendants to find one that does.
+                    if let Some(scoped) =
+                        find_element_by_pid_at_point(&automation, &elem, &target_pids, x, y)
+                    {
+                        elem = scoped;
+                    }
                 }
-            });
-
-        let rect = elem.CurrentBoundingRectangle().ok();
-        let pid = elem.CurrentProcessId().ok();
-
-        // Resolve app name from PID
-        let resolved_app_name = pid.and_then(|p| {
-            use windows::Win32::System::ProcessStatus::GetProcessImageFileNameW;
-            use windows::Win32::System::Threading::{
-                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            };
-
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, p as u32).ok()?;
-            let mut buf = [0u16; 260];
-            let len = GetProcessImageFileNameW(handle, &mut buf);
-            let _ = windows::Win32::Foundation::CloseHandle(handle);
-            if len == 0 {
-                return None;
             }
-            let path = String::from_utf16_lossy(&buf[..len as usize]);
-            path.rsplit('\\')
-                .next()
-                .map(|s| s.trim_end_matches(".exe").to_string())
+        }
+
+        // Step 2: Container fallback — if the element is a container, find a more specific child.
+        let control_type = elem.CurrentControlType().map(|ct| ct.0).unwrap_or(0);
+        if CONTAINER_TYPES.contains(&control_type) {
+            if let Some(deeper) = find_deepest_element_at_point(&automation, &elem, x, y) {
+                elem = deeper;
+            }
+        }
+
+        build_element_json(&elem)
+    }
+}
+
+/// Resolve an app name to a list of PIDs by matching against running applications.
+fn resolve_app_pids(app_name: &str) -> Vec<i32> {
+    let needle = app_name.to_lowercase();
+    crate::windows::app::list_apps()
+        .into_iter()
+        .filter(|app| app.name.to_lowercase().contains(&needle))
+        .map(|app| app.pid)
+        .collect()
+}
+
+/// Search descendants of `root` for an element belonging to one of `target_pids`
+/// that contains the point (x, y). Returns the element with the smallest area.
+unsafe fn find_element_by_pid_at_point(
+    automation: &IUIAutomation,
+    root: &IUIAutomationElement,
+    target_pids: &[i32],
+    x: f64,
+    y: f64,
+) -> Option<IUIAutomationElement> {
+    let condition = automation.CreateTrueCondition().ok()?;
+    let scope = TreeScope(TreeScope_Descendants.0);
+    let elements = root.FindAll(scope, &condition).ok()?;
+    let count = elements.Length().ok()?;
+
+    let mut best: Option<(IUIAutomationElement, f64)> = None;
+
+    for i in 0..count {
+        let child = match elements.GetElement(i) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let child_pid = child.CurrentProcessId().unwrap_or(0);
+        if !target_pids.contains(&child_pid) {
+            continue;
+        }
+
+        if let Some(area) = check_element_contains_point(&child, x, y) {
+            if best.as_ref().map_or(true, |(_, best_area)| area < *best_area) {
+                best = Some((child, area));
+            }
+        }
+    }
+
+    best.map(|(elem, _)| elem)
+}
+
+/// Search descendants of `root` for the smallest-area element containing the point (x, y).
+unsafe fn find_deepest_element_at_point(
+    automation: &IUIAutomation,
+    root: &IUIAutomationElement,
+    x: f64,
+    y: f64,
+) -> Option<IUIAutomationElement> {
+    let condition = automation.CreateTrueCondition().ok()?;
+    let scope = TreeScope(TreeScope_Descendants.0);
+    let elements = root.FindAll(scope, &condition).ok()?;
+    let count = elements.Length().ok()?;
+
+    let mut best: Option<(IUIAutomationElement, f64)> = None;
+
+    for i in 0..count {
+        let child = match elements.GetElement(i) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if let Some(area) = check_element_contains_point(&child, x, y) {
+            if best.as_ref().map_or(true, |(_, best_area)| area < *best_area) {
+                best = Some((child, area));
+            }
+        }
+    }
+
+    best.map(|(elem, _)| elem)
+}
+
+/// Check if an element's bounding rectangle contains the point (x, y).
+/// Returns the area of the bounding rectangle if it does, or None if it doesn't.
+unsafe fn check_element_contains_point(
+    elem: &IUIAutomationElement,
+    x: f64,
+    y: f64,
+) -> Option<f64> {
+    let rect = elem.CurrentBoundingRectangle().ok()?;
+    let left = rect.left as f64;
+    let top = rect.top as f64;
+    let right = rect.right as f64;
+    let bottom = rect.bottom as f64;
+
+    let width = right - left;
+    let height = bottom - top;
+
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    if x >= left && x <= right && y >= top && y <= bottom {
+        Some(width * height)
+    } else {
+        None
+    }
+}
+
+/// Build a JSON object from a UIA element's properties.
+unsafe fn build_element_json(elem: &IUIAutomationElement) -> Result<serde_json::Value, String> {
+    let name = elem
+        .CurrentName()
+        .ok()
+        .map(|n| n.to_string())
+        .filter(|n| !n.is_empty());
+    let role = elem
+        .CurrentControlType()
+        .ok()
+        .and_then(|ct| uia_control_type_name(ct.0));
+    let help = elem
+        .CurrentHelpText()
+        .ok()
+        .map(|h| h.to_string())
+        .filter(|h| !h.is_empty());
+    let value_pattern = elem
+        .GetCurrentPropertyValue(windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId)
+        .ok()
+        .and_then(|v| {
+            let s = v.to_string();
+            if s.is_empty() { None } else { Some(s) }
         });
 
-        let mut result = serde_json::Map::new();
+    let rect = elem.CurrentBoundingRectangle().ok();
+    let pid = elem.CurrentProcessId().ok();
 
-        if let Some(r) = role {
-            result.insert("role".to_string(), serde_json::Value::String(r));
-        }
-        if let Some(n) = name {
-            result.insert("name".to_string(), serde_json::Value::String(n));
-        }
-        if let Some(l) = help {
-            result.insert("label".to_string(), serde_json::Value::String(l));
-        }
-        if let Some(v) = value_pattern {
-            result.insert("value".to_string(), serde_json::Value::String(v));
-        }
-        if let Some(r) = rect {
-            let width = (r.right - r.left) as f64;
-            let height = (r.bottom - r.top) as f64;
-            result.insert(
-                "bounds".to_string(),
-                serde_json::json!({
-                    "x": r.left as f64,
-                    "y": r.top as f64,
-                    "width": width,
-                    "height": height,
-                }),
-            );
-        }
-        if let Some(p) = pid {
-            result.insert("pid".to_string(), serde_json::Value::Number(p.into()));
-        }
-        if let Some(a) = resolved_app_name {
-            result.insert("app_name".to_string(), serde_json::Value::String(a));
-        }
+    // Resolve app name from PID
+    let resolved_app_name = pid.and_then(|p| {
+        use windows::Win32::System::ProcessStatus::GetProcessImageFileNameW;
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
 
-        Ok(serde_json::Value::Object(result))
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, p as u32).ok()?;
+        let mut buf = [0u16; 260];
+        let len = GetProcessImageFileNameW(handle, &mut buf);
+        let _ = windows::Win32::Foundation::CloseHandle(handle);
+        if len == 0 {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        path.rsplit('\\')
+            .next()
+            .map(|s| s.trim_end_matches(".exe").to_string())
+    });
+
+    let mut result = serde_json::Map::new();
+
+    if let Some(r) = role {
+        result.insert("role".to_string(), serde_json::Value::String(r));
     }
+    if let Some(n) = name {
+        result.insert("name".to_string(), serde_json::Value::String(n));
+    }
+    if let Some(l) = help {
+        result.insert("label".to_string(), serde_json::Value::String(l));
+    }
+    if let Some(v) = value_pattern {
+        result.insert("value".to_string(), serde_json::Value::String(v));
+    }
+    if let Some(r) = rect {
+        let width = (r.right - r.left) as f64;
+        let height = (r.bottom - r.top) as f64;
+        result.insert(
+            "bounds".to_string(),
+            serde_json::json!({
+                "x": r.left as f64,
+                "y": r.top as f64,
+                "width": width,
+                "height": height,
+            }),
+        );
+    }
+    if let Some(p) = pid {
+        result.insert("pid".to_string(), serde_json::Value::Number(p.into()));
+    }
+    if let Some(a) = resolved_app_name {
+        result.insert("app_name".to_string(), serde_json::Value::String(a));
+    }
+
+    Ok(serde_json::Value::Object(result))
 }
 
 /// Map a UIA_*ControlTypeId to a human-readable name.
@@ -447,5 +593,25 @@ mod tests {
         let result = find_text("some_unlikely_text_xyz_987654");
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_element_at_point_returns_json() {
+        let result = element_at_point(100.0, 10.0, None);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(value.get("role").is_some() || value.get("name").is_some());
+    }
+
+    #[test]
+    fn test_element_at_point_with_nonexistent_app() {
+        // With a nonexistent app name, resolve_app_pids returns empty so scoping is
+        // skipped. The call should not panic; it may return Ok (element at point) or
+        // Err (no element / COM threading issue in parallel tests).
+        let result = element_at_point(100.0, 10.0, Some("nonexistent_app_xyz"));
+        // If it succeeds, the result should still have role or name from the element at point.
+        if let Ok(value) = result {
+            assert!(value.get("role").is_some() || value.get("name").is_some());
+        }
     }
 }
