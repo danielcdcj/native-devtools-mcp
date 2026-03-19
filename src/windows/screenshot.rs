@@ -202,46 +202,20 @@ pub struct WindowCaptureMeta {
 
 /// Capture a window by ID and return JPEG bytes + metadata.
 ///
-/// Uses BitBlt to capture the window's screen region, then converts to JPEG.
-/// DPI scale is computed from actual captured pixels vs logical window bounds.
+/// Delegates to [`capture_window`] for the actual BitBlt capture, then converts
+/// the PNG output to JPEG.
 pub fn capture_window_jpeg(window_id: u32) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
-    let _window = find_window_by_id(window_id)
-        .map_err(ScreenshotError::CaptureError)?
-        .ok_or(ScreenshotError::WindowNotFound(window_id))?;
+    let screenshot = capture_window(window_id)?;
 
-    let hwnd = hwnd_from_id(window_id);
-    let bounds = get_window_bounds_for_capture(hwnd);
-
-    let width = bounds.width as i32;
-    let height = bounds.height as i32;
-    if width <= 0 || height <= 0 {
-        return Err(ScreenshotError::WindowNotFound(window_id));
-    }
-
-    let png_data = capture_region_to_png(bounds.x as i32, bounds.y as i32, width, height)?;
-    let (pixel_width, pixel_height) = png_dimensions_or(&png_data, width as u32, height as u32);
-
-    let effective_scale = if width > 0 && height > 0 {
-        let scale = pixel_width as f64 / width as f64;
-        if (scale - 1.0).abs() < 0.01 {
-            1.0
-        } else {
-            scale
-        }
-    } else {
-        1.0
-    };
-
-    // Convert PNG to JPEG using the existing shared helper
-    let jpeg_data =
-        crate::tools::screenshot::png_to_jpeg(&png_data).map_err(ScreenshotError::CaptureError)?;
+    let jpeg_data = crate::tools::screenshot::png_to_jpeg(&screenshot.png_data)
+        .map_err(ScreenshotError::CaptureError)?;
 
     let meta = WindowCaptureMeta {
-        origin_x: bounds.x,
-        origin_y: bounds.y,
-        scale: effective_scale,
-        pixel_width,
-        pixel_height,
+        origin_x: screenshot.origin_x,
+        origin_y: screenshot.origin_y,
+        scale: screenshot.scale_factor,
+        pixel_width: screenshot.pixel_width,
+        pixel_height: screenshot.pixel_height,
     };
 
     Ok((jpeg_data, meta))

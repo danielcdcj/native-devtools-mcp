@@ -209,25 +209,36 @@ fn capture_frontmost_frame(
 
     #[cfg(target_os = "windows")]
     {
-        use crate::windows;
+        use crate::windows as win_platform;
+        use ::windows::Win32::Foundation::HWND;
+        use ::windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-        // EnumWindows returns windows in z-order, so the first is the foreground.
-        let windows_list = windows::window::list_windows()
-            .map_err(|e| format!("Failed to list windows: {e}"))?;
+        // Use GetForegroundWindow directly instead of enumerating all windows —
+        // much cheaper at 5fps (avoids OpenProcess + QueryFullProcessImageName per window).
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd == HWND::default() {
+            return Err("No foreground window".to_string());
+        }
 
-        let win = windows_list
-            .first()
-            .ok_or_else(|| "No visible windows found".to_string())?;
+        let window_id = hwnd.0 as usize as u32;
+        let mut raw_pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut raw_pid)); }
+        let pid = raw_pid as i32;
 
-        let window_id = win.id;
-        let pid = win.owner_pid as i32;
         let app_name = app_name_cache
             .get(&pid)
             .cloned()
-            .unwrap_or_else(|| win.owner_name.clone());
+            .unwrap_or_else(|| {
+                // First time seeing this PID — resolve the process name
+                crate::windows::app::list_apps()
+                    .into_iter()
+                    .find(|a| a.pid == pid)
+                    .map(|a| a.name)
+                    .unwrap_or_default()
+            });
 
         let timestamp_ms = now_millis();
-        let (jpeg_data, meta) = windows::screenshot::capture_window_jpeg(window_id)
+        let (jpeg_data, meta) = win_platform::screenshot::capture_window_jpeg(window_id)
             .map_err(|e| format!("Capture failed: {e}"))?;
 
         let filename = format!("frame_{timestamp_ms}.jpg");

@@ -293,7 +293,7 @@ pub fn element_at_point(
                 if !target_pids.contains(&elem_pid) {
                     // Element doesn't belong to target app — walk descendants to find one that does.
                     if let Some(scoped) =
-                        find_element_by_pid_at_point(&automation, &elem, &target_pids, x, y)
+                        find_smallest_element_at_point(&automation, &elem, x, y, Some(&target_pids))
                     {
                         elem = scoped;
                     }
@@ -304,7 +304,7 @@ pub fn element_at_point(
         // Step 2: Container fallback — if the element is a container, find a more specific child.
         let control_type = elem.CurrentControlType().map(|ct| ct.0).unwrap_or(0);
         if CONTAINER_TYPES.contains(&control_type) {
-            if let Some(deeper) = find_deepest_element_at_point(&automation, &elem, x, y) {
+            if let Some(deeper) = find_smallest_element_at_point(&automation, &elem, x, y, None) {
                 elem = deeper;
             }
         }
@@ -323,14 +323,14 @@ fn resolve_app_pids(app_name: &str) -> Vec<i32> {
         .collect()
 }
 
-/// Search descendants of `root` for an element belonging to one of `target_pids`
-/// that contains the point (x, y). Returns the element with the smallest area.
-unsafe fn find_element_by_pid_at_point(
+/// Search descendants of `root` for the smallest-area element containing the point (x, y).
+/// When `pid_filter` is `Some`, only elements belonging to one of the listed PIDs are considered.
+unsafe fn find_smallest_element_at_point(
     automation: &IUIAutomation,
     root: &IUIAutomationElement,
-    target_pids: &[i32],
     x: f64,
     y: f64,
+    pid_filter: Option<&[i32]>,
 ) -> Option<IUIAutomationElement> {
     let condition = automation.CreateTrueCondition().ok()?;
     let scope = TreeScope(TreeScope_Descendants.0);
@@ -345,40 +345,12 @@ unsafe fn find_element_by_pid_at_point(
             Err(_) => continue,
         };
 
-        let child_pid = child.CurrentProcessId().unwrap_or(0);
-        if !target_pids.contains(&child_pid) {
-            continue;
-        }
-
-        if let Some(area) = check_element_contains_point(&child, x, y) {
-            if best.as_ref().map_or(true, |(_, best_area)| area < *best_area) {
-                best = Some((child, area));
+        if let Some(pids) = pid_filter {
+            let child_pid = child.CurrentProcessId().unwrap_or(0);
+            if !pids.contains(&child_pid) {
+                continue;
             }
         }
-    }
-
-    best.map(|(elem, _)| elem)
-}
-
-/// Search descendants of `root` for the smallest-area element containing the point (x, y).
-unsafe fn find_deepest_element_at_point(
-    automation: &IUIAutomation,
-    root: &IUIAutomationElement,
-    x: f64,
-    y: f64,
-) -> Option<IUIAutomationElement> {
-    let condition = automation.CreateTrueCondition().ok()?;
-    let scope = TreeScope(TreeScope_Descendants.0);
-    let elements = root.FindAll(scope, &condition).ok()?;
-    let count = elements.Length().ok()?;
-
-    let mut best: Option<(IUIAutomationElement, f64)> = None;
-
-    for i in 0..count {
-        let child = match elements.GetElement(i) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
 
         if let Some(area) = check_element_contains_point(&child, x, y) {
             if best.as_ref().map_or(true, |(_, best_area)| area < *best_area) {
