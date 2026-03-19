@@ -65,10 +65,25 @@ fn for_each_element_name(mut visitor: impl FnMut(&str)) -> Result<(), String> {
     }
 }
 
+/// Check if any of the element's text properties contain the search string (case-insensitive).
+/// Returns the first matching text, or None. Checks name, then value, then help text.
+fn match_element_text(
+    name: Option<&str>,
+    value: Option<&str>,
+    help: Option<&str>,
+    search_lower: &str,
+) -> Option<String> {
+    [name, value, help]
+        .into_iter()
+        .flatten()
+        .find(|text| text.to_lowercase().contains(search_lower))
+        .map(|s| s.to_string())
+}
+
 /// Find text in UI elements of the foreground window using UIA.
 ///
 /// Searches the accessibility tree of the foreground window for elements
-/// whose Name property contains the search string (case-insensitive).
+/// whose Name, Value, or HelpText property contains the search string (case-insensitive).
 /// Returns matching elements with screen coordinates for clicking.
 pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
     let debug = std::env::var("NATIVE_DEVTOOLS_DEBUG").is_ok();
@@ -115,21 +130,15 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             eprintln!("[DEBUG uia::find_text] scanning {} elements", count);
         }
 
+        let mut seen_centers: Vec<(f64, f64)> = Vec::new();
+
         for i in 0..count {
             let elem = match elements.GetElement(i) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
 
-            let name = match elem.CurrentName() {
-                Ok(n) => n.to_string(),
-                Err(_) => continue,
-            };
-
-            if name.is_empty() || !name.to_lowercase().contains(&search_lower) {
-                continue;
-            }
-
+            // Get bounding rectangle first; skip zero-size elements.
             let rect = match elem.CurrentBoundingRectangle() {
                 Ok(r) => r,
                 Err(_) => continue,
@@ -140,6 +149,54 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             if width <= 0.0 || height <= 0.0 {
                 continue;
             }
+
+            // Collect the three text properties.
+            let name = elem
+                .CurrentName()
+                .ok()
+                .map(|n| n.to_string())
+                .filter(|n| !n.is_empty());
+
+            let value = elem
+                .GetCurrentPropertyValue(
+                    windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId,
+                )
+                .ok()
+                .and_then(|v| {
+                    let s = v.to_string();
+                    if s.is_empty() { None } else { Some(s) }
+                });
+
+            let help = elem
+                .CurrentHelpText()
+                .ok()
+                .map(|h| h.to_string())
+                .filter(|h| !h.is_empty());
+
+            // Find the first property that matches the search string.
+            let matched_text = match_element_text(
+                name.as_deref(),
+                value.as_deref(),
+                help.as_deref(),
+                &search_lower,
+            );
+
+            let matched_text = match matched_text {
+                Some(t) => t,
+                None => continue,
+            };
+
+            let cx = rect.left as f64 + width / 2.0;
+            let cy = rect.top as f64 + height / 2.0;
+
+            // Deduplicate by center coordinates within 2px tolerance.
+            if seen_centers
+                .iter()
+                .any(|(sx, sy)| (sx - cx).abs() < 2.0 && (sy - cy).abs() < 2.0)
+            {
+                continue;
+            }
+            seen_centers.push((cx, cy));
 
             let role = elem
                 .CurrentControlType()
@@ -154,9 +211,9 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             };
 
             matches.push(TextMatch {
-                text: name,
-                x: bounds.x + bounds.width / 2.0,
-                y: bounds.y + bounds.height / 2.0,
+                text: matched_text,
+                x: cx,
+                y: cy,
                 confidence: 1.0,
                 bounds,
                 role,
@@ -343,4 +400,52 @@ fn uia_control_type_name(id: i32) -> Option<String> {
         _ => return None,
     };
     Some(name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_match_element_text_matches_name() {
+        let result = match_element_text(Some("Save"), None, None, "save");
+        assert_eq!(result, Some("Save".to_string()));
+    }
+
+    #[test]
+    fn test_match_element_text_matches_value() {
+        let result = match_element_text(None, Some("hello world"), None, "hello");
+        assert_eq!(result, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_match_element_text_matches_help() {
+        let result = match_element_text(None, None, Some("Click to submit"), "submit");
+        assert_eq!(result, Some("Click to submit".to_string()));
+    }
+
+    #[test]
+    fn test_match_element_text_prefers_name_over_value() {
+        let result = match_element_text(Some("Save"), Some("Save file"), None, "save");
+        assert_eq!(result, Some("Save".to_string()));
+    }
+
+    #[test]
+    fn test_match_element_text_no_match() {
+        let result = match_element_text(Some("Open"), Some("file.txt"), Some("Opens a file"), "save");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_match_element_text_case_insensitive() {
+        let result = match_element_text(Some("SAVE"), None, None, "save");
+        assert_eq!(result, Some("SAVE".to_string()));
+    }
+
+    #[test]
+    fn test_find_text_returns_empty_for_no_match() {
+        let result = find_text("some_unlikely_text_xyz_987654");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
 }
