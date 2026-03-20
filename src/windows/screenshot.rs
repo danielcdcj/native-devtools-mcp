@@ -191,6 +191,36 @@ pub fn capture_window(window_id: u32) -> Result<Screenshot, ScreenshotError> {
     })
 }
 
+/// Metadata from a window capture for the screen recorder.
+pub struct WindowCaptureMeta {
+    pub origin_x: f64,
+    pub origin_y: f64,
+    pub scale: f64,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+}
+
+/// Capture a window by ID and return JPEG bytes + metadata.
+///
+/// Delegates to [`capture_window`] for the actual BitBlt capture, then converts
+/// the PNG output to JPEG.
+pub fn capture_window_jpeg(window_id: u32) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
+    let screenshot = capture_window(window_id)?;
+
+    let jpeg_data = crate::tools::screenshot::png_to_jpeg(&screenshot.png_data)
+        .map_err(ScreenshotError::CaptureError)?;
+
+    let meta = WindowCaptureMeta {
+        origin_x: screenshot.origin_x,
+        origin_y: screenshot.origin_y,
+        scale: screenshot.scale_factor,
+        pixel_width: screenshot.pixel_width,
+        pixel_height: screenshot.pixel_height,
+    };
+
+    Ok((jpeg_data, meta))
+}
+
 fn get_window_bounds_for_capture(hwnd: HWND) -> WindowBounds {
     let mut rect = RECT::default();
 
@@ -499,3 +529,22 @@ static CRC32_TABLE: [u32; 256] = {
     }
     table
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore] // requires a running desktop with visible windows
+    fn test_capture_window_jpeg() {
+        let windows = crate::windows::window::list_windows().expect("list_windows should succeed");
+        let win = windows
+            .first()
+            .expect("at least one window must be visible");
+        let (jpeg, meta) = capture_window_jpeg(win.id).expect("capture should succeed");
+        assert!(!jpeg.is_empty());
+        assert!(meta.pixel_width > 0);
+        assert!(meta.pixel_height > 0);
+        assert!(meta.scale > 0.0);
+    }
+}

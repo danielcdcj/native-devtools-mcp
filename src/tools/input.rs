@@ -493,8 +493,7 @@ fn element_at_point_platform(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = app_name; // TODO: support app_name scoping on Windows
-        crate::windows::uia::element_at_point(x, y)
+        crate::windows::uia::element_at_point(x, y, app_name)
     }
 }
 

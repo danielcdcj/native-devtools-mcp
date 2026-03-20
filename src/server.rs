@@ -130,10 +130,8 @@ impl MacOSDevToolsServer {
         if android_connected {
             tools.extend(Self::get_android_tools());
         }
-        if cfg!(target_os = "macos") {
-            tools.extend(Self::get_hover_tracking_tools(hover_tracking));
-            tools.extend(Self::get_recording_tools(recording));
-        }
+        tools.extend(Self::get_hover_tracking_tools(hover_tracking));
+        tools.extend(Self::get_recording_tools(recording));
         tools
     }
 
@@ -1569,12 +1567,6 @@ impl ServerHandler for MacOSDevToolsServer {
                 )
                 .await),
             "start_hover_tracking" => {
-                if cfg!(not(target_os = "macos")) {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        "Hover tracking is only supported on macOS.",
-                    )]));
-                }
-
                 // Auto-clean finished tracker (e.g. from max duration timeout)
                 let already_active = {
                     let guard = self.hover_tracker.read().await;
@@ -1687,12 +1679,6 @@ impl ServerHandler for MacOSDevToolsServer {
                 }
             }
             "start_recording" => {
-                if cfg!(not(target_os = "macos")) {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        "Screen recording is only supported on macOS.",
-                    )]));
-                }
-
                 // Check if a previous recording auto-stopped (max_duration elapsed).
                 // If so, drain remaining frames (log count) and clear stale state.
                 {

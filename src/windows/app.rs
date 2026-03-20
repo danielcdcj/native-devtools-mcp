@@ -119,7 +119,7 @@ unsafe extern "system" fn app_enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL 
 }
 
 /// Get the executable name for a process ID.
-fn get_process_name(pid: u32) -> Option<String> {
+pub fn get_process_name(pid: u32) -> Option<String> {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
 

@@ -207,10 +207,62 @@ fn capture_frontmost_frame(
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        use crate::windows as win_platform;
+        use ::windows::Win32::Foundation::HWND;
+        use ::windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+        // Use GetForegroundWindow directly instead of enumerating all windows —
+        // much cheaper at 5fps (avoids OpenProcess + QueryFullProcessImageName per window).
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd == HWND::default() {
+            return Err("No foreground window".to_string());
+        }
+
+        let window_id = hwnd.0 as usize as u32;
+        let mut raw_pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut raw_pid)); }
+        let pid = raw_pid as i32;
+
+        let app_name = app_name_cache
+            .get(&pid)
+            .cloned()
+            .unwrap_or_else(|| {
+                // First time seeing this PID — resolve directly instead of enumerating all apps
+                crate::windows::app::get_process_name(raw_pid).unwrap_or_default()
+            });
+
+        let timestamp_ms = now_millis();
+        let (jpeg_data, meta) = win_platform::screenshot::capture_window_jpeg(window_id)
+            .map_err(|e| format!("Capture failed: {e}"))?;
+
+        let filename = format!("frame_{timestamp_ms}.jpg");
+        let path = output_dir.join(&filename);
+        std::fs::write(&path, &jpeg_data)
+            .map_err(|e| format!("Failed to write frame: {e}"))?;
+
+        Ok((
+            RecordedFrame {
+                timestamp_ms,
+                path: path.to_string_lossy().to_string(),
+                app_name: app_name.clone(),
+                window_id,
+                origin_x: meta.origin_x,
+                origin_y: meta.origin_y,
+                scale: meta.scale,
+                pixel_width: meta.pixel_width,
+                pixel_height: meta.pixel_height,
+            },
+            pid,
+            app_name,
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app_name_cache, output_dir);
-        Err("Screen recording is only supported on macOS".to_string())
+        Err("Screen recording is only supported on macOS and Windows".to_string())
     }
 }
 

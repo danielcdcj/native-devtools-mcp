@@ -315,7 +315,7 @@ fn get_cursor_position_sync() -> Result<(f64, f64), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err("Hover tracking is not yet supported on Windows".to_string())
+        crate::windows::input::get_cursor_position()
     }
 }
 
@@ -332,8 +332,8 @@ fn element_at_point_for_hover(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = (x, y, app_name);
-        Err("Hover tracking is not yet supported on Windows".to_string())
+        let value = crate::windows::uia::element_at_point(x, y, app_name)?;
+        Ok(parse_hover_element(&value))
     }
 }
 

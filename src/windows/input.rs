@@ -446,6 +446,19 @@ pub fn type_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the current cursor position in screen coordinates.
+pub fn get_cursor_position() -> Result<(f64, f64), String> {
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    use windows::Win32::Foundation::POINT;
+
+    let mut point = POINT::default();
+    unsafe {
+        GetCursorPos(&mut point)
+            .map_err(|e| format!("GetCursorPos failed: {}", e))?;
+    }
+    Ok((point.x as f64, point.y as f64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +477,12 @@ mod tests {
         let (x, y) = to_absolute_coords(100.0, 100.0);
         assert!(x >= 0);
         assert!(y >= 0);
+    }
+
+    #[test]
+    fn test_get_cursor_position_returns_coordinates() {
+        let (x, y) = get_cursor_position().expect("should get cursor position");
+        assert!(x.is_finite());
+        assert!(y.is_finite());
     }
 }

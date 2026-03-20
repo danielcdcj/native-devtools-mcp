@@ -50,7 +50,7 @@ npx -y native-devtools-mcp
 - **🧩 Template Matching:** Find non-text UI elements (icons, shapes) using `load_image` + `find_image`, returning precise click coordinates.
 - **🔒 Local & Private:** 100% local execution. No screenshots or data are ever sent to external servers.
 - **📱 Android Support:** Connect to Android devices over ADB for screenshots, input simulation, UI element search, and app management — all from the same MCP server.
-- **🔍 Hover Tracking:** Track cursor hover transitions across UI elements in real-time. Configurable dwell threshold filters pass-through noise — designed for LLMs observing user navigation patterns. macOS only.
+- **🔍 Hover Tracking:** Track cursor hover transitions across UI elements in real-time. Configurable dwell threshold filters pass-through noise — designed for LLMs observing user navigation patterns.
 - **🔌 Dual-Mode Interaction:**
     1.  **Visual/Native:** Works with *any* app via screenshots & coordinates (Universal).
     2.  **AppDebugKit:** Deep integration for supported apps to inspect the UI tree (DOM-like structure).
@@ -67,8 +67,8 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately. Uses the platform **accessibility API** (macOS Accessibility / Windows UI Automation) for precise element-level matching, with OCR fallback.
 4.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
 5.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
-6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs. macOS only.
-7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches. macOS only.
+6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
+7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
 8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
 
 ## 📦 Installation
@@ -345,13 +345,15 @@ graph TD
 | | Input | `CGEvent` (CoreGraphics) |
 | | Text Search (`find_text`) | `Accessibility API` (primary), Vision OCR (fallback) |
 | | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback (Accessibility API) |
-| | Hover Tracking (`start_hover_tracking`) | `CGEvent` cursor + Accessibility API polling (macOS only) |
-| | Screen Recording (`start_recording`) | `CGWindowListCreateImage` at configurable fps (macOS only) |
+| | Hover Tracking (`start_hover_tracking`) | `CGEvent` cursor + Accessibility API polling |
+| | Screen Recording (`start_recording`) | `CGWindowListCreateImage` at configurable fps |
 | | OCR | `VNRecognizeTextRequest` (Vision Framework) |
 | **Windows** | Screenshots | `BitBlt` (GDI) |
 | | Input | `SendInput` (Win32) |
 | | Text Search (`find_text`) | `UI Automation` (primary), WinRT OCR (fallback) |
 | | Element Inspection (`element_at_point`) | `IUIAutomation::ElementFromPoint` (UI Automation) |
+| | Hover Tracking (`start_hover_tracking`) | `GetCursorPos` + UI Automation polling |
+| | Screen Recording (`start_recording`) | `BitBlt` (GDI) at configurable fps |
 | | OCR | `Windows.Media.Ocr` (WinRT) |
 | **Android** | Screenshots | `screencap` / ADB framebuffer |
 | | Input | `adb shell input` (tap, swipe, text, keyevent) |
@@ -392,6 +394,7 @@ Works out of the box on **Windows 10/11**.
 *   `find_text` uses **UI Automation (UIA)** as the primary search mechanism, querying the accessibility tree for element names. This is the same accessibility-first approach used on macOS (with the Accessibility API). Falls back to OCR automatically when UIA finds no matches.
 *   OCR uses the built-in Windows Media OCR engine (offline).
 *   **Note:** Cannot interact with "Run as Administrator" windows unless the MCP server itself is also running as Administrator.
+*   **Screen Recording Performance:** Screen recording uses GDI/BitBlt at configurable fps (default 5). For higher fps requirements or game capture scenarios, DXGI Desktop Duplication API would provide hardware-accelerated capture — this is a planned future upgrade.
 
 ## 📜 License
 
