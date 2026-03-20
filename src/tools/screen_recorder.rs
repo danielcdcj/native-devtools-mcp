@@ -229,12 +229,8 @@ fn capture_frontmost_frame(
             .get(&pid)
             .cloned()
             .unwrap_or_else(|| {
-                // First time seeing this PID — resolve the process name
-                crate::windows::app::list_apps()
-                    .into_iter()
-                    .find(|a| a.pid == pid)
-                    .map(|a| a.name)
-                    .unwrap_or_default()
+                // First time seeing this PID — resolve directly instead of enumerating all apps
+                crate::windows::app::get_process_name(raw_pid).unwrap_or_default()
             });
 
         let timestamp_ms = now_millis();

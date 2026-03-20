@@ -131,7 +131,7 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             eprintln!("[DEBUG uia::find_text] scanning {} elements", count);
         }
 
-        let mut seen_centers: Vec<(f64, f64)> = Vec::new();
+        let mut seen_centers: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
 
         for i in 0..count {
             let elem = match elements.GetElement(i) {
@@ -152,27 +152,7 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             }
 
             // Collect the three text properties.
-            let name = elem
-                .CurrentName()
-                .ok()
-                .map(|n| n.to_string())
-                .filter(|n| !n.is_empty());
-
-            let value = elem
-                .GetCurrentPropertyValue(
-                    windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId,
-                )
-                .ok()
-                .and_then(|v| {
-                    let s = v.to_string();
-                    if s.is_empty() { None } else { Some(s) }
-                });
-
-            let help = elem
-                .CurrentHelpText()
-                .ok()
-                .map(|h| h.to_string())
-                .filter(|h| !h.is_empty());
+            let (name, value, help) = element_text_properties(&elem);
 
             // Find the first property that matches the search string.
             let matched_text = match_element_text(
@@ -190,14 +170,11 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             let cx = rect.left as f64 + width / 2.0;
             let cy = rect.top as f64 + height / 2.0;
 
-            // Deduplicate by center coordinates within 2px tolerance.
-            if seen_centers
-                .iter()
-                .any(|(sx, sy)| (sx - cx).abs() < 2.0 && (sy - cy).abs() < 2.0)
-            {
+            // Deduplicate by center coordinates (quantized to 2px grid).
+            let key = ((cx / 2.0) as i32, (cy / 2.0) as i32);
+            if !seen_centers.insert(key) {
                 continue;
             }
-            seen_centers.push((cx, cy));
 
             let role = elem
                 .CurrentControlType()
@@ -389,52 +366,43 @@ unsafe fn check_element_contains_point(
     }
 }
 
-/// Build a JSON object from a UIA element's properties.
-unsafe fn build_element_json(elem: &IUIAutomationElement) -> Result<serde_json::Value, String> {
+/// Extract the three text properties (name, value, help) from a UIA element.
+unsafe fn element_text_properties(
+    elem: &IUIAutomationElement,
+) -> (Option<String>, Option<String>, Option<String>) {
     let name = elem
         .CurrentName()
         .ok()
         .map(|n| n.to_string())
         .filter(|n| !n.is_empty());
-    let role = elem
-        .CurrentControlType()
-        .ok()
-        .and_then(|ct| uia_control_type_name(ct.0));
-    let help = elem
-        .CurrentHelpText()
-        .ok()
-        .map(|h| h.to_string())
-        .filter(|h| !h.is_empty());
-    let value_pattern = elem
+    let value = elem
         .GetCurrentPropertyValue(windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId)
         .ok()
         .and_then(|v| {
             let s = v.to_string();
             if s.is_empty() { None } else { Some(s) }
         });
+    let help = elem
+        .CurrentHelpText()
+        .ok()
+        .map(|h| h.to_string())
+        .filter(|h| !h.is_empty());
+    (name, value, help)
+}
+
+/// Build a JSON object from a UIA element's properties.
+unsafe fn build_element_json(elem: &IUIAutomationElement) -> Result<serde_json::Value, String> {
+    let (name, value_pattern, help) = element_text_properties(elem);
+    let role = elem
+        .CurrentControlType()
+        .ok()
+        .and_then(|ct| uia_control_type_name(ct.0));
 
     let rect = elem.CurrentBoundingRectangle().ok();
     let pid = elem.CurrentProcessId().ok();
 
-    // Resolve app name from PID
-    let resolved_app_name = pid.and_then(|p| {
-        use windows::Win32::System::ProcessStatus::GetProcessImageFileNameW;
-        use windows::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, p as u32).ok()?;
-        let mut buf = [0u16; 260];
-        let len = GetProcessImageFileNameW(handle, &mut buf);
-        let _ = windows::Win32::Foundation::CloseHandle(handle);
-        if len == 0 {
-            return None;
-        }
-        let path = String::from_utf16_lossy(&buf[..len as usize]);
-        path.rsplit('\\')
-            .next()
-            .map(|s| s.trim_end_matches(".exe").to_string())
-    });
+    let resolved_app_name =
+        pid.and_then(|p| crate::windows::app::get_process_name(p as u32));
 
     let mut result = serde_json::Map::new();
 
