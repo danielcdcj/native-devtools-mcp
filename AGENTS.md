@@ -31,8 +31,8 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Type into the search bar" | `find_text(text="Search")` → `click(x, y)` → `type_text("hello")` | Must click to focus before typing. |
 | "Scroll down" | `scroll(x=500, y=500, delta_y=200)` | Positive `delta_y` scrolls down. |
 | "Find an open window" | `list_windows()` → `focus_window(window_id=...)` | Don't guess window names; list them first. |
-| "Track what I hover over" | `start_hover_tracking(min_dwell_ms=300)` → user moves mouse → `stop_hover_tracking()` | Records element transitions with dwell filtering. macOS only. |
-| "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. macOS only. |
+| "Track what I hover over" | `start_hover_tracking(min_dwell_ms=300)` → user moves mouse → `stop_hover_tracking()` | Records element transitions with dwell filtering. |
+| "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. |
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
 
@@ -126,7 +126,7 @@ Scrolls at a specific screen position.
 *   `launch_app`: Launch an app by name. Optional `args` parameter for CLI arguments. If app is already running with no args, brings to front; with args, returns error (use `quit_app` first).
 *   `quit_app`: Quit a running app. Accepts `app_name` (required) and `force` (boolean, default false).
 
-### 4. Hover Tracking (macOS only)
+### 4. Hover Tracking
 
 Track cursor hover transitions across UI elements. Designed for observing user navigation patterns (tooltip triggers, dropdown reveals, panel expansions).
 
@@ -144,7 +144,7 @@ Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only s
 4. stop_hover_tracking → [remaining events]
 ```
 
-### 5. Screen Recording (macOS only)
+### 5. Screen Recording
 
 Record the frontmost app's window as timestamped JPEG frames. Automatically follows app switches — when the user moves to a different app, recording captures the new app's window.
 
