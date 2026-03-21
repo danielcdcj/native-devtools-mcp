@@ -620,6 +620,19 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "take_ax_snapshot",
+                "Take an accessibility tree snapshot of an application. Returns a structured text representation with unique element IDs, roles, names, and state attributes. Works for any app without requiring a debug port.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name (defaults to frontmost app if omitted)"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 
@@ -1342,6 +1355,15 @@ impl ServerHandler for MacOSDevToolsServer {
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(load_image::load_image(params, self.image_cache.clone()).await)
             }
+            "take_ax_snapshot" => {
+                let params: crate::tools::ax_snapshot::TakeAxSnapshotParams =
+                    serde_json::from_value(args)
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                match crate::tools::ax_snapshot::take_ax_snapshot(params) {
+                    Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
+            }
             // Android tools
             "android_list_devices" => match crate::android::device::list_devices() {
                 Ok(devices) => Ok(CallToolResult::success(vec![Content::text(
@@ -1704,10 +1726,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 }
 
                 let output_dir = parse_string_field(&args, "output_dir")?;
-                let fps = args
-                    .get("fps")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5) as u32;
+                let fps = args.get("fps").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())

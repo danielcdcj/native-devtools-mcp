@@ -1,3 +1,25 @@
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct TakeAxSnapshotParams {
+    pub app_name: Option<String>,
+}
+
+/// Collect the accessibility tree and format as snapshot text.
+pub fn take_ax_snapshot(params: TakeAxSnapshotParams) -> Result<String, String> {
+    let nodes = {
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos::ax::collect_ax_tree(params.app_name.as_deref())?
+        }
+        #[cfg(target_os = "windows")]
+        {
+            crate::windows::uia::collect_uia_tree(params.app_name.as_deref())?
+        }
+    };
+    Ok(format_snapshot(&nodes))
+}
+
 /// A single node in a serialized accessibility tree snapshot.
 /// Used by both AX/UIA snapshots (Phase 1) and CDP snapshots (Phase 2).
 pub struct AXSnapshotNode {
