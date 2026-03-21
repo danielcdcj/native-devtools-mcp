@@ -1,10 +1,10 @@
 # native-devtools-mcp
 
-`native-devtools-mcp` is a Model Context Protocol (MCP) server for computer use on macOS, Windows, and Android. It gives AI agents and MCP clients direct control over native desktop apps and Android devices through screenshots, OCR, accessibility-based text lookup, input simulation, window management, and ADB.
+`native-devtools-mcp` is a Model Context Protocol (MCP) server for computer use on macOS, Windows, and Android. It gives AI agents and MCP clients direct control over native desktop apps, Chrome/Electron browsers, and Android devices through screenshots, OCR, accessibility-based text lookup, input simulation, window management, Chrome DevTools Protocol (CDP), and ADB.
 
-Use it when browser-only automation is not enough: Electron apps, system dialogs, desktop tools, native app testing, and Android device workflows. It works with [Claude Desktop](https://claude.ai/download), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and other MCP-compatible clients.
+Use it when browser-only automation is not enough: Electron apps (Signal, Discord, VS Code), Chrome browser automation, system dialogs, desktop tools, native app testing, and Android device workflows. It works with [Claude Desktop](https://claude.ai/download), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and other MCP-compatible clients.
 
-Useful for MCP-based computer use, desktop automation, UI automation, native app testing, e2e testing, RPA, screen reading, mouse and keyboard control, and Android device automation.
+Useful for MCP-based computer use, desktop automation, browser automation, UI automation, native app testing, e2e testing, RPA, screen reading, mouse and keyboard control, Chrome DevTools Protocol automation, and Android device automation.
 
 ```bash
 npx -y native-devtools-mcp
@@ -15,6 +15,7 @@ npx -y native-devtools-mcp
 - `click`, `type_text`, `scroll`, `launch_app`, `quit_app`, and window management
 - `element_at_point` for inspecting accessible UI elements at screen coordinates
 - `load_image` + `find_image` for non-text UI elements such as icons and custom controls
+- Chrome/Electron automation via CDP: snapshots, click, fill, navigate, type, and tab management
 - Android screenshots, text lookup, input, and app control over ADB
 - Local execution: screenshots and input stay on the machine
 
@@ -25,7 +26,7 @@ npx -y native-devtools-mcp
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-blue?style=flat-square)
 ![Downloads](https://img.shields.io/npm/dt/native-devtools-mcp?style=flat-square)
 
-[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Recipes](#-recipes-and-examples) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Android](#-android-support)
+[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Recipes](#-recipes-and-examples) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Chrome/Electron (CDP)](#-browser-automation-cdp) • [Android](#-android-support)
 
 <div align="center">
 <table>
@@ -72,6 +73,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
 7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
 8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
+9.  `cdp_connect` / `cdp_take_snapshot` / `cdp_click` / `cdp_fill` / `cdp_navigate`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, and tab management without a separate Node.js server.
 
 ## 📦 Installation
 
@@ -249,6 +251,27 @@ Use `find_image` when the target is **not text** (icons, toggles, custom control
 - **accurate**: uses full-resolution, wider scale search, and smaller stride for thorough matching.
 
 Optional inputs like `mask_id`, `search_region`, `scales`, and `rotations` can improve precision and performance.
+
+## 🌐 Browser Automation (CDP)
+
+Connect to Chrome or Electron apps via the Chrome DevTools Protocol for DOM-level automation — more reliable than coordinate-based clicking for web content.
+
+```bash
+# Launch Chrome with remote debugging
+launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
+
+# Connect and automate
+cdp_connect(port=9222)
+cdp_navigate(url="https://example.com")
+cdp_take_snapshot()           # accessibility tree with element UIDs
+cdp_fill(uid="10", value="search query")
+cdp_press_key(key="Enter")
+cdp_wait_for(text=["Results"])
+```
+
+**16 CDP tools** — click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
+
+**Chrome 136+ note:** Requires `--user-data-dir=<path>` alongside `--remote-debugging-port` (Chrome silently ignores the debug port with the default profile). Electron apps only need `--remote-debugging-port`.
 
 ## 📱 Android Support
 
