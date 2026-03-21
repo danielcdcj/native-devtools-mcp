@@ -1,6 +1,6 @@
 //! CDP tool implementations (evaluate_script, click, list_pages, select_page).
 
-use crate::cdp::CdpClient;
+use crate::cdp::{cdp_error, is_extension_url, CdpClient};
 use crate::tools::ax_snapshot::format_snapshot;
 use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
@@ -15,6 +15,24 @@ use rmcp::model::{CallToolResult, Content};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Format a JS execution response into a tool result, handling exceptions.
+fn format_js_result(
+    result: &chromiumoxide::cdp::js_protocol::runtime::EvaluateReturns,
+) -> CallToolResult {
+    if let Some(exc) = &result.exception_details {
+        return cdp_error(format!("JavaScript exception: {}", exc.text));
+    }
+    let value = result
+        .result
+        .value
+        .as_ref()
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    CallToolResult::success(vec![Content::text(
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string()),
+    )])
+}
+
 pub async fn cdp_evaluate_script(
     function: String,
     args: Option<Vec<serde_json::Value>>,
@@ -23,157 +41,148 @@ pub async fn cdp_evaluate_script(
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {
         Some(c) => c,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No CDP connection. Use cdp_connect first.",
-            )]);
-        }
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
 
-    let page = match &client.selected_page {
-        Some(p) => p.clone(),
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No page selected. Use cdp_list_pages and cdp_select_page first.",
-            )]);
-        }
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
     // Determine if we need to resolve element args.
     let has_uid_args = args
         .as_ref()
-        .map_or(false, |a| a.iter().any(|v| v.get("uid").is_some()));
+        .is_some_and(|a| a.iter().any(|v| v.get("uid").is_some()));
 
-    if has_uid_args {
-        // Args case: resolve UIDs to remote objects and call function with them.
-        let snapshot_map = match &client.last_snapshot {
-            Some(m) => m,
-            None => {
-                return CallToolResult::error(vec![Content::text(
-                    "No snapshot available. Call cdp_take_snapshot first.",
-                )]);
-            }
-        };
-
-        // Staleness check: verify the page hasn't navigated since the snapshot was taken.
-        let current_url = page.url().await.ok().flatten().unwrap_or_default();
-        if current_url != snapshot_map.page_url {
-            return CallToolResult::error(vec![Content::text(
-                "Snapshot is stale — page has navigated since last snapshot. Call cdp_take_snapshot again.",
-            )]);
-        }
-
-        let arg_list = args.as_ref().unwrap();
-        let mut call_arguments: Vec<CallArgument> = Vec::with_capacity(arg_list.len());
-
-        // Collect (uid, backend_node_id) pairs first to avoid borrow issues.
-        let mut uid_backend_pairs: Vec<(String, i64)> = Vec::with_capacity(arg_list.len());
-        for arg in arg_list {
-            if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
-                let node = match snapshot_map.uid_to_node.get(uid) {
-                    Some(n) => n,
-                    None => {
-                        return CallToolResult::error(vec![Content::text(format!(
-                            "uid={} not found. Call cdp_take_snapshot to refresh.",
-                            uid
-                        ))]);
-                    }
-                };
-                uid_backend_pairs.push((uid.to_string(), node.backend_node_id));
-            }
-        }
-
-        // Resolve each backend node ID to a remote object ID.
-        for (uid, backend_node_id) in &uid_backend_pairs {
-            let resolve_params = ResolveNodeParams::builder()
-                .backend_node_id(BackendNodeId::new(*backend_node_id))
-                .build();
-
-            let resolve_result = page.execute(resolve_params).await;
-            let remote_object = match resolve_result {
-                Ok(resp) => resp.result.object,
-                Err(_) => {
-                    return CallToolResult::error(vec![Content::text(format!(
-                        "Element uid={} could not be resolved to a DOM node.",
-                        uid
-                    ))]);
-                }
-            };
-
-            let object_id = match remote_object.object_id {
-                Some(id) => id,
-                None => {
-                    return CallToolResult::error(vec![Content::text(format!(
-                        "Element uid={} could not be resolved to a DOM node.",
-                        uid
-                    ))]);
-                }
-            };
-
-            let call_arg = CallArgument::builder().object_id(object_id).build();
-            call_arguments.push(call_arg);
-        }
-
-        // Call the function with the resolved element arguments.
-        let call_params = CallFunctionOnParams::builder()
-            .function_declaration(function)
-            .arguments(call_arguments)
-            .return_by_value(true)
-            .await_promise(true)
-            .build();
-
-        let call_params = match call_params {
-            Ok(p) => p,
-            Err(e) => {
-                return CallToolResult::error(vec![Content::text(format!(
-                    "Failed to build call params: {}",
-                    e
-                ))]);
-            }
-        };
-
-        match page.execute(call_params).await {
-            Ok(resp) => {
-                if let Some(exc) = resp.result.exception_details {
-                    return CallToolResult::error(vec![Content::text(format!(
-                        "JavaScript exception: {}",
-                        exc.text
-                    ))]);
-                }
-                let value = resp.result.result.value.unwrap_or(serde_json::Value::Null);
-                CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string()),
-                )])
-            }
-            Err(e) => CallToolResult::error(vec![Content::text(format!(
-                "Failed to call function: {}",
-                e
-            ))]),
-        }
-    } else {
+    if !has_uid_args {
         // Simple case: evaluate the expression directly.
-        let mut eval_params = EvaluateParams::new(function);
+        // If it looks like a function declaration or arrow function, wrap as an IIFE
+        // so `() => document.title` returns the title, not the function object.
+        // Use `=>` presence to detect arrow functions — avoids false positives on
+        // parenthesized expressions like `(1 + 2)` or `({ title: document.title })`.
+        let trimmed = function.trim_start();
+        let is_function = trimmed.starts_with("function")
+            || trimmed.starts_with("async function")
+            || function.contains("=>");
+        let expression = if is_function {
+            format!("({})()", function)
+        } else {
+            function
+        };
+
+        let mut eval_params = EvaluateParams::new(expression);
         eval_params.return_by_value = Some(true);
         eval_params.await_promise = Some(true);
 
-        match page.execute(eval_params).await {
-            Ok(resp) => {
-                if let Some(exc) = resp.result.exception_details {
-                    return CallToolResult::error(vec![Content::text(format!(
-                        "JavaScript exception: {}",
-                        exc.text
-                    ))]);
+        return match page.execute(eval_params).await {
+            Ok(resp) => format_js_result(&resp.result),
+            Err(e) => cdp_error(format!("Failed to evaluate script: {}", e)),
+        };
+    }
+
+    // Args case: resolve UIDs to remote objects and call function with them.
+    let current_url = page.url().await.ok().flatten().unwrap_or_default();
+    let snapshot_map = match client.check_snapshot_staleness(&current_url) {
+        Ok(m) => m,
+        Err(e) => return e,
+    };
+
+    let arg_list = match args.as_ref() {
+        Some(a) => a,
+        None => return cdp_error("args required when passing element references"),
+    };
+    let mut call_arguments: Vec<CallArgument> = Vec::with_capacity(arg_list.len());
+
+    // Collect (uid, backend_node_id) pairs first to avoid borrow issues.
+    let mut uid_backend_pairs: Vec<(String, i64)> = Vec::with_capacity(arg_list.len());
+    for arg in arg_list {
+        if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
+            let node = match snapshot_map.uid_to_node.get(uid) {
+                Some(n) => n,
+                None => {
+                    return cdp_error(format!(
+                        "uid={} not found. Call cdp_take_snapshot to refresh.",
+                        uid
+                    ));
                 }
-                let value = resp.result.result.value.unwrap_or(serde_json::Value::Null);
-                CallToolResult::success(vec![Content::text(
-                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string()),
-                )])
-            }
-            Err(e) => CallToolResult::error(vec![Content::text(format!(
-                "Failed to evaluate script: {}",
-                e
-            ))]),
+            };
+            uid_backend_pairs.push((uid.to_string(), node.backend_node_id));
         }
+    }
+
+    // Resolve each backend node ID to a remote object ID.
+    // Track the first element's objectId to use as the execution context for callFunctionOn.
+    let mut first_object_id = None;
+    for (uid, backend_node_id) in &uid_backend_pairs {
+        let resolve_params = ResolveNodeParams::builder()
+            .backend_node_id(BackendNodeId::new(*backend_node_id))
+            .build();
+
+        let remote_object = match page.execute(resolve_params).await {
+            Ok(resp) => resp.result.object,
+            Err(_) => {
+                return cdp_error(format!(
+                    "Element uid={} could not be resolved to a DOM node.",
+                    uid
+                ));
+            }
+        };
+
+        let object_id = match remote_object.object_id {
+            Some(id) => id,
+            None => {
+                return cdp_error(format!(
+                    "Element uid={} could not be resolved to a DOM node.",
+                    uid
+                ));
+            }
+        };
+
+        if first_object_id.is_none() {
+            first_object_id = Some(object_id.clone());
+        }
+        call_arguments.push(CallArgument::builder().object_id(object_id).build());
+    }
+
+    // CDP callFunctionOn requires objectId or executionContextId.
+    // Use the first element's objectId so the function executes in that element's context.
+    let target_object_id = match first_object_id {
+        Some(id) => id,
+        None => return cdp_error("No element arguments could be resolved."),
+    };
+
+    // Call the function with the resolved element arguments.
+    let call_params = match CallFunctionOnParams::builder()
+        .function_declaration(function)
+        .object_id(target_object_id)
+        .arguments(call_arguments)
+        .return_by_value(true)
+        .await_promise(true)
+        .build()
+    {
+        Ok(p) => p,
+        Err(e) => return cdp_error(format!("Failed to build call params: {}", e)),
+    };
+
+    match page.execute(call_params).await {
+        Ok(resp) => {
+            // CallFunctionOn returns CallFunctionOnReturns, not EvaluateReturns.
+            // Extract the same fields manually.
+            if let Some(exc) = &resp.result.exception_details {
+                return cdp_error(format!("JavaScript exception: {}", exc.text));
+            }
+            let value = resp
+                .result
+                .result
+                .value
+                .as_ref()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string()),
+            )])
+        }
+        Err(e) => cdp_error(format!("Failed to call function: {}", e)),
     }
 }
 
@@ -185,44 +194,27 @@ pub async fn cdp_click(
     let guard = cdp_client.read().await;
     let client = match guard.as_ref() {
         Some(c) => c,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No CDP connection. Use cdp_connect first.",
-            )]);
-        }
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
 
-    let page = match &client.selected_page {
-        Some(p) => p.clone(),
-        None => {
-            return CallToolResult::error(vec![Content::text("No page selected.")]);
-        }
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
-    let snapshot_map = match &client.last_snapshot {
-        Some(m) => m,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No snapshot available. Call cdp_take_snapshot first.",
-            )]);
-        }
-    };
-
-    // Staleness check: verify the page hasn't navigated since the snapshot was taken.
     let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    if current_url != snapshot_map.page_url {
-        return CallToolResult::error(vec![Content::text(
-            "Snapshot is stale — page has navigated since last snapshot. Call cdp_take_snapshot again.",
-        )]);
-    }
+    let snapshot_map = match client.check_snapshot_staleness(&current_url) {
+        Ok(m) => m,
+        Err(e) => return e,
+    };
 
     let node = match snapshot_map.uid_to_node.get(&uid) {
         Some(n) => n,
         None => {
-            return CallToolResult::error(vec![Content::text(format!(
+            return cdp_error(format!(
                 "uid={} not found. Call cdp_take_snapshot to get current elements.",
                 uid
-            ))]);
+            ));
         }
     };
 
@@ -233,19 +225,19 @@ pub async fn cdp_click(
     // Drop the read lock before doing async CDP calls.
     drop(guard);
 
-    // Step 1: Scroll the element into view.
+    // Scroll the element into view.
     let scroll_params = ScrollIntoViewIfNeededParams::builder()
-        .backend_node_id(backend_node_id.clone())
+        .backend_node_id(backend_node_id)
         .build();
 
     if let Err(e) = page.execute(scroll_params).await {
-        return CallToolResult::error(vec![Content::text(format!(
+        return cdp_error(format!(
             "Failed to scroll element uid={} into view: {}",
             uid, e
-        ))]);
+        ));
     }
 
-    // Step 2: Get box model to find element coordinates.
+    // Get box model to find element coordinates.
     let box_params = GetBoxModelParams::builder()
         .backend_node_id(backend_node_id)
         .build();
@@ -253,28 +245,28 @@ pub async fn cdp_click(
     let box_result = match page.execute(box_params).await {
         Ok(r) => r,
         Err(e) => {
-            return CallToolResult::error(vec![Content::text(format!(
+            return cdp_error(format!(
                 "Element uid={} is no longer in the DOM: {}",
                 uid, e
-            ))]);
+            ));
         }
     };
 
     // Compute center from content quad (8 floats: x1,y1, x2,y2, x3,y3, x4,y4).
     let quad = box_result.result.model.content.inner();
     if quad.len() < 8 {
-        return CallToolResult::error(vec![Content::text(format!(
+        return cdp_error(format!(
             "Element uid={} returned an invalid box model (expected 8 quad values, got {}).",
             uid,
             quad.len()
-        ))]);
+        ));
     }
     let cx = (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0;
     let cy = (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0;
 
     let click_count = if dbl_click { 2_i64 } else { 1_i64 };
 
-    // Step 3: Dispatch mouse events: Move → Press → Release.
+    // Dispatch mouse events: Move -> Press -> Release.
     let move_event = DispatchMouseEventParams::new(DispatchMouseEventType::MouseMoved, cx, cy);
 
     let mut press_event =
@@ -290,10 +282,7 @@ pub async fn cdp_click(
 
     for event in [move_event, press_event, release_event] {
         if let Err(e) = page.execute(event).await {
-            return CallToolResult::error(vec![Content::text(format!(
-                "Click failed on uid={}: {}",
-                uid, e
-            ))]);
+            return cdp_error(format!("Click failed on uid={}: {}", uid, e));
         }
     }
 
@@ -308,28 +297,19 @@ pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallT
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {
         Some(c) => c,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No CDP connection. Use cdp_connect first.",
-            )]);
-        }
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
 
     let pages = match client.browser.pages().await {
         Ok(p) => p,
-        Err(e) => {
-            return CallToolResult::error(vec![Content::text(format!(
-                "Failed to list pages: {}",
-                e
-            ))]);
-        }
+        Err(e) => return cdp_error(format!("Failed to list pages: {}", e)),
     };
 
     // Filter out chrome-extension:// pages.
     let mut filtered: Vec<chromiumoxide::page::Page> = Vec::new();
     for page in pages {
         let url = page.url().await.ok().flatten().unwrap_or_default();
-        if !url.starts_with("chrome-extension://") {
+        if !is_extension_url(&url) {
             filtered.push(page);
         }
     }
@@ -342,7 +322,6 @@ pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallT
 
     let total = filtered.len();
     let mut output = format!("Pages ({} total):\n", total);
-    let mut page_urls: Vec<String> = Vec::with_capacity(total);
     for (i, page) in filtered.iter().enumerate() {
         let url = page.url().await.ok().flatten().unwrap_or_default();
         let marker = if url == selected_url && !url.is_empty() {
@@ -351,7 +330,6 @@ pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallT
             ""
         };
         output.push_str(&format!("  [{}]{} {}\n", i, marker, url));
-        page_urls.push(url);
     }
 
     client.last_page_list = filtered;
@@ -366,34 +344,25 @@ pub async fn cdp_select_page(
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {
         Some(c) => c,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No CDP connection. Use cdp_connect first.",
-            )]);
-        }
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
 
     if client.last_page_list.is_empty() {
-        return CallToolResult::error(vec![Content::text(
-            "No page list available. Call cdp_list_pages first.",
-        )]);
+        return cdp_error("No page list available. Call cdp_list_pages first.");
     }
 
     if page_idx >= client.last_page_list.len() {
-        return CallToolResult::error(vec![Content::text(format!(
+        return cdp_error(format!(
             "Page index {} is out of range (0..{}). Call cdp_list_pages to refresh.",
             page_idx,
             client.last_page_list.len()
-        ))]);
+        ));
     }
 
     let page = client.last_page_list[page_idx].clone();
 
     if let Err(e) = page.bring_to_front().await {
-        return CallToolResult::error(vec![Content::text(format!(
-            "Failed to bring page {} to front: {}",
-            page_idx, e
-        ))]);
+        return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
     }
 
     let url = page.url().await.ok().flatten().unwrap_or_default();
@@ -410,23 +379,14 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {
         Some(c) => c,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No CDP connection. Use cdp_connect first.",
-            )]);
-        }
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
 
-    let page = match &client.selected_page {
-        Some(p) => p,
-        None => {
-            return CallToolResult::error(vec![Content::text(
-                "No page selected. Use cdp_list_pages and cdp_select_page first.",
-            )]);
-        }
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
     };
 
-    // Call Accessibility.getFullAXTree via chromiumoxide.
     let result = page
         .execute(
             chromiumoxide::cdp::browser_protocol::accessibility::GetFullAxTreeParams::default(),
@@ -435,7 +395,6 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
 
     match result {
         Ok(response) => {
-            // Serialize each AxNode to serde_json::Value for the converter.
             let nodes_json: Vec<serde_json::Value> = response
                 .result
                 .nodes
@@ -453,9 +412,6 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
 
             CallToolResult::success(vec![Content::text(output)])
         }
-        Err(e) => CallToolResult::error(vec![Content::text(format!(
-            "Failed to get accessibility tree: {}",
-            e
-        ))]),
+        Err(e) => cdp_error(format!("Failed to get accessibility tree: {}", e)),
     }
 }

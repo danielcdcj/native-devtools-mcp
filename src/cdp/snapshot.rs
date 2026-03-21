@@ -18,12 +18,11 @@ pub fn convert_cdp_ax_tree(
             SnapshotMap {
                 uid_to_node: HashMap::new(),
                 page_url: page_url.to_string(),
-                navigation_id: None,
             },
         );
     }
 
-    // Step 1: build nodeId → array-index map.
+    // Build nodeId -> array-index map.
     let mut id_to_index: HashMap<String, usize> = HashMap::new();
     for (i, node) in nodes.iter().enumerate() {
         if let Some(node_id) = node["nodeId"].as_str() {
@@ -31,14 +30,14 @@ pub fn convert_cdp_ax_tree(
         }
     }
 
-    // Step 2: build nodeId → children-indices map from childIds.
-    let mut children_map: HashMap<String, Vec<usize>> = HashMap::new();
-    for node in nodes.iter() {
+    // Build nodeId -> children-indices map from childIds.
+    let mut children_map: HashMap<String, Vec<usize>> = HashMap::with_capacity(nodes.len());
+    for node in nodes {
         let node_id = match node["nodeId"].as_str() {
-            Some(id) => id.to_string(),
+            Some(id) => id,
             None => continue,
         };
-        let child_ids: Vec<usize> = node["childIds"]
+        let child_indices = node["childIds"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -47,15 +46,13 @@ pub fn convert_cdp_ax_tree(
                     .collect()
             })
             .unwrap_or_default();
-        children_map.insert(node_id, child_ids);
+        children_map.insert(node_id.to_string(), child_indices);
     }
 
-    // Step 3: DFS from root (first node), assigning sequential UIDs.
+    // DFS from root (first node), assigning sequential UIDs.
     let mut snapshot_nodes: Vec<AXSnapshotNode> = Vec::new();
     let mut uid_to_node: HashMap<String, SnapshotNode> = HashMap::new();
     let mut uid_counter: u32 = 1;
-
-    // Stack entries: (node_index, depth)
     let mut stack: Vec<(usize, u32)> = vec![(0, 0)];
 
     while let Some((idx, depth)) = stack.pop() {
@@ -63,19 +60,16 @@ pub fn convert_cdp_ax_tree(
         let uid = uid_counter;
         uid_counter += 1;
 
-        // Extract role.
         let role = node["role"]["value"]
             .as_str()
             .unwrap_or("unknown")
             .to_string();
 
-        // Extract name (omit if empty).
         let name = node["name"]["value"]
             .as_str()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        // Extract properties.
         let mut value: Option<String> = None;
         let mut focused = false;
         let mut disabled = false;
@@ -85,28 +79,27 @@ pub fn convert_cdp_ax_tree(
         if let Some(props) = node["properties"].as_array() {
             for prop in props {
                 let prop_name = prop["name"].as_str().unwrap_or("");
+                let prop_value = &prop["value"]["value"];
                 match prop_name {
-                    "value" => {
-                        value = prop["value"]["value"].as_str().map(|s| s.to_string());
-                    }
-                    "focused" => {
-                        focused = prop["value"]["value"].as_bool().unwrap_or(false);
-                    }
-                    "disabled" => {
-                        disabled = prop["value"]["value"].as_bool().unwrap_or(false);
-                    }
-                    "expanded" => {
-                        expanded = prop["value"]["value"].as_bool();
-                    }
-                    "selected" => {
-                        selected = prop["value"]["value"].as_bool();
-                    }
+                    "value" => value = prop_value.as_str().map(|s| s.to_string()),
+                    "focused" => focused = prop_value.as_bool().unwrap_or(false),
+                    "disabled" => disabled = prop_value.as_bool().unwrap_or(false),
+                    "expanded" => expanded = prop_value.as_bool(),
+                    "selected" => selected = prop_value.as_bool(),
                     _ => {}
                 }
             }
         }
 
-        // Record snapshot map entry.
+        // Fallback: some controls put the accessible value in the top-level
+        // `value` field rather than in `properties`.
+        if value.is_none() {
+            value = node["value"]["value"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+        }
+
         let backend_node_id = node["backendDOMNodeId"].as_i64().unwrap_or(0);
         uid_to_node.insert(
             uid.to_string(),
@@ -130,8 +123,8 @@ pub fn convert_cdp_ax_tree(
         });
 
         // Push children in reverse order so the first child is processed first.
-        let node_id = node["nodeId"].as_str().unwrap_or("").to_string();
-        if let Some(child_indices) = children_map.get(&node_id) {
+        let node_id = node["nodeId"].as_str().unwrap_or("");
+        if let Some(child_indices) = children_map.get(node_id) {
             for &child_idx in child_indices.iter().rev() {
                 stack.push((child_idx, depth + 1));
             }
@@ -141,7 +134,6 @@ pub fn convert_cdp_ax_tree(
     let snapshot_map = SnapshotMap {
         uid_to_node,
         page_url: page_url.to_string(),
-        navigation_id: None,
     };
 
     (snapshot_nodes, snapshot_map)

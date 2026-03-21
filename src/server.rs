@@ -147,7 +147,8 @@ impl MacOSDevToolsServer {
                 tools.extend(Self::get_cdp_tools());
             }
         }
-        let _ = cdp_connected; // suppress unused warning when cdp feature is off
+        #[cfg(not(feature = "cdp"))]
+        let _ = cdp_connected;
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
         tools
@@ -1178,12 +1179,7 @@ impl MacOSDevToolsServer {
                 "Take an accessibility tree snapshot of the selected browser page. Returns a structured text representation with unique element IDs that can be used with cdp_click and cdp_evaluate_script.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
-                    "properties": {
-                        "verbose": {
-                            "type": "boolean",
-                            "description": "Include all attributes in the snapshot (default: false)"
-                        }
-                    }
+                    "properties": {}
                 }))),
             ),
             Tool::new(
@@ -1918,13 +1914,16 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_connect" => {
-                let port = args
-                    .get("port")
-                    .and_then(|v| v.as_u64())
-                    .map(|p| p as u16)
-                    .ok_or_else(|| {
-                        McpError::invalid_params("missing required param: port", None)
-                    })?;
+                let port_num = args.get("port").and_then(|v| v.as_u64()).ok_or_else(|| {
+                    McpError::invalid_params("missing required param: port", None)
+                })?;
+                if port_num > 65535 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Invalid port: {}. Port must be 0-65535.",
+                        port_num
+                    ))]));
+                }
+                let port = port_num as u16;
                 match crate::cdp::CdpClient::connect(port).await {
                     Ok(client) => {
                         let page_info = if let Some(page) = client.selected_page.as_ref() {

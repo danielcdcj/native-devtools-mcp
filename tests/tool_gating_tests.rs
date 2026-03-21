@@ -515,13 +515,15 @@ mod hover_tracking_tool_gating {
             app_only.len() - base.len()
         );
 
-        // All four states are additive
+        // All five states are additive
         let android_only = MacOSDevToolsServer::get_tools(false, true, false, false, false);
+        let cdp_only = MacOSDevToolsServer::get_tools(false, false, true, false, false);
         let recording_only = MacOSDevToolsServer::get_tools(false, false, false, false, true);
-        let all = MacOSDevToolsServer::get_tools(true, true, false, true, true);
+        let all = MacOSDevToolsServer::get_tools(true, true, true, true, true);
         let expected_total = base.len()
             + (app_only.len() - base.len())
             + (android_only.len() - base.len())
+            + (cdp_only.len() - base.len())
             + (hover_only.len() - base.len())
             + (recording_only.len() - base.len());
         assert_eq!(all.len(), expected_total);

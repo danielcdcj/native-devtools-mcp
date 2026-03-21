@@ -9,6 +9,7 @@ pub mod tools;
 use chromiumoxide::browser::Browser;
 use chromiumoxide::page::Page;
 use futures_util::StreamExt;
+use rmcp::model::{CallToolResult, Content};
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
 
@@ -28,53 +29,101 @@ impl CdpClient {
     /// chromiumoxide handler loop, and auto-selects the first non-extension page.
     pub async fn connect(port: u16) -> Result<Self, String> {
         let url = format!("http://127.0.0.1:{}", port);
-        let (browser, mut handler) = Browser::connect(&url)
+        let (mut browser, mut handler) = Browser::connect(&url)
             .await
-            .map_err(|e| format!("Failed to connect to Chrome on port {}: {}", port, e))?;
+            .map_err(|e| format!("Cannot connect to port {}. Is the app running with --remote-debugging-port? Error: {}", port, e))?;
 
-        // The handler must be continuously polled in a background task.
         let handler_handle = tokio::spawn(async move { while handler.next().await.is_some() {} });
 
-        // Fetch pages and auto-select the first non-extension page.
-        let pages = browser
+        // Discover pre-existing targets (pages opened before we connected).
+        // fetch_targets() queues discovery; pages() may not see them immediately.
+        // Retry briefly to let target attachment complete.
+        let _ = browser.fetch_targets().await;
+        let mut pages = browser
             .pages()
             .await
             .map_err(|e| format!("Failed to list pages: {}", e))?;
 
-        // Auto-select the first non-extension page.
-        let mut selected_page = None;
-        for page in &pages {
-            let url = page.url().await.ok().flatten().unwrap_or_default();
-            if !url.starts_with("chrome-extension://") {
-                selected_page = Some(page.clone());
-                break;
-            }
+        if pages.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let _ = browser.fetch_targets().await;
+            pages = browser
+                .pages()
+                .await
+                .map_err(|e| format!("Failed to list pages: {}", e))?;
         }
 
-        let last_page_list = pages;
+        let selected_page = first_non_extension_page(&pages).await;
 
         Ok(Self {
             browser,
             selected_page,
             handler_handle,
             last_snapshot: None,
-            last_page_list,
+            last_page_list: pages,
         })
     }
 
     /// Disconnect from the browser by aborting the handler task.
     pub fn disconnect(self) {
         self.handler_handle.abort();
-        // Browser and other fields drop naturally.
+    }
+
+    /// Get the selected page, or return a tool error.
+    pub fn require_page(&self) -> Result<Page, CallToolResult> {
+        self.selected_page.clone().ok_or_else(|| {
+            cdp_error("No page selected. Use cdp_list_pages and cdp_select_page first.")
+        })
+    }
+
+    /// Get the snapshot map, or return a tool error.
+    pub fn require_snapshot(&self) -> Result<&SnapshotMap, CallToolResult> {
+        self.last_snapshot
+            .as_ref()
+            .ok_or_else(|| cdp_error("No snapshot available. Call cdp_take_snapshot first."))
+    }
+
+    /// Verify the snapshot is still valid for the given page URL.
+    pub fn check_snapshot_staleness(
+        &self,
+        current_url: &str,
+    ) -> Result<&SnapshotMap, CallToolResult> {
+        let snapshot = self.require_snapshot()?;
+        if current_url != snapshot.page_url {
+            return Err(cdp_error(
+                "Snapshot is stale \u{2014} page has navigated since last snapshot. Call cdp_take_snapshot again.",
+            ));
+        }
+        Ok(snapshot)
     }
 }
 
+/// Return true if the URL belongs to a Chrome extension.
+pub(crate) fn is_extension_url(url: &str) -> bool {
+    url.starts_with("chrome-extension://")
+}
+
+/// Find the first non-extension page from a list of pages.
+async fn first_non_extension_page(pages: &[Page]) -> Option<Page> {
+    for page in pages {
+        let url = page.url().await.ok().flatten().unwrap_or_default();
+        if !is_extension_url(&url) {
+            return Some(page.clone());
+        }
+    }
+    None
+}
+
+/// Shorthand for building a CDP tool error result.
+pub fn cdp_error(msg: impl Into<String>) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(msg.into())])
+}
+
 /// Maps snapshot UIDs to CDP node identifiers for click/eval resolution.
-/// Stores page_url and navigation_id for stale snapshot detection.
+/// Stores page_url for stale snapshot detection.
 pub struct SnapshotMap {
     pub uid_to_node: HashMap<String, SnapshotNode>,
     pub page_url: String,
-    pub navigation_id: Option<String>,
 }
 
 pub struct SnapshotNode {
