@@ -288,6 +288,108 @@ pub async fn cdp_click(
     ))])
 }
 
+pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
+    let mut guard = cdp_client.write().await;
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => {
+            return CallToolResult::error(vec![Content::text(
+                "No CDP connection. Use cdp_connect first.",
+            )]);
+        }
+    };
+
+    let pages = match client.browser.pages().await {
+        Ok(p) => p,
+        Err(e) => {
+            return CallToolResult::error(vec![Content::text(format!(
+                "Failed to list pages: {}",
+                e
+            ))]);
+        }
+    };
+
+    // Filter out chrome-extension:// pages.
+    let mut filtered: Vec<chromiumoxide::page::Page> = Vec::new();
+    for page in pages {
+        let url = page.url().await.ok().flatten().unwrap_or_default();
+        if !url.starts_with("chrome-extension://") {
+            filtered.push(page);
+        }
+    }
+
+    // Determine which page is currently selected (by comparing URLs).
+    let selected_url = match &client.selected_page {
+        Some(p) => p.url().await.ok().flatten().unwrap_or_default(),
+        None => String::new(),
+    };
+
+    let total = filtered.len();
+    let mut output = format!("Pages ({} total):\n", total);
+    let mut page_urls: Vec<String> = Vec::with_capacity(total);
+    for (i, page) in filtered.iter().enumerate() {
+        let url = page.url().await.ok().flatten().unwrap_or_default();
+        let marker = if url == selected_url && !url.is_empty() {
+            " *"
+        } else {
+            ""
+        };
+        output.push_str(&format!("  [{}]{} {}\n", i, marker, url));
+        page_urls.push(url);
+    }
+
+    client.last_page_list = filtered;
+
+    CallToolResult::success(vec![Content::text(output.trim_end().to_string())])
+}
+
+pub async fn cdp_select_page(
+    page_idx: usize,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let mut guard = cdp_client.write().await;
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => {
+            return CallToolResult::error(vec![Content::text(
+                "No CDP connection. Use cdp_connect first.",
+            )]);
+        }
+    };
+
+    if client.last_page_list.is_empty() {
+        return CallToolResult::error(vec![Content::text(
+            "No page list available. Call cdp_list_pages first.",
+        )]);
+    }
+
+    if page_idx >= client.last_page_list.len() {
+        return CallToolResult::error(vec![Content::text(format!(
+            "Page index {} is out of range (0..{}). Call cdp_list_pages to refresh.",
+            page_idx,
+            client.last_page_list.len()
+        ))]);
+    }
+
+    let page = client.last_page_list[page_idx].clone();
+
+    if let Err(e) = page.bring_to_front().await {
+        return CallToolResult::error(vec![Content::text(format!(
+            "Failed to bring page {} to front: {}",
+            page_idx, e
+        ))]);
+    }
+
+    let url = page.url().await.ok().flatten().unwrap_or_default();
+    client.selected_page = Some(page);
+    client.last_snapshot = None;
+
+    CallToolResult::success(vec![Content::text(format!(
+        "Selected page [{}]: {}",
+        page_idx, url
+    ))])
+}
+
 pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {

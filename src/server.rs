@@ -1228,7 +1228,28 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-            // More tools will be added in task 12
+            Tool::new(
+                "cdp_list_pages",
+                "List all pages (tabs) in the connected browser. Returns page indices for use with cdp_select_page.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "cdp_select_page",
+                "Select a browser page (tab) by index for subsequent CDP operations. Call cdp_list_pages first to see available indices.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["page_idx"],
+                    "properties": {
+                        "page_idx": {
+                            "type": "integer",
+                            "description": "Page index from cdp_list_pages"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 }
@@ -1959,6 +1980,21 @@ impl ServerHandler for MacOSDevToolsServer {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 Ok(crate::cdp::tools::cdp_click(uid, dbl_click, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_list_pages" => {
+                Ok(crate::cdp::tools::cdp_list_pages(self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_select_page" => {
+                let page_idx = args
+                    .get("page_idx")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as usize)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing required param: page_idx", None)
+                    })?;
+                Ok(crate::cdp::tools::cdp_select_page(page_idx, self.cdp_client.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
