@@ -1186,7 +1186,31 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-            // More tools will be added in tasks 10-12
+            Tool::new(
+                "cdp_evaluate_script",
+                "Evaluate a JavaScript function in the selected browser page. Returns the result as JSON. Optionally pass element UIDs from a snapshot as arguments.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["function"],
+                    "properties": {
+                        "function": {
+                            "type": "string",
+                            "description": "JavaScript function to evaluate (e.g., '() => document.title' or '(el) => el.innerText')"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "uid": { "type": "string", "description": "Element UID from cdp_take_snapshot" }
+                                }
+                            },
+                            "description": "Optional element arguments from snapshot UIDs"
+                        }
+                    }
+                }))),
+            ),
+            // More tools will be added in tasks 11-12
         ]
     }
 }
@@ -1897,6 +1921,17 @@ impl ServerHandler for MacOSDevToolsServer {
             #[cfg(feature = "cdp")]
             "cdp_take_snapshot" => {
                 Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_evaluate_script" => {
+                let function = parse_string_field(&args, "function")?;
+                let script_args = args.get("args").and_then(|v| v.as_array()).cloned();
+                Ok(crate::cdp::tools::cdp_evaluate_script(
+                    function,
+                    script_args,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
