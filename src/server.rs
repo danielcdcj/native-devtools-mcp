@@ -1220,6 +1220,10 @@ impl MacOSDevToolsServer {
                         "dbl_click": {
                             "type": "boolean",
                             "description": "Double-click instead of single click (default: false)"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
                         }
                     }
                 }))),
@@ -1256,6 +1260,10 @@ impl MacOSDevToolsServer {
                         "uid": {
                             "type": "string",
                             "description": "The uid of an element on the page from cdp_take_snapshot"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
                         }
                     }
                 }))),
@@ -1274,6 +1282,10 @@ impl MacOSDevToolsServer {
                         "value": {
                             "type": "string",
                             "description": "The value to fill in"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
                         }
                     }
                 }))),
@@ -1288,6 +1300,10 @@ impl MacOSDevToolsServer {
                         "key": {
                             "type": "string",
                             "description": "A key or combination (e.g., 'Enter', 'Control+A', 'Control++', 'Control+Shift+R'). Modifiers: Control, Shift, Alt, Meta"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
                         }
                     }
                 }))),
@@ -1359,18 +1375,38 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_wait_for",
-                "Wait for the specified text to appear on the selected page.",
+                "Wait for the specified text to appear on the selected page. Resolves when any value appears.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1,
+                            "description": "Non-empty list of texts. Resolves when any value appears on the page."
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum wait time in milliseconds (default: 10000)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_type_text",
+                "Type text using keyboard into a previously focused input. Use cdp_fill for form fields; use this for character-by-character keyboard input.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["text"],
                     "properties": {
                         "text": {
                             "type": "string",
-                            "description": "Text to appear on the page"
+                            "description": "The text to type"
                         },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "Maximum wait time in milliseconds (default: 10000)"
+                        "submit_key": {
+                            "type": "string",
+                            "description": "Optional key to press after typing (e.g., 'Enter', 'Tab', 'Escape')"
                         }
                     }
                 }))),
@@ -2107,7 +2143,17 @@ impl ServerHandler for MacOSDevToolsServer {
                     .get("dbl_click")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                Ok(crate::cdp::tools::cdp_click(uid, dbl_click, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_click(
+                    uid,
+                    dbl_click,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_list_pages" => {
@@ -2127,18 +2173,46 @@ impl ServerHandler for MacOSDevToolsServer {
             #[cfg(feature = "cdp")]
             "cdp_hover" => {
                 let uid = parse_string_field(&args, "uid")?;
-                Ok(crate::cdp::tools::cdp_hover(uid, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(
+                    crate::cdp::tools::cdp_hover(uid, include_snapshot, self.cdp_client.clone())
+                        .await,
+                )
             }
             #[cfg(feature = "cdp")]
             "cdp_fill" => {
                 let uid = parse_string_field(&args, "uid")?;
                 let value = parse_string_field(&args, "value")?;
-                Ok(crate::cdp::tools::cdp_fill(uid, value, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_fill(
+                    uid,
+                    value,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_press_key" => {
                 let key = parse_string_field(&args, "key")?;
-                Ok(crate::cdp::tools::cdp_press_key(key, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(
+                    crate::cdp::tools::cdp_press_key(
+                        key,
+                        include_snapshot,
+                        self.cdp_client.clone(),
+                    )
+                    .await,
+                )
             }
             #[cfg(feature = "cdp")]
             "cdp_handle_dialog" => {
@@ -2178,9 +2252,35 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_wait_for" => {
-                let text = parse_string_field(&args, "text")?;
+                let texts: Vec<String> = args
+                    .get("text")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if texts.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "missing required param: text (array of strings)",
+                        None,
+                    ));
+                }
                 let timeout = args.get("timeout").and_then(|v| v.as_u64());
-                Ok(crate::cdp::tools::cdp_wait_for(text, timeout, self.cdp_client.clone()).await)
+                Ok(crate::cdp::tools::cdp_wait_for(texts, timeout, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_type_text" => {
+                let text = parse_string_field(&args, "text")?;
+                let submit_key = args
+                    .get("submit_key")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(
+                    crate::cdp::tools::cdp_type_text(text, submit_key, self.cdp_client.clone())
+                        .await,
+                )
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),

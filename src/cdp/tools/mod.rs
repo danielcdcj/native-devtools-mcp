@@ -7,7 +7,7 @@ mod input;
 mod pages;
 mod script;
 
-pub use input::{cdp_click, cdp_fill, cdp_hover, cdp_press_key};
+pub use input::{cdp_click, cdp_fill, cdp_hover, cdp_press_key, cdp_type_text};
 pub use pages::{
     cdp_close_page, cdp_handle_dialog, cdp_list_pages, cdp_navigate, cdp_new_page, cdp_select_page,
 };

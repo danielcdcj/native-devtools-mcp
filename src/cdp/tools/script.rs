@@ -224,19 +224,24 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
 const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
 
 pub async fn cdp_wait_for(
-    text: String,
+    texts: Vec<String>,
     timeout_ms: Option<u64>,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
+    if texts.is_empty() {
+        return cdp_error("At least one text value is required.");
+    }
+
     let raw_timeout = timeout_ms.unwrap_or(10_000).min(MAX_WAIT_TIMEOUT_MS);
     let timeout = std::time::Duration::from_millis(raw_timeout);
     let poll_interval = std::time::Duration::from_millis(500);
     let start = std::time::Instant::now();
 
-    // Use a lightweight JS check for polling, only take a full snapshot on success.
+    // Build JS check: resolves true when any of the texts appear in the page body.
+    let texts_json = serde_json::to_string(&texts).unwrap_or_else(|_| format!("{:?}", texts));
     let check_js = format!(
-        "document.body && document.body.innerText.includes({})",
-        serde_json::to_string(&text).unwrap_or_else(|_| format!("\"{}\"", text))
+        "document.body && {}.some(t => document.body.innerText.includes(t))",
+        texts_json
     );
 
     loop {
@@ -272,9 +277,9 @@ pub async fn cdp_wait_for(
 
         if start.elapsed() >= timeout {
             return cdp_error(format!(
-                "Timed out after {}ms waiting for text: '{}'",
+                "Timed out after {}ms waiting for text: {}",
                 timeout.as_millis(),
-                text
+                texts_json
             ));
         }
 

@@ -190,6 +190,7 @@ mod cdp_tool_gating {
         assert!(!names.contains(&"cdp_new_page".to_string()));
         assert!(!names.contains(&"cdp_close_page".to_string()));
         assert!(!names.contains(&"cdp_wait_for".to_string()));
+        assert!(!names.contains(&"cdp_type_text".to_string()));
     }
 
     #[test]
@@ -215,6 +216,7 @@ mod cdp_tool_gating {
         assert!(names.contains(&"cdp_new_page".to_string()));
         assert!(names.contains(&"cdp_close_page".to_string()));
         assert!(names.contains(&"cdp_wait_for".to_string()));
+        assert!(names.contains(&"cdp_type_text".to_string()));
     }
 
     #[test]
@@ -229,8 +231,8 @@ mod cdp_tool_gating {
             disconnected.len()
         );
 
-        // Should add exactly 14 tools (disconnect + 13 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 14);
+        // Should add exactly 15 tools (disconnect + 14 functional tools)
+        assert_eq!(connected.len() - disconnected.len(), 15);
     }
 }
 

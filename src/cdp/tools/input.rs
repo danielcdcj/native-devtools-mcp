@@ -1,4 +1,4 @@
-//! CDP input tools: click, hover, fill, press_key.
+//! CDP input tools: click, hover, fill, press_key, type_text.
 
 use super::{resolve_element_center, resolve_node, resolve_to_object_id};
 use crate::cdp::{cdp_error, CdpClient};
@@ -11,9 +11,24 @@ use rmcp::model::{CallToolResult, Content};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Append a snapshot to an existing tool result if `include_snapshot` is true.
+async fn maybe_append_snapshot(
+    mut result: CallToolResult,
+    include_snapshot: bool,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    if !include_snapshot {
+        return result;
+    }
+    let snapshot = super::script::cdp_take_snapshot(cdp_client).await;
+    result.content.extend(snapshot.content);
+    result
+}
+
 pub async fn cdp_click(
     uid: String,
     dbl_click: bool,
+    include_snapshot: bool,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let guard = cdp_client.read().await;
@@ -56,13 +71,18 @@ pub async fn cdp_click(
     }
 
     let dbl_note = if dbl_click { " (double-click)" } else { "" };
-    CallToolResult::success(vec![Content::text(format!(
+    let result = CallToolResult::success(vec![Content::text(format!(
         "Clicked uid={} '{}' ({}) at ({:.1}, {:.1}){}",
         uid, node_name, node_role, cx, cy, dbl_note
-    ))])
+    ))]);
+    maybe_append_snapshot(result, include_snapshot, cdp_client).await
 }
 
-pub async fn cdp_hover(uid: String, cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
+pub async fn cdp_hover(
+    uid: String,
+    include_snapshot: bool,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
     let guard = cdp_client.read().await;
     let client = match guard.as_ref() {
         Some(c) => c,
@@ -86,15 +106,17 @@ pub async fn cdp_hover(uid: String, cdp_client: Arc<RwLock<Option<CdpClient>>>) 
         return cdp_error(format!("Hover failed on uid={}: {}", uid, e));
     }
 
-    CallToolResult::success(vec![Content::text(format!(
+    let result = CallToolResult::success(vec![Content::text(format!(
         "Hovered uid={} '{}' ({}) at ({:.1}, {:.1})",
         uid, node_name, node_role, cx, cy
-    ))])
+    ))]);
+    maybe_append_snapshot(result, include_snapshot, cdp_client).await
 }
 
 pub async fn cdp_fill(
     uid: String,
     value: String,
+    include_snapshot: bool,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let guard = cdp_client.read().await;
@@ -148,7 +170,7 @@ pub async fn cdp_fill(
         Err(e) => return cdp_error(format!("Failed to build call params: {}", e)),
     };
 
-    match page.execute(call_params).await {
+    let result = match page.execute(call_params).await {
         Ok(resp) => {
             if let Some(exc) = &resp.result.exception_details {
                 return cdp_error(format!("Fill failed: {}", exc.text));
@@ -158,8 +180,9 @@ pub async fn cdp_fill(
                 uid, node_name, node_role, value
             ))])
         }
-        Err(e) => cdp_error(format!("Fill failed on uid={}: {}", uid, e)),
-    }
+        Err(e) => return cdp_error(format!("Fill failed on uid={}: {}", uid, e)),
+    };
+    maybe_append_snapshot(result, include_snapshot, cdp_client).await
 }
 
 /// Map a key name to its CDP key identifier, code, and Windows virtual key code.
@@ -317,6 +340,7 @@ fn parse_key_combo(key: &str) -> Result<ParsedKeyCombo, String> {
 
 pub async fn cdp_press_key(
     key: String,
+    include_snapshot: bool,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let guard = cdp_client.read().await;
@@ -416,7 +440,83 @@ pub async fn cdp_press_key(
         let _ = page.execute(params).await;
     }
 
-    CallToolResult::success(vec![Content::text(format!("Pressed key: {}", key))])
+    let result = CallToolResult::success(vec![Content::text(format!("Pressed key: {}", key))]);
+    maybe_append_snapshot(result, include_snapshot, cdp_client).await
+}
+
+pub async fn cdp_type_text(
+    text: String,
+    submit_key: Option<String>,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let guard = cdp_client.read().await;
+    let client = match guard.as_ref() {
+        Some(c) => c,
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
+    };
+
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    drop(guard);
+
+    // Type each character via key events.
+    for ch in text.chars() {
+        let (code, vk) = char_key_code(ch);
+
+        let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
+        down.key = Some(ch.to_string());
+        down.code = Some(code.to_string());
+        down.windows_virtual_key_code = Some(vk);
+        if let Err(e) = page.execute(down).await {
+            return cdp_error(format!("Failed to type character '{}': {}", ch, e));
+        }
+
+        let mut char_event = DispatchKeyEventParams::new(DispatchKeyEventType::Char);
+        char_event.text = Some(ch.to_string());
+        let _ = page.execute(char_event).await;
+
+        let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
+        up.key = Some(ch.to_string());
+        up.code = Some(code.to_string());
+        up.windows_virtual_key_code = Some(vk);
+        let _ = page.execute(up).await;
+    }
+
+    // Optionally press a submit key after typing.
+    if let Some(ref sk) = submit_key {
+        if let Some((key_val, code, vk)) = key_definition(sk) {
+            let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
+            down.key = Some(key_val.to_string());
+            down.code = Some(code.to_string());
+            down.windows_virtual_key_code = Some(vk);
+            if let Err(e) = page.execute(down).await {
+                return cdp_error(format!("Failed to press submit key '{}': {}", sk, e));
+            }
+
+            let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
+            up.key = Some(key_val.to_string());
+            up.code = Some(code.to_string());
+            up.windows_virtual_key_code = Some(vk);
+            let _ = page.execute(up).await;
+        } else {
+            return cdp_error(format!(
+                "Unknown submit key '{}'. Use key names like Enter, Tab, Escape.",
+                sk
+            ));
+        }
+    }
+
+    let suffix = submit_key
+        .as_ref()
+        .map(|k| format!(" + {}", k))
+        .unwrap_or_default();
+    CallToolResult::success(vec![Content::text(format!(
+        "Typed text \"{}{}\"",
+        text, suffix
+    ))])
 }
 
 #[cfg(test)]
