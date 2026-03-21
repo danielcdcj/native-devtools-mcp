@@ -167,8 +167,8 @@ fn capture_frontmost_frame(
         // list_windows() returns windows in front-to-back order via
         // CGWindowListCopyWindowInfo.  The first layer-0 window is the
         // frontmost user app — no NSWorkspace needed.
-        let windows = macos::window::list_windows()
-            .map_err(|e| format!("Failed to list windows: {e}"))?;
+        let windows =
+            macos::window::list_windows().map_err(|e| format!("Failed to list windows: {e}"))?;
         let win = windows
             .iter()
             .find(|w| w.layer == 0)
@@ -187,8 +187,7 @@ fn capture_frontmost_frame(
 
         let filename = format!("frame_{timestamp_ms}.jpg");
         let path = output_dir.join(&filename);
-        std::fs::write(&path, &jpeg_data)
-            .map_err(|e| format!("Failed to write frame: {e}"))?;
+        std::fs::write(&path, &jpeg_data).map_err(|e| format!("Failed to write frame: {e}"))?;
 
         Ok((
             RecordedFrame {
@@ -211,7 +210,9 @@ fn capture_frontmost_frame(
     {
         use crate::windows as win_platform;
         use ::windows::Win32::Foundation::HWND;
-        use ::windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        use ::windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
 
         // Use GetForegroundWindow directly instead of enumerating all windows —
         // much cheaper at 5fps (avoids OpenProcess + QueryFullProcessImageName per window).
@@ -222,16 +223,15 @@ fn capture_frontmost_frame(
 
         let window_id = hwnd.0 as usize as u32;
         let mut raw_pid: u32 = 0;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut raw_pid)); }
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut raw_pid));
+        }
         let pid = raw_pid as i32;
 
-        let app_name = app_name_cache
-            .get(&pid)
-            .cloned()
-            .unwrap_or_else(|| {
-                // First time seeing this PID — resolve directly instead of enumerating all apps
-                crate::windows::app::get_process_name(raw_pid).unwrap_or_default()
-            });
+        let app_name = app_name_cache.get(&pid).cloned().unwrap_or_else(|| {
+            // First time seeing this PID — resolve directly instead of enumerating all apps
+            crate::windows::app::get_process_name(raw_pid).unwrap_or_default()
+        });
 
         let timestamp_ms = now_millis();
         let (jpeg_data, meta) = win_platform::screenshot::capture_window_jpeg(window_id)
@@ -239,8 +239,7 @@ fn capture_frontmost_frame(
 
         let filename = format!("frame_{timestamp_ms}.jpg");
         let path = output_dir.join(&filename);
-        std::fs::write(&path, &jpeg_data)
-            .map_err(|e| format!("Failed to write frame: {e}"))?;
+        std::fs::write(&path, &jpeg_data).map_err(|e| format!("Failed to write frame: {e}"))?;
 
         Ok((
             RecordedFrame {
@@ -360,15 +359,25 @@ mod tests {
         let captured = frames.lock().unwrap();
         eprintln!("Captured {} frames", captured.len());
         for f in captured.iter() {
-            eprintln!("  {} wid={} {}x{} {}", f.app_name, f.window_id, f.pixel_width, f.pixel_height, f.path);
+            eprintln!(
+                "  {} wid={} {}x{} {}",
+                f.app_name, f.window_id, f.pixel_width, f.pixel_height, f.path
+            );
         }
 
         // List files on disk
         for entry in std::fs::read_dir(dir.path()).unwrap() {
             let entry = entry.unwrap();
-            eprintln!("  file: {:?} ({} bytes)", entry.file_name(), entry.metadata().unwrap().len());
+            eprintln!(
+                "  file: {:?} ({} bytes)",
+                entry.file_name(),
+                entry.metadata().unwrap().len()
+            );
         }
 
-        assert!(!captured.is_empty(), "Should have captured at least one frame");
+        assert!(
+            !captured.is_empty(),
+            "Should have captured at least one frame"
+        );
     }
 }

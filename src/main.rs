@@ -2,6 +2,8 @@
 #![allow(deprecated)]
 
 mod app_protocol;
+#[cfg(feature = "cdp")]
+mod cdp;
 mod cli;
 #[cfg(target_os = "macos")]
 mod macos;

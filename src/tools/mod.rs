@@ -1,4 +1,5 @@
 pub mod app_protocol;
+pub mod ax_snapshot;
 pub mod find_image;
 pub mod hover_tracker;
 pub mod image_cache;

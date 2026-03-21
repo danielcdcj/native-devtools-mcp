@@ -61,6 +61,8 @@ pub struct MacOSDevToolsServer {
     android_device: Arc<RwLock<Option<AndroidDevice>>>,
     hover_tracker: Arc<RwLock<Option<crate::tools::hover_tracker::HoverTracker>>>,
     screen_recorder: Arc<RwLock<Option<crate::tools::screen_recorder::ScreenRecorder>>>,
+    #[cfg(feature = "cdp")]
+    cdp_client: Arc<RwLock<Option<crate::cdp::CdpClient>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -78,6 +80,8 @@ impl MacOSDevToolsServer {
             android_device: Arc::new(RwLock::new(None)),
             hover_tracker: Arc::new(RwLock::new(None)),
             screen_recorder: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "cdp")]
+            cdp_client: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -95,6 +99,11 @@ impl MacOSDevToolsServer {
 
     async fn is_recording(&self) -> bool {
         self.screen_recorder.read().await.is_some()
+    }
+
+    #[cfg(feature = "cdp")]
+    async fn is_cdp_connected(&self) -> bool {
+        self.cdp_client.read().await.is_some()
     }
 
     /// Acquire the android device lock and call `f` with a mutable reference.
@@ -118,6 +127,7 @@ impl MacOSDevToolsServer {
     pub fn get_tools(
         app_connected: bool,
         android_connected: bool,
+        cdp_connected: bool,
         hover_tracking: bool,
         recording: bool,
     ) -> Vec<Tool> {
@@ -130,6 +140,15 @@ impl MacOSDevToolsServer {
         if android_connected {
             tools.extend(Self::get_android_tools());
         }
+        #[cfg(feature = "cdp")]
+        {
+            tools.push(Self::get_cdp_connect_tool());
+            if cdp_connected {
+                tools.extend(Self::get_cdp_tools());
+            }
+        }
+        #[cfg(not(feature = "cdp"))]
+        let _ = cdp_connected;
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
         tools
@@ -616,6 +635,19 @@ impl MacOSDevToolsServer {
                             "type": "boolean",
                             "description": "If true, include base64-encoded image data in response",
                             "default": false
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "take_ax_snapshot",
+                "Take an accessibility tree snapshot of an application. Returns a structured text representation with unique element IDs, roles, names, and state attributes. Works for any app without requiring a debug port.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name (defaults to frontmost app if omitted)"
                         }
                     }
                 }))),
@@ -1112,6 +1144,279 @@ impl MacOSDevToolsServer {
         }
         tools
     }
+
+    #[cfg(feature = "cdp")]
+    fn get_cdp_connect_tool() -> Tool {
+        Tool::new(
+            "cdp_connect",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_take_snapshot to see page elements.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["port"],
+                "properties": {
+                    "port": {
+                        "type": "integer",
+                        "description": "The remote debugging port number"
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(feature = "cdp")]
+    fn get_cdp_tools() -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "cdp_disconnect",
+                "Disconnect from the Chrome/Electron app. CDP tools will no longer be available until cdp_connect is called again.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "cdp_take_snapshot",
+                "Take a text snapshot of the selected browser page based on the accessibility tree. Returns page elements with unique IDs (uid), roles, and names. Always take a fresh snapshot before clicking or interacting — element UIDs change between snapshots. Prefer this over take_screenshot for identifying clickable elements in web content.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "cdp_evaluate_script",
+                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_snapshot via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: '5'}].",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["function"],
+                    "properties": {
+                        "function": {
+                            "type": "string",
+                            "description": "JavaScript function to evaluate (e.g., '() => document.title' or '(el) => el.innerText')"
+                        },
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "uid": { "type": "string", "description": "Element UID from cdp_take_snapshot" }
+                                }
+                            },
+                            "description": "Optional element arguments from snapshot UIDs"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_click",
+                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content. Always call cdp_take_snapshot first to get current element UIDs.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "Element UID from cdp_take_snapshot"
+                        },
+                        "dbl_click": {
+                            "type": "boolean",
+                            "description": "Double-click instead of single click (default: false)"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_list_pages",
+                "List all open pages (tabs) in the connected browser. Returns page indices and URLs. The currently selected page is marked with *. Use cdp_select_page to switch between pages.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            Tool::new(
+                "cdp_select_page",
+                "Select a browser page (tab) by index as context for subsequent CDP operations. Call cdp_list_pages first to see available pages and their indices.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["page_idx"],
+                    "properties": {
+                        "page_idx": {
+                            "type": "integer",
+                            "description": "Page index from cdp_list_pages"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_hover",
+                "Hover over the provided element.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_fill",
+                "Type text into an input, text area, or select an option from a <select> element.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid", "value"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "The value to fill in"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_press_key",
+                "Press a key or key combination. Use this when other input methods like cdp_fill cannot be used (e.g., keyboard shortcuts, navigation keys, or special key combinations).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "A key or combination (e.g., 'Enter', 'Control+A', 'Control++', 'Control+Shift+R'). Modifiers: Control, Shift, Alt, Meta"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Whether to include a snapshot in the response (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_handle_dialog",
+                "If a browser dialog was opened, use this command to handle it.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["accept", "dismiss"],
+                            "description": "Whether to accept or dismiss the dialog"
+                        },
+                        "prompt_text": {
+                            "type": "string",
+                            "description": "Optional text to enter into a prompt dialog before accepting"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_navigate",
+                "Navigate the currently selected page to a URL, or go back, forward, or reload.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Target URL (required when type is 'url')"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["url", "back", "forward", "reload"],
+                            "description": "Navigation type. Default: 'url'"
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum wait time in milliseconds for page load (default: 10000). If the page takes longer, navigation is assumed successful."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_new_page",
+                "Create a new page (tab) and navigate it to the given URL. The new page becomes the selected page.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to load in the new page"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_close_page",
+                "Close a page (tab) by its index. The last open page cannot be closed.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["page_idx"],
+                    "properties": {
+                        "page_idx": {
+                            "type": "integer",
+                            "description": "The index of the page to close. Call cdp_list_pages to list pages."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_wait_for",
+                "Wait for the specified text to appear on the selected page. Resolves when any value appears.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1,
+                            "description": "Non-empty list of texts. Resolves when any value appears on the page."
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum wait time in milliseconds (default: 10000)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_type_text",
+                "Type text using keyboard into a previously focused input. Use cdp_fill for form fields; use this for character-by-character keyboard input.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "The text to type"
+                        },
+                        "submit_key": {
+                            "type": "string",
+                            "description": "Optional key to press after typing (e.g., 'Enter', 'Tab', 'Escape')"
+                        }
+                    }
+                }))),
+            ),
+        ]
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
@@ -1170,10 +1475,15 @@ impl ServerHandler for MacOSDevToolsServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
+        #[cfg(feature = "cdp")]
+        let cdp_connected = self.is_cdp_connected().await;
+        #[cfg(not(feature = "cdp"))]
+        let cdp_connected = false;
         Ok(ListToolsResult {
             tools: Self::get_tools(
                 connected,
                 self.is_android_connected().await,
+                cdp_connected,
                 self.is_hover_tracking().await,
                 self.is_recording().await,
             ),
@@ -1341,6 +1651,15 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: load_image::LoadImageParams = serde_json::from_value(args)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(load_image::load_image(params, self.image_cache.clone()).await)
+            }
+            "take_ax_snapshot" => {
+                let params: crate::tools::ax_snapshot::TakeAxSnapshotParams =
+                    serde_json::from_value(args)
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                match crate::tools::ax_snapshot::take_ax_snapshot(params) {
+                    Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
             }
             // Android tools
             "android_list_devices" => match crate::android::device::list_devices() {
@@ -1704,10 +2023,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 }
 
                 let output_dir = parse_string_field(&args, "output_dir")?;
-                let fps = args
-                    .get("fps")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5) as u32;
+                let fps = args.get("fps").and_then(|v| v.as_u64()).unwrap_or(5) as u32;
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())
@@ -1764,6 +2080,220 @@ impl ServerHandler for MacOSDevToolsServer {
                         "No recording session is active.",
                     )])),
                 }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_connect" => {
+                let port_num = args.get("port").and_then(|v| v.as_u64()).ok_or_else(|| {
+                    McpError::invalid_params("missing required param: port", None)
+                })?;
+                if port_num > 65535 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Invalid port: {}. Port must be 0-65535.",
+                        port_num
+                    ))]));
+                }
+                let port = port_num as u16;
+                match crate::cdp::CdpClient::connect(port).await {
+                    Ok(client) => {
+                        let page_info = if let Some(page) = client.selected_page.as_ref() {
+                            let url = page.url().await.ok().flatten().unwrap_or_default();
+                            format!("Selected page: {}", url)
+                        } else {
+                            "No pages found".to_string()
+                        };
+                        *self.cdp_client.write().await = Some(client);
+                        let _ = context.peer.notify_tool_list_changed().await;
+                        Ok(CallToolResult::success(vec![Content::text(format!(
+                            "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
+                            port, page_info
+                        ))]))
+                    }
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_disconnect" => {
+                if let Some(client) = self.cdp_client.write().await.take() {
+                    client.disconnect();
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "Disconnected from Chrome/Electron. CDP tools are no longer available.",
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(
+                        "No CDP connection active.",
+                    )]))
+                }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_take_snapshot" => {
+                Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_evaluate_script" => {
+                let function = parse_string_field(&args, "function")?;
+                let script_args = args.get("args").and_then(|v| v.as_array()).cloned();
+                Ok(crate::cdp::tools::cdp_evaluate_script(
+                    function,
+                    script_args,
+                    self.cdp_client.clone(),
+                )
+                .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_click" => {
+                let uid = parse_string_field(&args, "uid")?;
+                let dbl_click = args
+                    .get("dbl_click")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_click(
+                    uid,
+                    dbl_click,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_list_pages" => {
+                Ok(crate::cdp::tools::cdp_list_pages(self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_select_page" => {
+                let page_idx = args
+                    .get("page_idx")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as usize)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing required param: page_idx", None)
+                    })?;
+                Ok(crate::cdp::tools::cdp_select_page(page_idx, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_hover" => {
+                let uid = parse_string_field(&args, "uid")?;
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(
+                    crate::cdp::tools::cdp_hover(uid, include_snapshot, self.cdp_client.clone())
+                        .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_fill" => {
+                let uid = parse_string_field(&args, "uid")?;
+                let value = parse_string_field(&args, "value")?;
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_fill(
+                    uid,
+                    value,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_press_key" => {
+                let key = parse_string_field(&args, "key")?;
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(
+                    crate::cdp::tools::cdp_press_key(
+                        key,
+                        include_snapshot,
+                        self.cdp_client.clone(),
+                    )
+                    .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_handle_dialog" => {
+                let action = parse_string_field(&args, "action")?;
+                let prompt_text = args
+                    .get("prompt_text")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(crate::cdp::tools::cdp_handle_dialog(
+                    action,
+                    prompt_text,
+                    self.cdp_client.clone(),
+                )
+                .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_navigate" => {
+                let url = args.get("url").and_then(|v| v.as_str()).map(String::from);
+                let nav_type = args.get("type").and_then(|v| v.as_str()).map(String::from);
+                let timeout = args.get("timeout").and_then(|v| v.as_u64());
+                Ok(
+                    crate::cdp::tools::cdp_navigate(
+                        url,
+                        nav_type,
+                        timeout,
+                        self.cdp_client.clone(),
+                    )
+                    .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_new_page" => {
+                let url = parse_string_field(&args, "url")?;
+                Ok(crate::cdp::tools::cdp_new_page(url, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_close_page" => {
+                let page_idx = args
+                    .get("page_idx")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as usize)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing required param: page_idx", None)
+                    })?;
+                Ok(crate::cdp::tools::cdp_close_page(page_idx, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_wait_for" => {
+                let texts: Vec<String> = args
+                    .get("text")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if texts.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "missing required param: text (array of strings)",
+                        None,
+                    ));
+                }
+                let timeout = args.get("timeout").and_then(|v| v.as_u64());
+                Ok(crate::cdp::tools::cdp_wait_for(texts, timeout, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_type_text" => {
+                let text = parse_string_field(&args, "text")?;
+                let submit_key = args
+                    .get("submit_key")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(
+                    crate::cdp::tools::cdp_type_text(text, submit_key, self.cdp_client.clone())
+                        .await,
+                )
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),

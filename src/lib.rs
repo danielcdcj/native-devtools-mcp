@@ -3,6 +3,8 @@
 
 pub mod android;
 pub mod app_protocol;
+#[cfg(feature = "cdp")]
+pub mod cdp;
 pub mod cli;
 #[cfg(target_os = "macos")]
 pub mod macos;

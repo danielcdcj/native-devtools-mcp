@@ -202,9 +202,7 @@ pub fn capture_window_cg_jpeg(
         window_id,
         kCGWindowImageBoundsIgnoreFraming,
     )
-    .ok_or_else(|| {
-        ScreenshotError::CaptureError("CGWindowListCreateImage returned null".into())
-    })?;
+    .ok_or_else(|| ScreenshotError::CaptureError("CGWindowListCreateImage returned null".into()))?;
 
     let pixel_width = cg_image.width() as u32;
     let pixel_height = cg_image.height() as u32;
@@ -262,9 +260,10 @@ fn cg_image_to_jpeg(cg_image: &core_graphics::image::CGImage) -> Result<Vec<u8>,
         }
     }
 
-    let img = image::RgbImage::from_raw(width as u32, height as u32, rgb_data).ok_or_else(|| {
-        ScreenshotError::CaptureError("Failed to create image from CGImage pixel data".into())
-    })?;
+    let img =
+        image::RgbImage::from_raw(width as u32, height as u32, rgb_data).ok_or_else(|| {
+            ScreenshotError::CaptureError("Failed to create image from CGImage pixel data".into())
+        })?;
 
     let mut jpeg_buf = Vec::new();
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(

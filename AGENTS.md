@@ -35,6 +35,14 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. |
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
+| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_snapshot()` → `cdp_click(uid="42")` | CDP is more reliable than coordinates for web content. |
+| "Type in a web input" | `cdp_take_snapshot()` → `cdp_fill(uid="42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
+| "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
+| "Navigate to a URL" | `cdp_navigate(url="https://example.com")` | Also supports back, forward, reload. |
+| "Press Enter or shortcut" | `cdp_press_key(key="Enter")` or `cdp_press_key(key="Control+A")` | Supports modifier combos. |
+| "Wait for page content" | `cdp_wait_for(text="Success")` | Polls snapshot until text appears or timeout. |
+| "Switch browser tabs" | `cdp_list_pages()` → `cdp_select_page(page_idx=1)` | List tabs, then select by index. |
+| "Get browser page structure" | `cdp_take_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
 
 ---
 
@@ -162,7 +170,62 @@ Tools appear dynamically — `stop_recording` only shows while recording is acti
 3. stop_recording → [{timestamp_ms: 1234, path: "/tmp/recording/frame_1234.jpg", app_name: "Safari", ...}, ...]
 ```
 
-### 6. Android Device Control
+### 6. Browser Automation (CDP)
+
+Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level element targeting. More reliable than screen coordinates for web content — handles offscreen elements, responsive layouts, and iframes.
+
+**Setup:**
+- **Chrome 136+:** Must launch with both `--remote-debugging-port=PORT` and `--user-data-dir=PATH` (non-default profile required — Chrome silently ignores the debug port with the default profile). The profile is persistent across launches.
+- **Electron apps** (Signal, Discord, Slack, VS Code, etc.): Only need `--remote-debugging-port=PORT`. No `--user-data-dir` required — Electron respects the flag with its default profile.
+
+#### Tools (available after `cdp_connect`)
+
+*   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
+*   `cdp_disconnect`: Disconnect and hide CDP tools.
+*   `cdp_take_snapshot`: Accessibility tree snapshot — returns elements with unique UIDs, roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
+*   `cdp_click(uid, dbl_click?)`: Click an element by UID. Scrolls into view automatically.
+*   `cdp_hover(uid)`: Hover over an element by UID.
+*   `cdp_fill(uid, value)`: Type text into an input/textarea or select an option from a `<select>`.
+*   `cdp_press_key(key)`: Press a key or combo (e.g., `"Enter"`, `"Control+A"`, `"Control+Shift+R"`). Modifiers: Control, Shift, Alt, Meta.
+*   `cdp_handle_dialog(action, prompt_text?)`: Accept or dismiss a JS dialog (alert, confirm, prompt).
+*   `cdp_navigate(url?, type?)`: Navigate to a URL, or go back/forward/reload. Type: `"url"` (default), `"back"`, `"forward"`, `"reload"`.
+*   `cdp_new_page(url)`: Create a new tab and navigate to URL. Becomes the selected page.
+*   `cdp_close_page(page_idx)`: Close a tab by index. Cannot close the last page.
+*   `cdp_wait_for(text, timeout?)`: Wait for text to appear on the page (polls snapshot, default 10s timeout).
+*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "5"}]`.
+*   `cdp_list_pages`: List open tabs/windows with indices. Selected page marked with `*`.
+*   `cdp_select_page(page_idx)`: Switch to a tab/window by index.
+
+#### Key Patterns
+
+**Finding elements in large snapshots:** Snapshots can have 500+ elements. Look for elements by their role and name — buttons, links, textboxes, and headings are the most useful. Elements like `StaticText`, `InlineTextBox`, `none`, and `generic` are usually structural and can be skipped when looking for interactive targets.
+
+#### CDP Workflow Examples
+
+**Chrome:**
+```
+1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
+2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
+3. cdp_navigate(url="https://example.com")
+4. cdp_take_snapshot()                     → uid=1 RootWebArea "Example" ...
+5. cdp_fill(uid="10", value="search query")
+6. cdp_press_key(key="Enter")
+7. cdp_wait_for(text="Results")
+8. cdp_click(uid="5")                      → "Clicked uid=5 'Submit' (button) at (200, 300)"
+```
+
+**Electron app (e.g., Slack, Discord, Signal):**
+```
+1. quit_app(app_name="MyElectronApp")
+2. launch_app(app_name="MyElectronApp", args=["--remote-debugging-port=9333"])
+3. cdp_connect(port=9333)                  → "Connected. Selected page: file:///...app.html"
+4. cdp_take_snapshot()                     → uid=1 RootWebArea "MyApp" ... (search for buttons, inputs)
+5. cdp_click(uid="42")                     → click a list item or button
+6. cdp_take_snapshot()                     → fresh snapshot of the new view
+7. cdp_fill(uid="100", value="hello")
+```
+
+### 7. Android Device Control
 
 Android support is built into every release. No feature flag or separate build is required.
 

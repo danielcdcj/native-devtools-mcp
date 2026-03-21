@@ -451,13 +451,12 @@ pub fn type_text(text: &str) -> Result<(), String> {
 
 /// Get the current cursor position in screen coordinates.
 pub fn get_cursor_position() -> Result<(f64, f64), String> {
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let mut point = POINT::default();
     unsafe {
-        GetCursorPos(&mut point)
-            .map_err(|e| format!("GetCursorPos failed: {}", e))?;
+        GetCursorPos(&mut point).map_err(|e| format!("GetCursorPos failed: {}", e))?;
     }
     Ok((point.x as f64, point.y as f64))
 }

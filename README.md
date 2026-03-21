@@ -51,9 +51,11 @@ npx -y native-devtools-mcp
 - **🔒 Local & Private:** 100% local execution. No screenshots or data are ever sent to external servers.
 - **📱 Android Support:** Connect to Android devices over ADB for screenshots, input simulation, UI element search, and app management — all from the same MCP server.
 - **🔍 Hover Tracking:** Track cursor hover transitions across UI elements in real-time. Configurable dwell threshold filters pass-through noise — designed for LLMs observing user navigation patterns.
+- **🌐 Browser Automation (CDP):** Connect to Chrome/Electron apps via Chrome DevTools Protocol. Take accessibility tree snapshots, click elements by UID, evaluate JavaScript, and manage tabs — all without a separate Node.js server.
 - **🔌 Dual-Mode Interaction:**
     1.  **Visual/Native:** Works with *any* app via screenshots & coordinates (Universal).
     2.  **AppDebugKit:** Deep integration for supported apps to inspect the UI tree (DOM-like structure).
+    3.  **CDP:** Connect to Chrome/Electron via `--remote-debugging-port` for DOM-level element targeting and JS evaluation.
 
 ## 🤖 For AI Agents (LLMs)
 
