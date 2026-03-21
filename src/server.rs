@@ -61,6 +61,8 @@ pub struct MacOSDevToolsServer {
     android_device: Arc<RwLock<Option<AndroidDevice>>>,
     hover_tracker: Arc<RwLock<Option<crate::tools::hover_tracker::HoverTracker>>>,
     screen_recorder: Arc<RwLock<Option<crate::tools::screen_recorder::ScreenRecorder>>>,
+    #[cfg(feature = "cdp")]
+    cdp_client: Arc<RwLock<Option<crate::cdp::CdpClient>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -78,6 +80,8 @@ impl MacOSDevToolsServer {
             android_device: Arc::new(RwLock::new(None)),
             hover_tracker: Arc::new(RwLock::new(None)),
             screen_recorder: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "cdp")]
+            cdp_client: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -95,6 +99,11 @@ impl MacOSDevToolsServer {
 
     async fn is_recording(&self) -> bool {
         self.screen_recorder.read().await.is_some()
+    }
+
+    #[cfg(feature = "cdp")]
+    async fn is_cdp_connected(&self) -> bool {
+        self.cdp_client.read().await.is_some()
     }
 
     /// Acquire the android device lock and call `f` with a mutable reference.
@@ -118,6 +127,7 @@ impl MacOSDevToolsServer {
     pub fn get_tools(
         app_connected: bool,
         android_connected: bool,
+        cdp_connected: bool,
         hover_tracking: bool,
         recording: bool,
     ) -> Vec<Tool> {
@@ -130,6 +140,14 @@ impl MacOSDevToolsServer {
         if android_connected {
             tools.extend(Self::get_android_tools());
         }
+        #[cfg(feature = "cdp")]
+        {
+            tools.push(Self::get_cdp_connect_tool());
+            if cdp_connected {
+                tools.extend(Self::get_cdp_tools());
+            }
+        }
+        let _ = cdp_connected; // suppress unused warning when cdp feature is off
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
         tools
@@ -1125,6 +1143,39 @@ impl MacOSDevToolsServer {
         }
         tools
     }
+
+    #[cfg(feature = "cdp")]
+    fn get_cdp_connect_tool() -> Tool {
+        Tool::new(
+            "cdp_connect",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be running with --remote-debugging-port=PORT.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["port"],
+                "properties": {
+                    "port": {
+                        "type": "integer",
+                        "description": "The remote debugging port number"
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(feature = "cdp")]
+    fn get_cdp_tools() -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "cdp_disconnect",
+                "Disconnect from the Chrome/Electron app.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }))),
+            ),
+            // More tools will be added in tasks 9-12
+        ]
+    }
 }
 
 impl ServerHandler for MacOSDevToolsServer {
@@ -1183,10 +1234,15 @@ impl ServerHandler for MacOSDevToolsServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
+        #[cfg(feature = "cdp")]
+        let cdp_connected = self.is_cdp_connected().await;
+        #[cfg(not(feature = "cdp"))]
+        let cdp_connected = false;
         Ok(ListToolsResult {
             tools: Self::get_tools(
                 connected,
                 self.is_android_connected().await,
+                cdp_connected,
                 self.is_hover_tracking().await,
                 self.is_recording().await,
             ),
@@ -1782,6 +1838,47 @@ impl ServerHandler for MacOSDevToolsServer {
                     None => Ok(CallToolResult::error(vec![Content::text(
                         "No recording session is active.",
                     )])),
+                }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_connect" => {
+                let port = args
+                    .get("port")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as u16)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing required param: port", None)
+                    })?;
+                match crate::cdp::CdpClient::connect(port).await {
+                    Ok(client) => {
+                        let page_info = if let Some(page) = client.selected_page.as_ref() {
+                            let url = page.url().await.ok().flatten().unwrap_or_default();
+                            format!("Selected page: {}", url)
+                        } else {
+                            "No pages found".to_string()
+                        };
+                        *self.cdp_client.write().await = Some(client);
+                        let _ = context.peer.notify_tool_list_changed().await;
+                        Ok(CallToolResult::success(vec![Content::text(format!(
+                            "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
+                            port, page_info
+                        ))]))
+                    }
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_disconnect" => {
+                if let Some(client) = self.cdp_client.write().await.take() {
+                    client.disconnect();
+                    let _ = context.peer.notify_tool_list_changed().await;
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "Disconnected from Chrome/Electron. CDP tools are no longer available.",
+                    )]))
+                } else {
+                    Ok(CallToolResult::error(vec![Content::text(
+                        "No CDP connection active.",
+                    )]))
                 }
             }
             _ => Err(McpError::invalid_params(
