@@ -5,6 +5,7 @@
 //! (buttons, labels, menus, etc.).
 
 use super::ocr::{TextBounds, TextMatch};
+use crate::tools::ax_snapshot::AXSnapshotNode;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
@@ -489,6 +490,15 @@ fn uia_control_type_name(id: i32) -> Option<String> {
         _ => return None,
     };
     Some(name.to_string())
+}
+
+/// Collect the full UIA accessibility tree as snapshot nodes.
+/// TODO: Implement full UIA tree walking (currently only find_text_uia is implemented).
+pub fn collect_uia_tree(_app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, String> {
+    Err(
+        "take_ax_snapshot is not yet implemented on Windows. Use take_screenshot with OCR instead."
+            .to_string(),
+    )
 }
 
 #[cfg(test)]
