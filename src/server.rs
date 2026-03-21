@@ -1210,7 +1210,25 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-            // More tools will be added in tasks 11-12
+            Tool::new(
+                "cdp_click",
+                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view and clicks its center.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "Element UID from cdp_take_snapshot"
+                        },
+                        "dbl_click": {
+                            "type": "boolean",
+                            "description": "Double-click instead of single click (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            // More tools will be added in task 12
         ]
     }
 }
@@ -1932,6 +1950,15 @@ impl ServerHandler for MacOSDevToolsServer {
                     self.cdp_client.clone(),
                 )
                 .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_click" => {
+                let uid = parse_string_field(&args, "uid")?;
+                let dbl_click = args
+                    .get("dbl_click")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_click(uid, dbl_click, self.cdp_client.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),

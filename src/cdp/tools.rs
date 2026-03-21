@@ -2,7 +2,12 @@
 
 use crate::cdp::CdpClient;
 use crate::tools::ax_snapshot::format_snapshot;
-use chromiumoxide::cdp::browser_protocol::dom::{BackendNodeId, ResolveNodeParams};
+use chromiumoxide::cdp::browser_protocol::dom::{
+    BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
+};
+use chromiumoxide::cdp::browser_protocol::input::{
+    DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
+};
 use chromiumoxide::cdp::js_protocol::runtime::{
     CallArgument, CallFunctionOnParams, EvaluateParams,
 };
@@ -162,6 +167,125 @@ pub async fn cdp_evaluate_script(
             ))]),
         }
     }
+}
+
+pub async fn cdp_click(
+    uid: String,
+    dbl_click: bool,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let guard = cdp_client.read().await;
+    let client = match guard.as_ref() {
+        Some(c) => c,
+        None => {
+            return CallToolResult::error(vec![Content::text(
+                "No CDP connection. Use cdp_connect first.",
+            )]);
+        }
+    };
+
+    let page = match &client.selected_page {
+        Some(p) => p.clone(),
+        None => {
+            return CallToolResult::error(vec![Content::text("No page selected.")]);
+        }
+    };
+
+    let snapshot_map = match &client.last_snapshot {
+        Some(m) => m,
+        None => {
+            return CallToolResult::error(vec![Content::text(
+                "No snapshot available. Call cdp_take_snapshot first.",
+            )]);
+        }
+    };
+
+    let node = match snapshot_map.uid_to_node.get(&uid) {
+        Some(n) => n,
+        None => {
+            return CallToolResult::error(vec![Content::text(format!(
+                "uid={} not found. Call cdp_take_snapshot to get current elements.",
+                uid
+            ))]);
+        }
+    };
+
+    let backend_node_id = BackendNodeId::new(node.backend_node_id);
+    let node_role = node.role.clone();
+    let node_name = node.name.clone();
+
+    // Drop the read lock before doing async CDP calls.
+    drop(guard);
+
+    // Step 1: Scroll the element into view.
+    let scroll_params = ScrollIntoViewIfNeededParams::builder()
+        .backend_node_id(backend_node_id.clone())
+        .build();
+
+    if let Err(e) = page.execute(scroll_params).await {
+        return CallToolResult::error(vec![Content::text(format!(
+            "Failed to scroll element uid={} into view: {}",
+            uid, e
+        ))]);
+    }
+
+    // Step 2: Get box model to find element coordinates.
+    let box_params = GetBoxModelParams::builder()
+        .backend_node_id(backend_node_id)
+        .build();
+
+    let box_result = match page.execute(box_params).await {
+        Ok(r) => r,
+        Err(e) => {
+            return CallToolResult::error(vec![Content::text(format!(
+                "Element uid={} is no longer in the DOM: {}",
+                uid, e
+            ))]);
+        }
+    };
+
+    // Compute center from content quad (8 floats: x1,y1, x2,y2, x3,y3, x4,y4).
+    let quad = box_result.result.model.content.inner();
+    if quad.len() < 8 {
+        return CallToolResult::error(vec![Content::text(format!(
+            "Element uid={} returned an invalid box model (expected 8 quad values, got {}).",
+            uid,
+            quad.len()
+        ))]);
+    }
+    let cx = (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0;
+    let cy = (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0;
+
+    let click_count = if dbl_click { 2_i64 } else { 1_i64 };
+
+    // Step 3: Dispatch mouse events: Move → Press → Release.
+    let move_event = DispatchMouseEventParams::new(DispatchMouseEventType::MouseMoved, cx, cy);
+
+    let mut press_event =
+        DispatchMouseEventParams::new(DispatchMouseEventType::MousePressed, cx, cy);
+    press_event.button = Some(MouseButton::Left);
+    press_event.buttons = Some(1);
+    press_event.click_count = Some(click_count);
+
+    let mut release_event =
+        DispatchMouseEventParams::new(DispatchMouseEventType::MouseReleased, cx, cy);
+    release_event.button = Some(MouseButton::Left);
+    release_event.click_count = Some(click_count);
+
+    for event in [move_event, press_event, release_event] {
+        if let Err(e) = page.execute(event).await {
+            return CallToolResult::error(vec![Content::text(format!(
+                "Click failed on uid={}: {}",
+                uid, e
+            ))]);
+        }
+    }
+
+    let dbl_note = if dbl_click { " (double-click)" } else { "" };
+    CallToolResult::success(vec![Content::text(format!(
+        "Clicked uid={} '{}' ({}) at ({:.1}, {:.1}){}",
+        uid, node_name, node_role, cx, cy, dbl_note
+    ))])
 }
 
 pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
