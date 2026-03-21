@@ -1173,7 +1173,20 @@ impl MacOSDevToolsServer {
                     "properties": {}
                 }))),
             ),
-            // More tools will be added in tasks 9-12
+            Tool::new(
+                "cdp_take_snapshot",
+                "Take an accessibility tree snapshot of the selected browser page. Returns a structured text representation with unique element IDs that can be used with cdp_click and cdp_evaluate_script.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "verbose": {
+                            "type": "boolean",
+                            "description": "Include all attributes in the snapshot (default: false)"
+                        }
+                    }
+                }))),
+            ),
+            // More tools will be added in tasks 10-12
         ]
     }
 }
@@ -1880,6 +1893,10 @@ impl ServerHandler for MacOSDevToolsServer {
                         "No CDP connection active.",
                     )]))
                 }
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_take_snapshot" => {
+                Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
