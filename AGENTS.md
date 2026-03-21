@@ -36,7 +36,9 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
 | "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_snapshot()` → `cdp_click(uid="42")` | CDP is more reliable than coordinates for web content. |
+| "Type in a web input" | `cdp_take_snapshot()` → `cdp_click(uid)` → `cdp_evaluate_script(function="(el) => { el.focus(); document.execCommand('insertText', false, 'text'); }", args=[{uid}])` | Works for both `<input>` and contenteditable elements (e.g., Electron apps). |
 | "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
+| "Navigate to a URL" | `cdp_evaluate_script(function="window.location.href = 'https://example.com'")` | No navigate tool — use JS to change location. |
 | "Switch browser tabs" | `cdp_list_pages()` → `cdp_select_page(page_idx=1)` | List tabs, then select by index. |
 | "Get browser page structure" | `cdp_take_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
 
@@ -170,25 +172,58 @@ Tools appear dynamically — `stop_recording` only shows while recording is acti
 
 Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level element targeting. More reliable than screen coordinates for web content — handles offscreen elements, responsive layouts, and iframes.
 
-**Setup:** The app must be launched with `--remote-debugging-port=PORT` and `--user-data-dir=PATH` (Chrome 136+ requires a non-default profile).
+**Setup:**
+- **Chrome 136+:** Must launch with both `--remote-debugging-port=PORT` and `--user-data-dir=PATH` (non-default profile required — Chrome silently ignores the debug port with the default profile). The profile is persistent across launches.
+- **Electron apps** (Signal, Discord, Slack, VS Code, etc.): Only need `--remote-debugging-port=PORT`. No `--user-data-dir` required — Electron respects the flag with its default profile.
 
 #### Tools (available after `cdp_connect`)
 
 *   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
 *   `cdp_disconnect`: Disconnect and hide CDP tools.
-*   `cdp_take_snapshot`: Accessibility tree snapshot — returns elements with unique UIDs, roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
+*   `cdp_take_snapshot`: Accessibility tree snapshot — returns elements with unique UIDs, roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content. Snapshots can be large (hundreds of elements) — search for the element you need by role or name rather than reading the entire tree.
 *   `cdp_click(uid, dbl_click?)`: Click an element by UID from the snapshot. Scrolls into view automatically.
 *   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "5"}]`.
-*   `cdp_list_pages`: List open tabs with indices. Selected page marked with `*`.
-*   `cdp_select_page(page_idx)`: Switch to a tab by index.
+*   `cdp_list_pages`: List open tabs/windows with indices. Selected page marked with `*`.
+*   `cdp_select_page(page_idx)`: Switch to a tab/window by index.
 
-#### CDP Workflow Example
+#### Key Patterns
+
+**Typing text into web inputs:** There is no `cdp_type` tool. Use `cdp_evaluate_script` with `document.execCommand('insertText')` — this works for both standard `<input>` elements and contenteditable divs (common in Electron apps):
 ```
-1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/profile"])
+cdp_click(uid="42")                    → focus the input
+cdp_evaluate_script(
+  function="(el) => { el.focus(); document.execCommand('insertText', false, 'hello'); }",
+  args=[{uid: "42"}]
+)
+```
+
+**Navigating to a URL:** There is no `cdp_navigate` tool. Use JS:
+```
+cdp_evaluate_script(function="window.location.href = 'https://example.com'")
+```
+
+**Finding elements in large snapshots:** Snapshots can have 500+ elements. Look for elements by their role and name — buttons, links, textboxes, and headings are the most useful. Elements like `StaticText`, `InlineTextBox`, `none`, and `generic` are usually structural and can be skipped when looking for interactive targets.
+
+#### CDP Workflow Examples
+
+**Chrome:**
+```
+1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
 2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
 3. cdp_evaluate_script(function="window.location.href = 'https://example.com'")
 4. cdp_take_snapshot()                     → uid=1 RootWebArea "Example" ...
 5. cdp_click(uid="5")                      → "Clicked uid=5 'Submit' (button) at (200, 300)"
+```
+
+**Electron app (e.g., Slack, Discord, Signal):**
+```
+1. quit_app(app_name="MyElectronApp")
+2. launch_app(app_name="MyElectronApp", args=["--remote-debugging-port=9333"])
+3. cdp_connect(port=9333)                  → "Connected. Selected page: file:///...app.html"
+4. cdp_take_snapshot()                     → uid=1 RootWebArea "MyApp" ... (search for buttons, inputs)
+5. cdp_click(uid="42")                     → click a list item or button
+6. cdp_take_snapshot()                     → fresh snapshot of the new view
+7. cdp_evaluate_script(function="(el) => { el.focus(); document.execCommand('insertText', false, 'hello'); }", args=[{uid: "100"}])
 ```
 
 ### 7. Android Device Control
