@@ -5,8 +5,10 @@
 //! - Window raising: bring windows to front via AXRaise (works for bundle-less apps)
 
 use super::ocr::{TextBounds, TextMatch};
+use crate::tools::ax_snapshot::{map_ax_role, AXSnapshotNode};
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
+use core_foundation::boolean::CFBoolean;
 use core_foundation::string::CFString;
 use core_graphics::geometry::{CGPoint, CGSize};
 use objc::runtime::{Class, Object};
@@ -186,6 +188,22 @@ unsafe fn get_string_attribute(element: AXUIElementRef, attr_name: &str) -> Opti
     // downcast_into consumes cf_value, avoiding an extra retain/release cycle.
     let cf_string = CFType::wrap_under_create_rule(value_ref).downcast_into::<CFString>()?;
     Some(cf_string.to_string())
+}
+
+/// Get a boolean attribute from an AX element. Returns None if the attribute
+/// doesn't exist or isn't a CFBoolean.
+unsafe fn get_bool_attribute(element: AXUIElementRef, attr_name: &str) -> Option<bool> {
+    let attr = CFString::new(attr_name);
+    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value_ref);
+
+    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
+        return None;
+    }
+
+    // value_ref is owned (create rule) — wrap it so it gets released.
+    let cf_bool = CFType::wrap_under_create_rule(value_ref).downcast_into::<CFBoolean>()?;
+    Some(bool::from(cf_bool))
 }
 
 /// Get position (CGPoint) and size (CGSize) of an AX element.
@@ -618,6 +636,96 @@ pub fn raise_windows(pid: i32) -> bool {
         core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
         raised
     }
+}
+
+/// Recursively walk the AX element tree and collect [`AXSnapshotNode`] entries.
+///
+/// UIDs are assigned sequentially via `next_uid` (starts at 1).
+/// Traversal order is depth-first, matching `walk_ax_tree`.
+unsafe fn collect_ax_tree_recursive(
+    element: AXUIElementRef,
+    element_count: &mut usize,
+    depth: u32,
+    next_uid: &mut u32,
+    nodes: &mut Vec<AXSnapshotNode>,
+) {
+    if depth > MAX_DEPTH || *element_count >= MAX_ELEMENTS {
+        return;
+    }
+
+    *element_count += 1;
+
+    let uid = *next_uid;
+    *next_uid += 1;
+
+    let role = get_string_attribute(element, "AXRole")
+        .as_deref()
+        .map(map_ax_role)
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let name = get_string_attribute(element, "AXTitle");
+    let value = get_string_attribute(element, "AXValue");
+    let focused = get_bool_attribute(element, "AXFocused").unwrap_or(false);
+    let disabled = get_bool_attribute(element, "AXEnabled")
+        .map(|enabled| !enabled)
+        .unwrap_or(false);
+    let expanded = get_bool_attribute(element, "AXExpanded");
+    let selected = get_bool_attribute(element, "AXSelected");
+
+    nodes.push(AXSnapshotNode {
+        uid,
+        role,
+        name,
+        value,
+        focused,
+        disabled,
+        expanded,
+        selected,
+        depth,
+    });
+
+    if let Some(children) = get_ax_children(element) {
+        for i in 0..children.len() {
+            let child = *children.get_unchecked(i) as AXUIElementRef;
+            core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
+            collect_ax_tree_recursive(child, element_count, depth + 1, next_uid, nodes);
+            core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
+        }
+    }
+}
+
+/// Walk the accessibility tree of an application and return a flat, depth-first
+/// snapshot of all elements as [`AXSnapshotNode`] values.
+///
+/// If `app_name` is `Some`, the tree is rooted at that application; otherwise
+/// the frontmost application is used.
+pub fn collect_ax_tree(app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, String> {
+    let pid = match app_name {
+        Some(name) => pid_for_app_name(name)?,
+        None => frontmost_pid()?,
+    };
+
+    let app_element = unsafe { AXUIElementCreateApplication(pid) };
+    if app_element.is_null() {
+        return Err(format!("Failed to create AXUIElement for pid {}", pid));
+    }
+
+    let mut nodes = Vec::new();
+    let mut element_count: usize = 0;
+    let mut next_uid: u32 = 1;
+
+    unsafe {
+        collect_ax_tree_recursive(
+            app_element,
+            &mut element_count,
+            0,
+            &mut next_uid,
+            &mut nodes,
+        );
+        core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
+    }
+
+    Ok(nodes)
 }
 
 #[cfg(test)]
