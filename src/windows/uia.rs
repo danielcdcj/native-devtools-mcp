@@ -131,7 +131,8 @@ pub fn find_text(search: &str) -> Result<Vec<TextMatch>, String> {
             eprintln!("[DEBUG uia::find_text] scanning {} elements", count);
         }
 
-        let mut seen_centers: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+        let mut seen_centers: std::collections::HashSet<(i32, i32)> =
+            std::collections::HashSet::new();
 
         for i in 0..count {
             let elem = match elements.GetElement(i) {
@@ -330,7 +331,10 @@ unsafe fn find_smallest_element_at_point(
         }
 
         if let Some(area) = check_element_contains_point(&child, x, y) {
-            if best.as_ref().map_or(true, |(_, best_area)| area < *best_area) {
+            if best
+                .as_ref()
+                .map_or(true, |(_, best_area)| area < *best_area)
+            {
                 best = Some((child, area));
             }
         }
@@ -341,11 +345,7 @@ unsafe fn find_smallest_element_at_point(
 
 /// Check if an element's bounding rectangle contains the point (x, y).
 /// Returns the area of the bounding rectangle if it does, or None if it doesn't.
-unsafe fn check_element_contains_point(
-    elem: &IUIAutomationElement,
-    x: f64,
-    y: f64,
-) -> Option<f64> {
+unsafe fn check_element_contains_point(elem: &IUIAutomationElement, x: f64, y: f64) -> Option<f64> {
     let rect = elem.CurrentBoundingRectangle().ok()?;
     let left = rect.left as f64;
     let top = rect.top as f64;
@@ -380,7 +380,11 @@ unsafe fn element_text_properties(
         .ok()
         .and_then(|v| {
             let s = v.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
     let help = elem
         .CurrentHelpText()
@@ -401,8 +405,7 @@ unsafe fn build_element_json(elem: &IUIAutomationElement) -> Result<serde_json::
     let rect = elem.CurrentBoundingRectangle().ok();
     let pid = elem.CurrentProcessId().ok();
 
-    let resolved_app_name =
-        pid.and_then(|p| crate::windows::app::get_process_name(p as u32));
+    let resolved_app_name = pid.and_then(|p| crate::windows::app::get_process_name(p as u32));
 
     let mut result = serde_json::Map::new();
 
@@ -518,7 +521,8 @@ mod tests {
 
     #[test]
     fn test_match_element_text_no_match() {
-        let result = match_element_text(Some("Open"), Some("file.txt"), Some("Opens a file"), "save");
+        let result =
+            match_element_text(Some("Open"), Some("file.txt"), Some("Opens a file"), "save");
         assert_eq!(result, None);
     }
 

@@ -280,7 +280,10 @@ pub fn start_polling(
                     // so pass-through elements don't inflate the dwell.
                     if let Some(prev) = confirmed.take() {
                         let departed = first_departure.unwrap_or(cand.since);
-                        events.lock().unwrap().push(prev.into_event(departed, false));
+                        events
+                            .lock()
+                            .unwrap()
+                            .push(prev.into_event(departed, false));
                     }
                     // Promote candidate to confirmed
                     confirmed = candidate.take();

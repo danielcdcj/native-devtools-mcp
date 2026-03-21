@@ -204,7 +204,9 @@ pub struct WindowCaptureMeta {
 ///
 /// Delegates to [`capture_window`] for the actual BitBlt capture, then converts
 /// the PNG output to JPEG.
-pub fn capture_window_jpeg(window_id: u32) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
+pub fn capture_window_jpeg(
+    window_id: u32,
+) -> Result<(Vec<u8>, WindowCaptureMeta), ScreenshotError> {
     let screenshot = capture_window(window_id)?;
 
     let jpeg_data = crate::tools::screenshot::png_to_jpeg(&screenshot.png_data)
