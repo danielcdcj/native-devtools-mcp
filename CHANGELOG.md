@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.6.0
+
+### Screen recording
+
+New `start_recording` / `stop_recording` tools for capturing screen activity as MP4 video. Useful for recording UI flows, repro steps, and demo clips.
+
+- Configurable FPS (default 5), region cropping, and max duration
+- Supported on macOS (CGWindowListCreateImage) and Windows (BitBlt)
+
+### Windows feature parity
+
+Windows now supports all tools that were previously macOS-only:
+
+- **Hover tracking** — `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking` via UI Automation and GetCursorPos
+- **Screen recording** — `start_recording` / `stop_recording` via BitBlt capture loop
+- **`element_at_point`** — added `app_name` scoping and container fallback
+- **`find_text`** — now searches UIA `Value` and `HelpText` properties in addition to `Name`
+- **`get_cursor_position`** — new Windows implementation via GetCursorPos
+
+### Fixes
+
+- **Drag pre-move cursor** — cursor now moves to the start position before initiating a drag, ensuring correct start coordinates (Windows)
+- **Hover dwell accuracy** — fixed dwell time calculation to use arrival/departure timestamps correctly, preventing inflated dwell values from pass-through elements
+- **Frontmost app detection** — fixed macOS frontmost app resolution to use CGWindowList stacking order instead of NSWorkspace
+
+### Other
+
+- Windows code refactored: deduplicated PID resolution, extracted text property helper, simplified capture_window_jpeg and UIA element search
+- Updated rustls-webpki to 0.103.10 (CVE fix)
+
 ## v0.5.1
 
 ### `element_at_point` improvements
