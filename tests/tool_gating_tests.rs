@@ -182,6 +182,14 @@ mod cdp_tool_gating {
         assert!(!names.contains(&"cdp_click".to_string()));
         assert!(!names.contains(&"cdp_list_pages".to_string()));
         assert!(!names.contains(&"cdp_select_page".to_string()));
+        assert!(!names.contains(&"cdp_hover".to_string()));
+        assert!(!names.contains(&"cdp_fill".to_string()));
+        assert!(!names.contains(&"cdp_press_key".to_string()));
+        assert!(!names.contains(&"cdp_handle_dialog".to_string()));
+        assert!(!names.contains(&"cdp_navigate".to_string()));
+        assert!(!names.contains(&"cdp_new_page".to_string()));
+        assert!(!names.contains(&"cdp_close_page".to_string()));
+        assert!(!names.contains(&"cdp_wait_for".to_string()));
     }
 
     #[test]
@@ -199,6 +207,14 @@ mod cdp_tool_gating {
         assert!(names.contains(&"cdp_click".to_string()));
         assert!(names.contains(&"cdp_list_pages".to_string()));
         assert!(names.contains(&"cdp_select_page".to_string()));
+        assert!(names.contains(&"cdp_hover".to_string()));
+        assert!(names.contains(&"cdp_fill".to_string()));
+        assert!(names.contains(&"cdp_press_key".to_string()));
+        assert!(names.contains(&"cdp_handle_dialog".to_string()));
+        assert!(names.contains(&"cdp_navigate".to_string()));
+        assert!(names.contains(&"cdp_new_page".to_string()));
+        assert!(names.contains(&"cdp_close_page".to_string()));
+        assert!(names.contains(&"cdp_wait_for".to_string()));
     }
 
     #[test]
@@ -213,8 +229,8 @@ mod cdp_tool_gating {
             disconnected.len()
         );
 
-        // Should add exactly 6 tools (disconnect + 5 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 6);
+        // Should add exactly 14 tools (disconnect + 13 functional tools)
+        assert_eq!(connected.len() - disconnected.len(), 14);
     }
 }
 

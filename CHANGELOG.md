@@ -10,6 +10,14 @@ New `cdp_*` tools for automating Chrome and Electron apps via their remote debug
 - **`cdp_take_snapshot`** — accessibility tree snapshot of the browser page (element UIDs, roles, names)
 - **`cdp_evaluate_script`** — evaluate JavaScript in the page, with optional element references from the snapshot
 - **`cdp_click`** — click a DOM element by UID (scroll-into-view, more reliable than screen coordinates for web content)
+- **`cdp_hover`** — hover over a DOM element by UID
+- **`cdp_fill`** — type text into an input/textarea or select an option from a `<select>` element
+- **`cdp_press_key`** — press a key or key combination (e.g., `Enter`, `Control+A`, `Control+Shift+R`)
+- **`cdp_handle_dialog`** — accept or dismiss JavaScript dialogs (alert, confirm, prompt)
+- **`cdp_navigate`** — navigate to a URL, or go back/forward/reload
+- **`cdp_new_page`** — create a new browser tab and navigate to a URL
+- **`cdp_close_page`** — close a browser tab by index
+- **`cdp_wait_for`** — wait for text to appear on the page (polls snapshot with timeout)
 - **`cdp_list_pages` / `cdp_select_page`** — tab management
 
 Requires Chrome 136+: `--remote-debugging-port` is silently ignored unless `--user-data-dir` points to a non-default profile. The profile is persistent across launches.

@@ -1246,6 +1246,135 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "cdp_hover",
+                "Hover over the provided element.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_fill",
+                "Type text into an input, text area, or select an option from a <select> element.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["uid", "value"],
+                    "properties": {
+                        "uid": {
+                            "type": "string",
+                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "The value to fill in"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_press_key",
+                "Press a key or key combination. Use this when other input methods like cdp_fill cannot be used (e.g., keyboard shortcuts, navigation keys, or special key combinations).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["key"],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "A key or combination (e.g., 'Enter', 'Control+A', 'Control++', 'Control+Shift+R'). Modifiers: Control, Shift, Alt, Meta"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_handle_dialog",
+                "If a browser dialog was opened, use this command to handle it.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["accept", "dismiss"],
+                            "description": "Whether to accept or dismiss the dialog"
+                        },
+                        "prompt_text": {
+                            "type": "string",
+                            "description": "Optional text to enter into a prompt dialog before accepting"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_navigate",
+                "Navigate the currently selected page to a URL, or go back, forward, or reload.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Target URL (required when type is 'url')"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["url", "back", "forward", "reload"],
+                            "description": "Navigation type. Default: 'url'"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_new_page",
+                "Create a new page (tab) and navigate it to the given URL. The new page becomes the selected page.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL to load in the new page"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_close_page",
+                "Close a page (tab) by its index. The last open page cannot be closed.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["page_idx"],
+                    "properties": {
+                        "page_idx": {
+                            "type": "integer",
+                            "description": "The index of the page to close. Call cdp_list_pages to list pages."
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_wait_for",
+                "Wait for the specified text to appear on the selected page.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Text to appear on the page"
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum wait time in milliseconds (default: 10000)"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 }
@@ -1994,6 +2123,64 @@ impl ServerHandler for MacOSDevToolsServer {
                         McpError::invalid_params("missing required param: page_idx", None)
                     })?;
                 Ok(crate::cdp::tools::cdp_select_page(page_idx, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_hover" => {
+                let uid = parse_string_field(&args, "uid")?;
+                Ok(crate::cdp::tools::cdp_hover(uid, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_fill" => {
+                let uid = parse_string_field(&args, "uid")?;
+                let value = parse_string_field(&args, "value")?;
+                Ok(crate::cdp::tools::cdp_fill(uid, value, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_press_key" => {
+                let key = parse_string_field(&args, "key")?;
+                Ok(crate::cdp::tools::cdp_press_key(key, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_handle_dialog" => {
+                let action = parse_string_field(&args, "action")?;
+                let prompt_text = args
+                    .get("prompt_text")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                Ok(crate::cdp::tools::cdp_handle_dialog(
+                    action,
+                    prompt_text,
+                    self.cdp_client.clone(),
+                )
+                .await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_navigate" => {
+                let url = args.get("url").and_then(|v| v.as_str()).map(String::from);
+                let nav_type = args.get("type").and_then(|v| v.as_str()).map(String::from);
+                Ok(crate::cdp::tools::cdp_navigate(url, nav_type, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_new_page" => {
+                let url = parse_string_field(&args, "url")?;
+                Ok(crate::cdp::tools::cdp_new_page(url, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_close_page" => {
+                let page_idx = args
+                    .get("page_idx")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as usize)
+                    .ok_or_else(|| {
+                        McpError::invalid_params("missing required param: page_idx", None)
+                    })?;
+                Ok(crate::cdp::tools::cdp_close_page(page_idx, self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_wait_for" => {
+                let text = parse_string_field(&args, "text")?;
+                let timeout = args.get("timeout").and_then(|v| v.as_u64());
+                Ok(crate::cdp::tools::cdp_wait_for(text, timeout, self.cdp_client.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),

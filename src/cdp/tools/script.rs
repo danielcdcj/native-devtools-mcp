@@ -1,13 +1,8 @@
-//! CDP tool implementations (evaluate_script, click, list_pages, select_page).
+//! CDP script and snapshot tools: evaluate_script, take_snapshot, wait_for.
 
-use crate::cdp::{cdp_error, is_extension_url, CdpClient};
+use crate::cdp::{cdp_error, CdpClient};
 use crate::tools::ax_snapshot::format_snapshot;
-use chromiumoxide::cdp::browser_protocol::dom::{
-    BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
-};
-use chromiumoxide::cdp::browser_protocol::input::{
-    DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
-};
+use chromiumoxide::cdp::browser_protocol::dom::{BackendNodeId, ResolveNodeParams};
 use chromiumoxide::cdp::js_protocol::runtime::{
     CallArgument, CallFunctionOnParams, EvaluateParams,
 };
@@ -38,8 +33,8 @@ pub async fn cdp_evaluate_script(
     args: Option<Vec<serde_json::Value>>,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
-    let mut guard = cdp_client.write().await;
-    let client = match guard.as_mut() {
+    let guard = cdp_client.read().await;
+    let client = match guard.as_ref() {
         Some(c) => c,
         None => return cdp_error("No CDP connection. Use cdp_connect first."),
     };
@@ -167,7 +162,6 @@ pub async fn cdp_evaluate_script(
     match page.execute(call_params).await {
         Ok(resp) => {
             // CallFunctionOn returns CallFunctionOnReturns, not EvaluateReturns.
-            // Extract the same fields manually.
             if let Some(exc) = &resp.result.exception_details {
                 return cdp_error(format!("JavaScript exception: {}", exc.text));
             }
@@ -184,195 +178,6 @@ pub async fn cdp_evaluate_script(
         }
         Err(e) => cdp_error(format!("Failed to call function: {}", e)),
     }
-}
-
-pub async fn cdp_click(
-    uid: String,
-    dbl_click: bool,
-    cdp_client: Arc<RwLock<Option<CdpClient>>>,
-) -> CallToolResult {
-    let guard = cdp_client.read().await;
-    let client = match guard.as_ref() {
-        Some(c) => c,
-        None => return cdp_error("No CDP connection. Use cdp_connect first."),
-    };
-
-    let page = match client.require_page() {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = match client.check_snapshot_staleness(&current_url) {
-        Ok(m) => m,
-        Err(e) => return e,
-    };
-
-    let node = match snapshot_map.uid_to_node.get(&uid) {
-        Some(n) => n,
-        None => {
-            return cdp_error(format!(
-                "uid={} not found. Call cdp_take_snapshot to get current elements.",
-                uid
-            ));
-        }
-    };
-
-    let backend_node_id = BackendNodeId::new(node.backend_node_id);
-    let node_role = node.role.clone();
-    let node_name = node.name.clone();
-
-    // Drop the read lock before doing async CDP calls.
-    drop(guard);
-
-    // Scroll the element into view.
-    let scroll_params = ScrollIntoViewIfNeededParams::builder()
-        .backend_node_id(backend_node_id)
-        .build();
-
-    if let Err(e) = page.execute(scroll_params).await {
-        return cdp_error(format!(
-            "Failed to scroll element uid={} into view: {}",
-            uid, e
-        ));
-    }
-
-    // Get box model to find element coordinates.
-    let box_params = GetBoxModelParams::builder()
-        .backend_node_id(backend_node_id)
-        .build();
-
-    let box_result = match page.execute(box_params).await {
-        Ok(r) => r,
-        Err(e) => {
-            return cdp_error(format!(
-                "Element uid={} is no longer in the DOM: {}",
-                uid, e
-            ));
-        }
-    };
-
-    // Compute center from content quad (8 floats: x1,y1, x2,y2, x3,y3, x4,y4).
-    let quad = box_result.result.model.content.inner();
-    if quad.len() < 8 {
-        return cdp_error(format!(
-            "Element uid={} returned an invalid box model (expected 8 quad values, got {}).",
-            uid,
-            quad.len()
-        ));
-    }
-    let cx = (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0;
-    let cy = (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0;
-
-    let click_count = if dbl_click { 2_i64 } else { 1_i64 };
-
-    // Dispatch mouse events: Move -> Press -> Release.
-    let move_event = DispatchMouseEventParams::new(DispatchMouseEventType::MouseMoved, cx, cy);
-
-    let mut press_event =
-        DispatchMouseEventParams::new(DispatchMouseEventType::MousePressed, cx, cy);
-    press_event.button = Some(MouseButton::Left);
-    press_event.buttons = Some(1);
-    press_event.click_count = Some(click_count);
-
-    let mut release_event =
-        DispatchMouseEventParams::new(DispatchMouseEventType::MouseReleased, cx, cy);
-    release_event.button = Some(MouseButton::Left);
-    release_event.click_count = Some(click_count);
-
-    for event in [move_event, press_event, release_event] {
-        if let Err(e) = page.execute(event).await {
-            return cdp_error(format!("Click failed on uid={}: {}", uid, e));
-        }
-    }
-
-    let dbl_note = if dbl_click { " (double-click)" } else { "" };
-    CallToolResult::success(vec![Content::text(format!(
-        "Clicked uid={} '{}' ({}) at ({:.1}, {:.1}){}",
-        uid, node_name, node_role, cx, cy, dbl_note
-    ))])
-}
-
-pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
-    let mut guard = cdp_client.write().await;
-    let client = match guard.as_mut() {
-        Some(c) => c,
-        None => return cdp_error("No CDP connection. Use cdp_connect first."),
-    };
-
-    let pages = match client.browser.pages().await {
-        Ok(p) => p,
-        Err(e) => return cdp_error(format!("Failed to list pages: {}", e)),
-    };
-
-    // Filter out chrome-extension:// pages.
-    let mut filtered: Vec<chromiumoxide::page::Page> = Vec::new();
-    for page in pages {
-        let url = page.url().await.ok().flatten().unwrap_or_default();
-        if !is_extension_url(&url) {
-            filtered.push(page);
-        }
-    }
-
-    // Determine which page is currently selected (by comparing URLs).
-    let selected_url = match &client.selected_page {
-        Some(p) => p.url().await.ok().flatten().unwrap_or_default(),
-        None => String::new(),
-    };
-
-    let total = filtered.len();
-    let mut output = format!("Pages ({} total):\n", total);
-    for (i, page) in filtered.iter().enumerate() {
-        let url = page.url().await.ok().flatten().unwrap_or_default();
-        let marker = if url == selected_url && !url.is_empty() {
-            " *"
-        } else {
-            ""
-        };
-        output.push_str(&format!("  [{}]{} {}\n", i, marker, url));
-    }
-
-    client.last_page_list = filtered;
-
-    CallToolResult::success(vec![Content::text(output.trim_end().to_string())])
-}
-
-pub async fn cdp_select_page(
-    page_idx: usize,
-    cdp_client: Arc<RwLock<Option<CdpClient>>>,
-) -> CallToolResult {
-    let mut guard = cdp_client.write().await;
-    let client = match guard.as_mut() {
-        Some(c) => c,
-        None => return cdp_error("No CDP connection. Use cdp_connect first."),
-    };
-
-    if client.last_page_list.is_empty() {
-        return cdp_error("No page list available. Call cdp_list_pages first.");
-    }
-
-    if page_idx >= client.last_page_list.len() {
-        return cdp_error(format!(
-            "Page index {} is out of range (0..{}). Call cdp_list_pages to refresh.",
-            page_idx,
-            client.last_page_list.len()
-        ));
-    }
-
-    let page = client.last_page_list[page_idx].clone();
-
-    if let Err(e) = page.bring_to_front().await {
-        return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
-    }
-
-    let url = page.url().await.ok().flatten().unwrap_or_default();
-    client.selected_page = Some(page);
-    client.last_snapshot = None;
-
-    CallToolResult::success(vec![Content::text(format!(
-        "Selected page [{}]: {}",
-        page_idx, url
-    ))])
 }
 
 pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
@@ -413,5 +218,66 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
             CallToolResult::success(vec![Content::text(output)])
         }
         Err(e) => cdp_error(format!("Failed to get accessibility tree: {}", e)),
+    }
+}
+
+const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
+
+pub async fn cdp_wait_for(
+    text: String,
+    timeout_ms: Option<u64>,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let raw_timeout = timeout_ms.unwrap_or(10_000).min(MAX_WAIT_TIMEOUT_MS);
+    let timeout = std::time::Duration::from_millis(raw_timeout);
+    let poll_interval = std::time::Duration::from_millis(500);
+    let start = std::time::Instant::now();
+
+    // Use a lightweight JS check for polling, only take a full snapshot on success.
+    let check_js = format!(
+        "document.body && document.body.innerText.includes({})",
+        serde_json::to_string(&text).unwrap_or_else(|_| format!("\"{}\"", text))
+    );
+
+    loop {
+        let found = {
+            let guard = cdp_client.read().await;
+            let client = match guard.as_ref() {
+                Some(c) => c,
+                None => return cdp_error("No CDP connection. Use cdp_connect first."),
+            };
+            let page = match client.require_page() {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+
+            let mut eval_params = EvaluateParams::new(&check_js);
+            eval_params.return_by_value = Some(true);
+
+            match page.execute(eval_params).await {
+                Ok(resp) => resp
+                    .result
+                    .result
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                Err(_) => false,
+            }
+        };
+
+        if found {
+            return cdp_take_snapshot(cdp_client.clone()).await;
+        }
+
+        if start.elapsed() >= timeout {
+            return cdp_error(format!(
+                "Timed out after {}ms waiting for text: '{}'",
+                timeout.as_millis(),
+                text
+            ));
+        }
+
+        tokio::time::sleep(poll_interval).await;
     }
 }
