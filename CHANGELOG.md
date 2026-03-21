@@ -1,10 +1,14 @@
 # Changelog
 
-## v0.6.0
+## v0.7.0
 
-### Chrome DevTools Protocol (CDP)
+### Chrome DevTools Protocol support
 
-New `cdp_*` tools for automating Chrome and Electron apps via their remote debugging port, powered by the `chromiumoxide` crate. This eliminates the need for a separate Node.js MCP server (chrome-devtools-mcp) for browser automation.
+native-devtools-mcp now supports the **Chrome DevTools Protocol (CDP)** — the same protocol that powers Puppeteer, Playwright, and chrome-devtools-mcp. Connect to any Chrome, Chromium, or Electron app and automate it with 16 new tools, all from a single native binary with zero Node.js dependencies.
+
+This means you can now automate **Chrome browsers** and **Electron apps** (Signal, Discord, VS Code, Slack) with DOM-level precision — clicking elements by accessibility UID, filling forms, navigating pages, and evaluating JavaScript — alongside the existing native desktop and Android automation.
+
+#### 16 new `cdp_*` tools
 
 - **`cdp_connect` / `cdp_disconnect`** — connect to a running Chrome/Electron instance on a given port
 - **`cdp_take_snapshot`** — accessibility tree snapshot of the browser page (element UIDs, roles, names)
@@ -23,9 +27,27 @@ New `cdp_*` tools for automating Chrome and Electron apps via their remote debug
 
 `cdp_click`, `cdp_hover`, `cdp_fill`, and `cdp_press_key` support `include_snapshot` to return a fresh snapshot with the action result, saving a round-trip.
 
-Requires Chrome 136+: `--remote-debugging-port` is silently ignored unless `--user-data-dir` points to a non-default profile. The profile is persistent across launches.
+#### Getting started
 
-Behind the `cdp` feature flag (enabled by default).
+```bash
+# Launch Chrome with remote debugging
+launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
+
+# Connect and automate
+cdp_connect(port=9222)
+cdp_navigate(url="https://example.com")
+cdp_take_snapshot()
+cdp_fill(uid="10", value="search query")
+cdp_press_key(key="Enter")
+```
+
+Chrome 136+ requires `--user-data-dir` alongside `--remote-debugging-port`. Electron apps only need `--remote-debugging-port`.
+
+### Accessibility tree snapshot
+
+New `take_ax_snapshot` tool that serializes the full macOS Accessibility (AX) tree into a structured text format with unique element IDs, roles, and names. Works for any app without requiring a debug port.
+
+## v0.6.0
 
 ### Accessibility tree snapshot
 
