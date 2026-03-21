@@ -138,9 +138,12 @@ pub async fn cdp_handle_dialog(
     }
 }
 
+const DEFAULT_NAV_TIMEOUT_MS: u64 = 10_000;
+
 pub async fn cdp_navigate(
     url: Option<String>,
     nav_type: Option<String>,
+    timeout_ms: Option<u64>,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let mut guard = cdp_client.write().await;
@@ -162,8 +165,16 @@ pub async fn cdp_navigate(
                 Some(u) => u.clone(),
                 None => return cdp_error("'url' parameter is required when type is 'url'."),
             };
-            match page.execute(NavigateParams::new(&target_url)).await {
-                Ok(resp) => {
+            // Use a timeout so slow-loading pages don't block indefinitely.
+            // The CDP Page.navigate command waits for the frame to commit,
+            // which can be slow on heavy pages. If it times out, the navigation
+            // likely still succeeded — return success with a note.
+            let nav_future = page.execute(NavigateParams::new(&target_url));
+            let nav_timeout =
+                std::time::Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_NAV_TIMEOUT_MS));
+
+            match tokio::time::timeout(nav_timeout, nav_future).await {
+                Ok(Ok(resp)) => {
                     if let Some(error_text) = &resp.result.error_text {
                         return cdp_error(format!(
                             "Navigation to {} failed: {}",
@@ -182,7 +193,16 @@ pub async fn cdp_navigate(
                         target_url
                     ))])
                 }
-                Err(e) => cdp_error(format!("Navigation failed: {}", e)),
+                Ok(Err(e)) => cdp_error(format!("Navigation failed: {}", e)),
+                Err(_) => {
+                    // Timed out waiting for load event — navigation was sent,
+                    // page is likely still loading or already loaded.
+                    client.last_snapshot = None;
+                    CallToolResult::success(vec![Content::text(format!(
+                        "Navigated to {} (page may still be loading)",
+                        target_url
+                    ))])
+                }
             }
         }
         "reload" => match page.execute(ReloadParams::default()).await {

@@ -1341,6 +1341,10 @@ impl MacOSDevToolsServer {
                             "type": "string",
                             "enum": ["url", "back", "forward", "reload"],
                             "description": "Navigation type. Default: 'url'"
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Maximum wait time in milliseconds for page load (default: 10000). If the page takes longer, navigation is assumed successful."
                         }
                     }
                 }))),
@@ -2232,7 +2236,16 @@ impl ServerHandler for MacOSDevToolsServer {
             "cdp_navigate" => {
                 let url = args.get("url").and_then(|v| v.as_str()).map(String::from);
                 let nav_type = args.get("type").and_then(|v| v.as_str()).map(String::from);
-                Ok(crate::cdp::tools::cdp_navigate(url, nav_type, self.cdp_client.clone()).await)
+                let timeout = args.get("timeout").and_then(|v| v.as_u64());
+                Ok(
+                    crate::cdp::tools::cdp_navigate(
+                        url,
+                        nav_type,
+                        timeout,
+                        self.cdp_client.clone(),
+                    )
+                    .await,
+                )
             }
             #[cfg(feature = "cdp")]
             "cdp_new_page" => {
