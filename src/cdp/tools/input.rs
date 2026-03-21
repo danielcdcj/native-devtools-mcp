@@ -196,6 +196,69 @@ fn key_definition(key: &str) -> Option<(&'static str, &'static str, i64)> {
     })
 }
 
+/// Map a single character to its DOM `code` and Windows virtual key code.
+fn char_key_code(ch: char) -> (&'static str, i64) {
+    match ch {
+        'a'..='z' | 'A'..='Z' => {
+            let upper = ch.to_ascii_uppercase();
+            // Code is "KeyA".."KeyZ", VK is the ASCII value of the uppercase letter.
+            // We leak a small static string for simplicity — these are a fixed set.
+            let code = match upper {
+                'A' => "KeyA",
+                'B' => "KeyB",
+                'C' => "KeyC",
+                'D' => "KeyD",
+                'E' => "KeyE",
+                'F' => "KeyF",
+                'G' => "KeyG",
+                'H' => "KeyH",
+                'I' => "KeyI",
+                'J' => "KeyJ",
+                'K' => "KeyK",
+                'L' => "KeyL",
+                'M' => "KeyM",
+                'N' => "KeyN",
+                'O' => "KeyO",
+                'P' => "KeyP",
+                'Q' => "KeyQ",
+                'R' => "KeyR",
+                'S' => "KeyS",
+                'T' => "KeyT",
+                'U' => "KeyU",
+                'V' => "KeyV",
+                'W' => "KeyW",
+                'X' => "KeyX",
+                'Y' => "KeyY",
+                'Z' => "KeyZ",
+                _ => unreachable!(),
+            };
+            (code, upper as i64)
+        }
+        '0' => ("Digit0", 0x30),
+        '1' => ("Digit1", 0x31),
+        '2' => ("Digit2", 0x32),
+        '3' => ("Digit3", 0x33),
+        '4' => ("Digit4", 0x34),
+        '5' => ("Digit5", 0x35),
+        '6' => ("Digit6", 0x36),
+        '7' => ("Digit7", 0x37),
+        '8' => ("Digit8", 0x38),
+        '9' => ("Digit9", 0x39),
+        '-' => ("Minus", 0xBD),
+        '=' | '+' => ("Equal", 0xBB),
+        '[' => ("BracketLeft", 0xDB),
+        ']' => ("BracketRight", 0xDD),
+        '\\' => ("Backslash", 0xDC),
+        ';' => ("Semicolon", 0xBA),
+        '\'' => ("Quote", 0xDE),
+        ',' => ("Comma", 0xBC),
+        '.' => ("Period", 0xBE),
+        '/' => ("Slash", 0xBF),
+        '`' => ("Backquote", 0xC0),
+        _ => ("Unidentified", 0),
+    }
+}
+
 const MODIFIER_ALT: i64 = 1;
 const MODIFIER_CONTROL: i64 = 2;
 const MODIFIER_META: i64 = 4;
@@ -312,12 +375,11 @@ pub async fn cdp_press_key(
         }
     } else if main_key.len() == 1 {
         let ch = main_key.chars().next().unwrap_or(' ');
-        let upper = ch.to_ascii_uppercase();
-        let vk = upper as i64;
+        let (code, vk) = char_key_code(ch);
 
         let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
         down.key = Some(main_key.to_string());
-        down.code = Some(format!("Key{}", upper));
+        down.code = Some(code.to_string());
         down.windows_virtual_key_code = Some(vk);
         down.modifiers = Some(modifiers);
         if let Err(e) = page.execute(down).await {
@@ -326,20 +388,15 @@ pub async fn cdp_press_key(
 
         // Only send Char event if no modifiers (otherwise it's a shortcut).
         if modifiers == 0 || modifiers == MODIFIER_SHIFT {
-            let text = if modifiers & MODIFIER_SHIFT != 0 {
-                upper.to_string()
-            } else {
-                ch.to_string()
-            };
             let mut char_event = DispatchKeyEventParams::new(DispatchKeyEventType::Char);
-            char_event.text = Some(text);
+            char_event.text = Some(ch.to_string());
             char_event.modifiers = Some(modifiers);
             let _ = page.execute(char_event).await;
         }
 
         let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
         up.key = Some(main_key.to_string());
-        up.code = Some(format!("Key{}", upper));
+        up.code = Some(code.to_string());
         up.windows_virtual_key_code = Some(vk);
         up.modifiers = Some(modifiers);
         if let Err(e) = page.execute(up).await {
@@ -499,5 +556,34 @@ mod tests {
         let combo = parse_key_combo("Meta+Enter").unwrap();
         assert_eq!(combo.main_key, "Enter");
         assert_eq!(combo.modifiers, MODIFIER_META);
+    }
+
+    // MARK: - char_key_code tests
+
+    #[test]
+    fn char_key_code_letters() {
+        assert_eq!(char_key_code('a'), ("KeyA", 65));
+        assert_eq!(char_key_code('Z'), ("KeyZ", 90));
+    }
+
+    #[test]
+    fn char_key_code_digits() {
+        assert_eq!(char_key_code('0'), ("Digit0", 0x30));
+        assert_eq!(char_key_code('9'), ("Digit9", 0x39));
+    }
+
+    #[test]
+    fn char_key_code_punctuation() {
+        assert_eq!(char_key_code('+'), ("Equal", 0xBB));
+        assert_eq!(char_key_code('-'), ("Minus", 0xBD));
+        assert_eq!(char_key_code('/'), ("Slash", 0xBF));
+        assert_eq!(char_key_code('.'), ("Period", 0xBE));
+        assert_eq!(char_key_code(','), ("Comma", 0xBC));
+        assert_eq!(char_key_code(';'), ("Semicolon", 0xBA));
+    }
+
+    #[test]
+    fn char_key_code_unknown() {
+        assert_eq!(char_key_code('€'), ("Unidentified", 0));
     }
 }

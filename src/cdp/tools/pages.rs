@@ -163,7 +163,19 @@ pub async fn cdp_navigate(
                 None => return cdp_error("'url' parameter is required when type is 'url'."),
             };
             match page.execute(NavigateParams::new(&target_url)).await {
-                Ok(_) => {
+                Ok(resp) => {
+                    if let Some(error_text) = &resp.result.error_text {
+                        return cdp_error(format!(
+                            "Navigation to {} failed: {}",
+                            target_url, error_text
+                        ));
+                    }
+                    if resp.result.is_download == Some(true) {
+                        return cdp_error(format!(
+                            "Navigation to {} triggered a download instead of loading a page.",
+                            target_url
+                        ));
+                    }
                     client.last_snapshot = None;
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {}",
@@ -272,7 +284,7 @@ pub async fn cdp_close_page(
         ));
     }
 
-    let page_to_close = client.last_page_list.remove(page_idx);
+    let page_to_close = client.last_page_list[page_idx].clone();
     let url = page_to_close.url().await.ok().flatten().unwrap_or_default();
 
     let is_selected = client
@@ -284,9 +296,25 @@ pub async fn cdp_close_page(
         return cdp_error(format!("Failed to close page [{}]: {}", page_idx, e));
     }
 
+    // Remove from cached list only after successful close.
+    client.last_page_list.remove(page_idx);
+
+    // Select the adjacent tab (same index, or previous if we closed the last one).
+    // NOTE: CDP doesn't expose tab-strip order — last_page_list comes from
+    // browser.pages() which iterates an unordered HashMap. This is a best-effort
+    // heuristic; the selected page may not match the browser's visually active tab.
     if is_selected {
-        if let Some(replacement) = client.last_page_list.first() {
-            client.selected_page = Some(replacement.clone());
+        let new_idx = if page_idx < client.last_page_list.len() {
+            page_idx
+        } else {
+            client.last_page_list.len().saturating_sub(1)
+        };
+        if let Some(replacement) = client.last_page_list.get(new_idx) {
+            if replacement.bring_to_front().await.is_ok() {
+                client.selected_page = Some(replacement.clone());
+            } else {
+                client.selected_page = None;
+            }
             client.last_snapshot = None;
         }
     }
