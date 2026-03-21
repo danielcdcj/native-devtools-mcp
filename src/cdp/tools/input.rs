@@ -224,8 +224,6 @@ fn char_key_code(ch: char) -> (&'static str, i64) {
     match ch {
         'a'..='z' | 'A'..='Z' => {
             let upper = ch.to_ascii_uppercase();
-            // Code is "KeyA".."KeyZ", VK is the ASCII value of the uppercase letter.
-            // We leak a small static string for simplicity — these are a fixed set.
             let code = match upper {
                 'A' => "KeyA",
                 'B' => "KeyB",
@@ -338,6 +336,72 @@ fn parse_key_combo(key: &str) -> Result<ParsedKeyCombo, String> {
     })
 }
 
+/// Dispatch a named key press (RawKeyDown + KeyUp) with optional modifiers.
+async fn dispatch_named_key(
+    page: &chromiumoxide::page::Page,
+    key_val: &str,
+    code: &str,
+    vk: i64,
+    modifiers: i64,
+) -> Result<(), String> {
+    let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
+    down.key = Some(key_val.to_string());
+    down.code = Some(code.to_string());
+    down.windows_virtual_key_code = Some(vk);
+    down.modifiers = Some(modifiers);
+    page.execute(down)
+        .await
+        .map_err(|e| format!("Failed to press key {}: {}", key_val, e))?;
+
+    let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
+    up.key = Some(key_val.to_string());
+    up.code = Some(code.to_string());
+    up.windows_virtual_key_code = Some(vk);
+    up.modifiers = Some(modifiers);
+    page.execute(up)
+        .await
+        .map_err(|e| format!("Failed to release key {}: {}", key_val, e))?;
+
+    Ok(())
+}
+
+/// Dispatch a single character key press (RawKeyDown + Char + KeyUp).
+async fn dispatch_char(
+    page: &chromiumoxide::page::Page,
+    ch: char,
+    modifiers: i64,
+) -> Result<(), String> {
+    let (code, vk) = char_key_code(ch);
+
+    let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
+    down.key = Some(ch.to_string());
+    down.code = Some(code.to_string());
+    down.windows_virtual_key_code = Some(vk);
+    down.modifiers = Some(modifiers);
+    page.execute(down)
+        .await
+        .map_err(|e| format!("Failed to press key {}: {}", ch, e))?;
+
+    // Only send Char event if no modifiers (otherwise it's a shortcut).
+    if modifiers == 0 || modifiers == MODIFIER_SHIFT {
+        let mut char_event = DispatchKeyEventParams::new(DispatchKeyEventType::Char);
+        char_event.text = Some(ch.to_string());
+        char_event.modifiers = Some(modifiers);
+        let _ = page.execute(char_event).await;
+    }
+
+    let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
+    up.key = Some(ch.to_string());
+    up.code = Some(code.to_string());
+    up.windows_virtual_key_code = Some(vk);
+    up.modifiers = Some(modifiers);
+    page.execute(up)
+        .await
+        .map_err(|e| format!("Failed to release key {}: {}", ch, e))?;
+
+    Ok(())
+}
+
 pub async fn cdp_press_key(
     key: String,
     include_snapshot: bool,
@@ -380,51 +444,13 @@ pub async fn cdp_press_key(
 
     // Dispatch main key.
     if let Some((key_val, code, vk)) = key_definition(main_key) {
-        let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
-        down.key = Some(key_val.to_string());
-        down.code = Some(code.to_string());
-        down.windows_virtual_key_code = Some(vk);
-        down.modifiers = Some(modifiers);
-        if let Err(e) = page.execute(down).await {
-            return cdp_error(format!("Failed to press key {}: {}", main_key, e));
-        }
-
-        let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
-        up.key = Some(key_val.to_string());
-        up.code = Some(code.to_string());
-        up.windows_virtual_key_code = Some(vk);
-        up.modifiers = Some(modifiers);
-        if let Err(e) = page.execute(up).await {
-            return cdp_error(format!("Failed to release key {}: {}", main_key, e));
+        if let Err(e) = dispatch_named_key(&page, key_val, code, vk, modifiers).await {
+            return cdp_error(e);
         }
     } else if main_key.len() == 1 {
         let ch = main_key.chars().next().unwrap_or(' ');
-        let (code, vk) = char_key_code(ch);
-
-        let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
-        down.key = Some(main_key.to_string());
-        down.code = Some(code.to_string());
-        down.windows_virtual_key_code = Some(vk);
-        down.modifiers = Some(modifiers);
-        if let Err(e) = page.execute(down).await {
-            return cdp_error(format!("Failed to press key {}: {}", main_key, e));
-        }
-
-        // Only send Char event if no modifiers (otherwise it's a shortcut).
-        if modifiers == 0 || modifiers == MODIFIER_SHIFT {
-            let mut char_event = DispatchKeyEventParams::new(DispatchKeyEventType::Char);
-            char_event.text = Some(ch.to_string());
-            char_event.modifiers = Some(modifiers);
-            let _ = page.execute(char_event).await;
-        }
-
-        let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
-        up.key = Some(main_key.to_string());
-        up.code = Some(code.to_string());
-        up.windows_virtual_key_code = Some(vk);
-        up.modifiers = Some(modifiers);
-        if let Err(e) = page.execute(up).await {
-            return cdp_error(format!("Failed to release key {}: {}", main_key, e));
+        if let Err(e) = dispatch_char(&page, ch, modifiers).await {
+            return cdp_error(e);
         }
     } else {
         return cdp_error(format!(
@@ -460,52 +486,32 @@ pub async fn cdp_type_text(
         Err(e) => return e,
     };
 
+    // Validate submit_key before typing so we fail fast on bad input.
+    let submit_def = if let Some(ref sk) = submit_key {
+        match key_definition(sk) {
+            Some(def) => Some(def),
+            None => {
+                return cdp_error(format!(
+                    "Unknown submit key '{}'. Use key names like Enter, Tab, Escape.",
+                    sk
+                ))
+            }
+        }
+    } else {
+        None
+    };
+
     drop(guard);
 
-    // Type each character via key events.
     for ch in text.chars() {
-        let (code, vk) = char_key_code(ch);
-
-        let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
-        down.key = Some(ch.to_string());
-        down.code = Some(code.to_string());
-        down.windows_virtual_key_code = Some(vk);
-        if let Err(e) = page.execute(down).await {
-            return cdp_error(format!("Failed to type character '{}': {}", ch, e));
+        if let Err(e) = dispatch_char(&page, ch, 0).await {
+            return cdp_error(e);
         }
-
-        let mut char_event = DispatchKeyEventParams::new(DispatchKeyEventType::Char);
-        char_event.text = Some(ch.to_string());
-        let _ = page.execute(char_event).await;
-
-        let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
-        up.key = Some(ch.to_string());
-        up.code = Some(code.to_string());
-        up.windows_virtual_key_code = Some(vk);
-        let _ = page.execute(up).await;
     }
 
-    // Optionally press a submit key after typing.
-    if let Some(ref sk) = submit_key {
-        if let Some((key_val, code, vk)) = key_definition(sk) {
-            let mut down = DispatchKeyEventParams::new(DispatchKeyEventType::RawKeyDown);
-            down.key = Some(key_val.to_string());
-            down.code = Some(code.to_string());
-            down.windows_virtual_key_code = Some(vk);
-            if let Err(e) = page.execute(down).await {
-                return cdp_error(format!("Failed to press submit key '{}': {}", sk, e));
-            }
-
-            let mut up = DispatchKeyEventParams::new(DispatchKeyEventType::KeyUp);
-            up.key = Some(key_val.to_string());
-            up.code = Some(code.to_string());
-            up.windows_virtual_key_code = Some(vk);
-            let _ = page.execute(up).await;
-        } else {
-            return cdp_error(format!(
-                "Unknown submit key '{}'. Use key names like Enter, Tab, Escape.",
-                sk
-            ));
+    if let Some((key_val, code, vk)) = submit_def {
+        if let Err(e) = dispatch_named_key(&page, key_val, code, vk, 0).await {
+            return cdp_error(e);
         }
     }
 

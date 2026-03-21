@@ -228,17 +228,14 @@ pub async fn cdp_wait_for(
     timeout_ms: Option<u64>,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
-    if texts.is_empty() {
-        return cdp_error("At least one text value is required.");
-    }
-
     let raw_timeout = timeout_ms.unwrap_or(10_000).min(MAX_WAIT_TIMEOUT_MS);
     let timeout = std::time::Duration::from_millis(raw_timeout);
     let poll_interval = std::time::Duration::from_millis(500);
     let start = std::time::Instant::now();
 
     // Build JS check: resolves true when any of the texts appear in the page body.
-    let texts_json = serde_json::to_string(&texts).unwrap_or_else(|_| format!("{:?}", texts));
+    // serde_json::to_string on Vec<String> is infallible.
+    let texts_json = serde_json::to_string(&texts).unwrap();
     let check_js = format!(
         "document.body && {}.some(t => document.body.innerText.includes(t))",
         texts_json
