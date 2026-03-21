@@ -55,6 +55,14 @@ pub async fn cdp_evaluate_script(
             }
         };
 
+        // Staleness check: verify the page hasn't navigated since the snapshot was taken.
+        let current_url = page.url().await.ok().flatten().unwrap_or_default();
+        if current_url != snapshot_map.page_url {
+            return CallToolResult::error(vec![Content::text(
+                "Snapshot is stale — page has navigated since last snapshot. Call cdp_take_snapshot again.",
+            )]);
+        }
+
         let arg_list = args.as_ref().unwrap();
         let mut call_arguments: Vec<CallArgument> = Vec::with_capacity(arg_list.len());
 
@@ -199,6 +207,14 @@ pub async fn cdp_click(
             )]);
         }
     };
+
+    // Staleness check: verify the page hasn't navigated since the snapshot was taken.
+    let current_url = page.url().await.ok().flatten().unwrap_or_default();
+    if current_url != snapshot_map.page_url {
+        return CallToolResult::error(vec![Content::text(
+            "Snapshot is stale — page has navigated since last snapshot. Call cdp_take_snapshot again.",
+        )]);
+    }
 
     let node = match snapshot_map.uid_to_node.get(&uid) {
         Some(n) => n,
