@@ -1149,7 +1149,7 @@ impl MacOSDevToolsServer {
     fn get_cdp_connect_tool() -> Tool {
         Tool::new(
             "cdp_connect",
-            "Connect to a Chrome or Electron app via its remote debugging port. The app must be running with --remote-debugging-port=PORT.",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_take_snapshot to see page elements.",
             Arc::new(json_to_object(serde_json::json!({
                 "type": "object",
                 "required": ["port"],
@@ -1168,7 +1168,7 @@ impl MacOSDevToolsServer {
         vec![
             Tool::new(
                 "cdp_disconnect",
-                "Disconnect from the Chrome/Electron app.",
+                "Disconnect from the Chrome/Electron app. CDP tools will no longer be available until cdp_connect is called again.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1176,7 +1176,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_take_snapshot",
-                "Take an accessibility tree snapshot of the selected browser page. Returns a structured text representation with unique element IDs that can be used with cdp_click and cdp_evaluate_script.",
+                "Take a text snapshot of the selected browser page based on the accessibility tree. Returns page elements with unique IDs (uid), roles, and names. Always take a fresh snapshot before clicking or interacting — element UIDs change between snapshots. Prefer this over take_screenshot for identifying clickable elements in web content.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1184,7 +1184,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_evaluate_script",
-                "Evaluate a JavaScript function in the selected browser page. Returns the result as JSON. Optionally pass element UIDs from a snapshot as arguments.",
+                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_snapshot via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: '5'}].",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["function"],
@@ -1208,7 +1208,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_click",
-                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view and clicks its center.",
+                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content. Always call cdp_take_snapshot first to get current element UIDs.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["uid"],
@@ -1226,7 +1226,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_list_pages",
-                "List all pages (tabs) in the connected browser. Returns page indices for use with cdp_select_page.",
+                "List all open pages (tabs) in the connected browser. Returns page indices and URLs. The currently selected page is marked with *. Use cdp_select_page to switch between pages.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1234,7 +1234,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_select_page",
-                "Select a browser page (tab) by index for subsequent CDP operations. Call cdp_list_pages first to see available indices.",
+                "Select a browser page (tab) by index as context for subsequent CDP operations. Call cdp_list_pages first to see available pages and their indices.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["page_idx"],
