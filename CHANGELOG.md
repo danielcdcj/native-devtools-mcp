@@ -2,6 +2,24 @@
 
 ## v0.6.0
 
+### Chrome DevTools Protocol (CDP)
+
+New `cdp_*` tools for automating Chrome and Electron apps via their remote debugging port, powered by the `chromiumoxide` crate. This eliminates the need for a separate Node.js MCP server (chrome-devtools-mcp) for browser automation.
+
+- **`cdp_connect` / `cdp_disconnect`** — connect to a running Chrome/Electron instance on a given port
+- **`cdp_take_snapshot`** — accessibility tree snapshot of the browser page (element UIDs, roles, names)
+- **`cdp_evaluate_script`** — evaluate JavaScript in the page, with optional element references from the snapshot
+- **`cdp_click`** — click a DOM element by UID (scroll-into-view, more reliable than screen coordinates for web content)
+- **`cdp_list_pages` / `cdp_select_page`** — tab management
+
+Requires Chrome 136+: `--remote-debugging-port` is silently ignored unless `--user-data-dir` points to a non-default profile. The profile is persistent across launches.
+
+Behind the `cdp` feature flag (enabled by default).
+
+### Accessibility tree snapshot
+
+New `take_ax_snapshot` tool that serializes the full macOS Accessibility (AX) tree into a structured text format with unique element IDs, roles, and names. Works for any app without requiring a debug port.
+
 ### Screen recording
 
 New `start_recording` / `stop_recording` tools for capturing screen activity as MP4 video. Useful for recording UI flows, repro steps, and demo clips.

@@ -35,6 +35,10 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. |
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
+| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_snapshot()` → `cdp_click(uid="42")` | CDP is more reliable than coordinates for web content. |
+| "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
+| "Switch browser tabs" | `cdp_list_pages()` → `cdp_select_page(page_idx=1)` | List tabs, then select by index. |
+| "Get browser page structure" | `cdp_take_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
 
 ---
 
@@ -162,7 +166,32 @@ Tools appear dynamically — `stop_recording` only shows while recording is acti
 3. stop_recording → [{timestamp_ms: 1234, path: "/tmp/recording/frame_1234.jpg", app_name: "Safari", ...}, ...]
 ```
 
-### 6. Android Device Control
+### 6. Browser Automation (CDP)
+
+Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level element targeting. More reliable than screen coordinates for web content — handles offscreen elements, responsive layouts, and iframes.
+
+**Setup:** The app must be launched with `--remote-debugging-port=PORT` and `--user-data-dir=PATH` (Chrome 136+ requires a non-default profile).
+
+#### Tools (available after `cdp_connect`)
+
+*   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
+*   `cdp_disconnect`: Disconnect and hide CDP tools.
+*   `cdp_take_snapshot`: Accessibility tree snapshot — returns elements with unique UIDs, roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
+*   `cdp_click(uid, dbl_click?)`: Click an element by UID from the snapshot. Scrolls into view automatically.
+*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "5"}]`.
+*   `cdp_list_pages`: List open tabs with indices. Selected page marked with `*`.
+*   `cdp_select_page(page_idx)`: Switch to a tab by index.
+
+#### CDP Workflow Example
+```
+1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/profile"])
+2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
+3. cdp_evaluate_script(function="window.location.href = 'https://example.com'")
+4. cdp_take_snapshot()                     → uid=1 RootWebArea "Example" ...
+5. cdp_click(uid="5")                      → "Clicked uid=5 'Submit' (button) at (200, 300)"
+```
+
+### 7. Android Device Control
 
 Android support is built into every release. No feature flag or separate build is required.
 
