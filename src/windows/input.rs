@@ -143,9 +143,12 @@ pub fn drag(
     let base_flags = (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK).0;
     let move_flags = (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK).0;
 
-    // Move to start and press down
-    let (start_abs_x, start_abs_y) = to_absolute_coords(start_x, start_y);
-    let down_input = make_mouse_input(start_abs_x, start_abs_y, base_flags | down_flag.0, 0);
+    // Move cursor to start position first (like click does)
+    move_mouse(start_x, start_y)?;
+    thread::sleep(Duration::from_millis(10));
+
+    // Press down at current cursor position
+    let down_input = make_mouse_input(0, 0, down_flag.0, 0);
 
     unsafe {
         let result = SendInput(&[down_input], std::mem::size_of::<INPUT>() as i32);
