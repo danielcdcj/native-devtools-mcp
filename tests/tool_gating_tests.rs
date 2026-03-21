@@ -160,6 +160,65 @@ mod android_tool_gating {
 }
 
 #[cfg(test)]
+#[cfg(feature = "cdp")]
+mod cdp_tool_gating {
+    use super::*;
+
+    #[test]
+    fn test_cdp_connect_always_visible() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.contains(&"cdp_connect".to_string()));
+    }
+
+    #[test]
+    fn test_cdp_tools_hidden_when_disconnected() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        assert!(!names.contains(&"cdp_disconnect".to_string()));
+        assert!(!names.contains(&"cdp_take_snapshot".to_string()));
+        assert!(!names.contains(&"cdp_evaluate_script".to_string()));
+        assert!(!names.contains(&"cdp_click".to_string()));
+        assert!(!names.contains(&"cdp_list_pages".to_string()));
+        assert!(!names.contains(&"cdp_select_page".to_string()));
+    }
+
+    #[test]
+    fn test_cdp_tools_visible_when_connected() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, true, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+
+        // Base tool still visible
+        assert!(names.contains(&"cdp_connect".to_string()));
+
+        // Connected-only tools
+        assert!(names.contains(&"cdp_disconnect".to_string()));
+        assert!(names.contains(&"cdp_take_snapshot".to_string()));
+        assert!(names.contains(&"cdp_evaluate_script".to_string()));
+        assert!(names.contains(&"cdp_click".to_string()));
+        assert!(names.contains(&"cdp_list_pages".to_string()));
+        assert!(names.contains(&"cdp_select_page".to_string()));
+    }
+
+    #[test]
+    fn test_cdp_connection_adds_tools() {
+        let disconnected = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let connected = MacOSDevToolsServer::get_tools(false, false, true, false, false);
+
+        assert!(
+            connected.len() > disconnected.len(),
+            "CDP connected state should expose more tools: {} vs {}",
+            connected.len(),
+            disconnected.len()
+        );
+
+        // Should add exactly 6 tools (disconnect + 5 functional tools)
+        assert_eq!(connected.len() - disconnected.len(), 6);
+    }
+}
+
+#[cfg(test)]
 mod server_capabilities {
     use super::*;
 
