@@ -124,19 +124,44 @@ pub fn map_ax_role(ax_role: &str) -> String {
 pub fn map_uia_control_type(control_type_id: i32) -> String {
     match control_type_id {
         50000 => "button",
+        50001 => "calendar",
         50002 => "checkbox",
         50003 => "combobox",
         50004 => "textbox",
         50005 => "link",
         50006 => "img",
+        50007 => "listitem",
         50008 => "list",
+        50009 => "menu",
+        50010 => "menubar",
         50011 => "menuitem",
+        50012 => "progressbar",
+        50013 => "radio",
         50014 => "scrollbar",
+        50015 => "slider",
+        50016 => "spinner",
+        50017 => "statusbar",
+        50018 => "tab",
         50019 => "tablist",
         50020 => "text",
         50021 => "toolbar",
+        50022 => "tooltip",
+        50023 => "tree",
+        50024 => "treeitem",
+        50025 => "custom",
         50026 => "generic",
+        50027 => "thumb",
+        50028 => "datagrid",
+        50029 => "dataitem",
+        50030 => "document",
+        50031 => "splitbutton",
+        50032 => "window",
+        50033 => "pane",
+        50034 => "header",
+        50035 => "headeritem",
         50036 => "table",
+        50037 => "titlebar",
+        50038 => "separator",
         _ => return format!("unknown_{}", control_type_id),
     }
     .to_string()
@@ -264,19 +289,44 @@ mod tests {
     #[test]
     fn test_map_windows_control_type() {
         assert_eq!(map_uia_control_type(50000), "button");
+        assert_eq!(map_uia_control_type(50001), "calendar");
         assert_eq!(map_uia_control_type(50002), "checkbox");
         assert_eq!(map_uia_control_type(50003), "combobox");
         assert_eq!(map_uia_control_type(50004), "textbox");
         assert_eq!(map_uia_control_type(50005), "link");
         assert_eq!(map_uia_control_type(50006), "img");
+        assert_eq!(map_uia_control_type(50007), "listitem");
         assert_eq!(map_uia_control_type(50008), "list");
+        assert_eq!(map_uia_control_type(50009), "menu");
+        assert_eq!(map_uia_control_type(50010), "menubar");
         assert_eq!(map_uia_control_type(50011), "menuitem");
+        assert_eq!(map_uia_control_type(50012), "progressbar");
+        assert_eq!(map_uia_control_type(50013), "radio");
         assert_eq!(map_uia_control_type(50014), "scrollbar");
+        assert_eq!(map_uia_control_type(50015), "slider");
+        assert_eq!(map_uia_control_type(50016), "spinner");
+        assert_eq!(map_uia_control_type(50017), "statusbar");
+        assert_eq!(map_uia_control_type(50018), "tab");
         assert_eq!(map_uia_control_type(50019), "tablist");
         assert_eq!(map_uia_control_type(50020), "text");
         assert_eq!(map_uia_control_type(50021), "toolbar");
+        assert_eq!(map_uia_control_type(50022), "tooltip");
+        assert_eq!(map_uia_control_type(50023), "tree");
+        assert_eq!(map_uia_control_type(50024), "treeitem");
+        assert_eq!(map_uia_control_type(50025), "custom");
         assert_eq!(map_uia_control_type(50026), "generic");
+        assert_eq!(map_uia_control_type(50027), "thumb");
+        assert_eq!(map_uia_control_type(50028), "datagrid");
+        assert_eq!(map_uia_control_type(50029), "dataitem");
+        assert_eq!(map_uia_control_type(50030), "document");
+        assert_eq!(map_uia_control_type(50031), "splitbutton");
+        assert_eq!(map_uia_control_type(50032), "window");
+        assert_eq!(map_uia_control_type(50033), "pane");
+        assert_eq!(map_uia_control_type(50034), "header");
+        assert_eq!(map_uia_control_type(50035), "headeritem");
         assert_eq!(map_uia_control_type(50036), "table");
+        assert_eq!(map_uia_control_type(50037), "titlebar");
+        assert_eq!(map_uia_control_type(50038), "separator");
     }
 
     #[cfg(target_os = "windows")]
