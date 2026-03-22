@@ -1,19 +1,22 @@
-//! Windows UI Automation (UIA) text search.
+//! Windows UI Automation (UIA) helpers.
 //!
-//! Uses the Windows Accessibility tree to find UI elements by name.
-//! This is faster and more reliable than OCR for standard UI elements
-//! (buttons, labels, menus, etc.).
+//! Uses the Windows Accessibility tree for:
+//! - Text search: find UI elements by name (faster than OCR for standard controls)
+//! - Snapshot: collect the full UIA tree as a flat list of snapshot nodes
 
 use super::ocr::{TextBounds, TextMatch};
-use crate::tools::ax_snapshot::AXSnapshotNode;
+use crate::tools::ax_snapshot::{map_uia_control_type, AXSnapshotNode};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope, TreeScope_Descendants,
-    TreeScope_Element,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker, TreeScope,
+    TreeScope_Descendants, TreeScope_Element,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+const MAX_DEPTH: u32 = 50;
+const MAX_ELEMENTS: usize = 10_000;
 
 /// Enumerate all UIA elements in the foreground window, calling `visitor` on each
 /// element's name (non-empty names only). Returns early with an empty result if
@@ -492,13 +495,171 @@ fn uia_control_type_name(id: i32) -> Option<String> {
     Some(name.to_string())
 }
 
-/// Collect the full UIA accessibility tree as snapshot nodes.
-/// TODO: Implement full UIA tree walking (currently only find_text_uia is implemented).
-pub fn collect_uia_tree(_app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, String> {
-    Err(
-        "take_ax_snapshot is not yet implemented on Windows. Use take_screenshot with OCR instead."
-            .to_string(),
-    )
+/// Walk the UIA tree of an application and return a flat, depth-first
+/// snapshot of all elements as [`AXSnapshotNode`] values.
+///
+/// If `app_name` is `Some`, the tree is rooted at that application's window;
+/// otherwise the foreground window is used.
+pub fn collect_uia_tree(app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
+            .map_err(|e| format!("Failed to create IUIAutomation: {}", e))?;
+
+        let root = uia_root_element(&automation, app_name)?;
+
+        let walker = automation
+            .ControlViewWalker()
+            .map_err(|e| format!("Failed to create ControlViewWalker: {}", e))?;
+
+        let mut nodes = Vec::new();
+        let mut element_count: usize = 0;
+        let mut next_uid: u32 = 1;
+
+        collect_uia_tree_recursive(
+            &walker,
+            &root,
+            &mut element_count,
+            0,
+            &mut next_uid,
+            &mut nodes,
+        );
+
+        Ok(nodes)
+    }
+}
+
+/// Resolve the root UIA element for tree collection.
+///
+/// If `app_name` is provided, finds the first matching window by app name.
+/// Otherwise uses the foreground window.
+unsafe fn uia_root_element(
+    automation: &IUIAutomation,
+    app_name: Option<&str>,
+) -> Result<IUIAutomationElement, String> {
+    let hwnd = match app_name {
+        Some(name) => {
+            let windows = super::window::find_windows_by_app(name)?;
+            let win = windows.first().ok_or_else(|| {
+                format!(
+                    "No app found matching '{}'. Use list_apps to find the correct app name.",
+                    name
+                )
+            })?;
+            super::window::hwnd_from_id(win.id)
+        }
+        None => {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() {
+                return Err("No foreground window available".to_string());
+            }
+            hwnd
+        }
+    };
+
+    automation
+        .ElementFromHandle(hwnd)
+        .map_err(|e| format!("Failed to get UIA element from window: {}", e))
+}
+
+/// Recursively walk the UIA control view and collect [`AXSnapshotNode`] entries.
+///
+/// Uses `IUIAutomationTreeWalker` to traverse children depth-first.
+/// UIDs are assigned sequentially via `next_uid` (starts at 1).
+unsafe fn collect_uia_tree_recursive(
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    element_count: &mut usize,
+    depth: u32,
+    next_uid: &mut u32,
+    nodes: &mut Vec<AXSnapshotNode>,
+) {
+    if depth > MAX_DEPTH || *element_count >= MAX_ELEMENTS {
+        return;
+    }
+
+    *element_count += 1;
+
+    let uid = *next_uid;
+    *next_uid += 1;
+
+    let role = element
+        .CurrentControlType()
+        .map(|ct| map_uia_control_type(ct.0))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let name = element
+        .CurrentName()
+        .ok()
+        .map(|n| n.to_string())
+        .filter(|n| !n.is_empty());
+
+    let value = element
+        .GetCurrentPropertyValue(
+            windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId,
+        )
+        .ok()
+        .and_then(|v| {
+            let s = v.to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
+
+    let focused = element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool();
+
+    let disabled = element
+        .CurrentIsEnabled()
+        .map(|b| !b.as_bool())
+        .unwrap_or(false);
+
+    // ExpandCollapseState: 0=Collapsed, 1=Expanded, 2=PartiallyExpanded, 3=LeafNode
+    let expanded = element
+        .GetCurrentPropertyValue(
+            windows::Win32::UI::Accessibility::UIA_ExpandCollapseExpandCollapseStatePropertyId,
+        )
+        .ok()
+        .and_then(|v| {
+            let state: i32 = (&v).try_into().ok()?;
+            // Only report expanded/collapsed, not leaf nodes
+            if state == 3 { None } else { Some(state == 1 || state == 2) }
+        });
+
+    let selected = element
+        .GetCurrentPropertyValue(
+            windows::Win32::UI::Accessibility::UIA_SelectionItemIsSelectedPropertyId,
+        )
+        .ok()
+        .and_then(|v| {
+            let b: bool = (&v).try_into().ok()?;
+            Some(b)
+        });
+
+    nodes.push(AXSnapshotNode {
+        uid,
+        role,
+        name,
+        value,
+        focused,
+        disabled,
+        expanded,
+        selected,
+        depth,
+    });
+
+    // Walk children via the tree walker
+    let mut child = match walker.GetFirstChildElement(element) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    loop {
+        collect_uia_tree_recursive(walker, &child, element_count, depth + 1, next_uid, nodes);
+
+        child = match walker.GetNextSiblingElement(&child) {
+            Ok(next) => next,
+            Err(_) => break,
+        };
+    }
 }
 
 #[cfg(test)]
@@ -568,5 +729,26 @@ mod tests {
         if let Ok(value) = result {
             assert!(value.get("role").is_some() || value.get("name").is_some());
         }
+    }
+
+    #[test]
+    fn test_collect_uia_tree_returns_nodes() {
+        // Uses the foreground window. May fail in headless environments — that's OK.
+        if let Ok(nodes) = collect_uia_tree(None) {
+            assert!(!nodes.is_empty(), "Should find at least one node");
+            // First node should be uid=1 at depth 0
+            assert_eq!(nodes[0].uid, 1);
+            assert_eq!(nodes[0].depth, 0);
+            // UIDs should be sequential
+            for (i, node) in nodes.iter().enumerate() {
+                assert_eq!(node.uid, (i + 1) as u32);
+            }
+        }
+    }
+
+    #[test]
+    fn test_collect_uia_tree_nonexistent_app() {
+        let result = collect_uia_tree(Some("nonexistent_app_xyz_987654"));
+        assert!(result.is_err());
     }
 }
