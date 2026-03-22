@@ -490,6 +490,8 @@ fn uia_control_type_name(id: i32) -> Option<String> {
         50036 => "Table",
         50037 => "TitleBar",
         50038 => "Separator",
+        50039 => "SemanticZoom",
+        50040 => "AppBar",
         _ => return None,
     };
     Some(name.to_string())

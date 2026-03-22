@@ -162,6 +162,8 @@ pub fn map_uia_control_type(control_type_id: i32) -> String {
         50036 => "table",
         50037 => "titlebar",
         50038 => "separator",
+        50039 => "semanticzoom",
+        50040 => "appbar",
         _ => return format!("unknown_{}", control_type_id),
     }
     .to_string()
@@ -327,6 +329,8 @@ mod tests {
         assert_eq!(map_uia_control_type(50036), "table");
         assert_eq!(map_uia_control_type(50037), "titlebar");
         assert_eq!(map_uia_control_type(50038), "separator");
+        assert_eq!(map_uia_control_type(50039), "semanticzoom");
+        assert_eq!(map_uia_control_type(50040), "appbar");
     }
 
     #[cfg(target_os = "windows")]
