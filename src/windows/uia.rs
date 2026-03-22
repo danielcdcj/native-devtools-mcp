@@ -598,16 +598,21 @@ unsafe fn collect_uia_tree_recursive(
         .filter(|n| !n.is_empty());
 
     let value = element
-        .GetCurrentPropertyValue(
-            windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId,
-        )
+        .GetCurrentPropertyValue(windows::Win32::UI::Accessibility::UIA_ValueValuePropertyId)
         .ok()
         .and_then(|v| {
             let s = v.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
-    let focused = element.CurrentHasKeyboardFocus().unwrap_or_default().as_bool();
+    let focused = element
+        .CurrentHasKeyboardFocus()
+        .unwrap_or_default()
+        .as_bool();
 
     let disabled = element
         .CurrentIsEnabled()
@@ -623,7 +628,11 @@ unsafe fn collect_uia_tree_recursive(
         .and_then(|v| {
             let state: i32 = (&v).try_into().ok()?;
             // Only report expanded/collapsed, not leaf nodes
-            if state == 3 { None } else { Some(state == 1 || state == 2) }
+            if state == 3 {
+                None
+            } else {
+                Some(state == 1 || state == 2)
+            }
         });
 
     let selected = element
