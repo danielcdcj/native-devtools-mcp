@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.1
+
+### Windows fixes
+
+- **Implement `take_ax_snapshot` on Windows** — added `collect_uia_tree` using UI Automation, enabling accessibility tree snapshots on Windows (previously macOS-only)
+- **Map all 41 UIA control types** — `take_ax_snapshot` now correctly identifies all standard Windows control types (buttons, tabs, menus, data grids, semantic elements, etc.) instead of falling back to "Unknown"
+
+### Other
+
+- Shorten `server.json` description to meet MCP registry 100-char limit
+
 ## v0.7.0
 
 ### Chrome DevTools Protocol support
