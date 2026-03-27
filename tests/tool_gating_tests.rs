@@ -40,6 +40,7 @@ mod tool_gating {
         assert!(tool_names.contains(&"type_text".to_string()));
         assert!(tool_names.contains(&"element_at_point".to_string()));
         assert!(tool_names.contains(&"quit_app".to_string()));
+        assert!(tool_names.contains(&"probe_app".to_string()));
 
         // app_connect should always be present
         assert!(tool_names.contains(&"app_connect".to_string()));

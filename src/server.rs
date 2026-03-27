@@ -652,6 +652,20 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "probe_app",
+                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_take_snapshot).",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["app_name"],
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Application name to probe (e.g., 'Signal', 'Google Chrome', 'Safari')"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 
@@ -1660,6 +1674,11 @@ impl ServerHandler for MacOSDevToolsServer {
                     Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
                 }
+            }
+            "probe_app" => {
+                let params: crate::tools::probe_app::ProbeAppParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::probe_app::probe_app(params))
             }
             // Android tools
             "android_list_devices" => match crate::android::device::list_devices() {

@@ -416,6 +416,92 @@ pub fn quit_app(app_name: &str, force: bool) -> Result<u32, String> {
     }
 }
 
+/// Known Chrome-family executable names (without `.exe`).
+const CHROME_EXE_NAMES: &[&str] = &["chrome", "msedge", "brave", "chromium", "arc"];
+
+/// Check if an app is a Chrome-family browser.
+/// On Windows, matches against known executable names (bundle_id is always None).
+pub fn is_chrome_browser(_bundle_id: Option<&str>, app_name: &str) -> bool {
+    let lower = app_name.to_lowercase();
+    CHROME_EXE_NAMES.iter().any(|&name| lower == name)
+}
+
+/// Check if a running app is an Electron app by inspecting its install directory
+/// for `resources/electron.asar` next to the executable.
+pub fn is_electron_app_by_pid(pid: i32) -> bool {
+    get_process_exe_dir(pid as u32)
+        .map(|dir| is_electron_dir(&dir))
+        .unwrap_or(false)
+}
+
+/// Check if a non-running app is Electron by searching standard install locations.
+pub fn is_electron_app_by_name(app_name: &str) -> bool {
+    for dir in app_search_dirs() {
+        // Check <dir>/<app_name>/resources/electron.asar
+        let candidate = dir.join(app_name);
+        if is_electron_dir(&candidate) {
+            return true;
+        }
+        // Also check <dir>/<app_name>/app-*/resources/electron.asar (Squirrel installs)
+        if candidate.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&candidate) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if name.to_string_lossy().starts_with("app-") {
+                        if is_electron_dir(&entry.path()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_electron_dir(dir: &std::path::Path) -> bool {
+    dir.join("resources").join("electron.asar").exists()
+}
+
+/// Get the directory containing the executable for a process.
+fn get_process_exe_dir(pid: u32) -> Option<std::path::PathBuf> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf: Vec<u16> = vec![0; 260];
+        let mut size = buf.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        );
+        let _ = CloseHandle(handle);
+
+        if result.is_ok() && size > 0 {
+            let path = OsString::from_wide(&buf[..size as usize])
+                .to_string_lossy()
+                .into_owned();
+            std::path::Path::new(&path)
+                .parent()
+                .map(|p| p.to_path_buf())
+        } else {
+            None
+        }
+    }
+}
+
+/// Standard directories to search for installed apps on Windows.
+fn app_search_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![
+        std::path::PathBuf::from(r"C:\Program Files"),
+        std::path::PathBuf::from(r"C:\Program Files (x86)"),
+    ];
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        dirs.push(std::path::PathBuf::from(local).join("Programs"));
+    }
+    dirs
+}
+
 /// Raise windows by PID. On Windows this is a no-op because `activate_app_by_pid`
 /// already uses `BringWindowToTop` + `SetForegroundWindow` which reliably raise windows.
 pub fn raise_windows(_pid: i32) -> bool {
