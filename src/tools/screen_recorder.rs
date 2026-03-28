@@ -67,21 +67,30 @@ impl ScreenRecorder {
     }
 
     /// Cancel recording, await task shutdown, then drain remaining frames.
-    pub async fn cancel_and_drain(self) -> Vec<RecordedFrame> {
+    pub async fn cancel_and_drain(mut self) -> Vec<RecordedFrame> {
         self.cancel.cancel();
-        let Self {
-            frames,
-            mut task_handle,
-            ..
-        } = self;
-        if tokio::time::timeout(std::time::Duration::from_secs(2), &mut task_handle)
+        if tokio::time::timeout(std::time::Duration::from_secs(2), &mut self.task_handle)
             .await
             .is_err()
         {
-            task_handle.abort();
+            self.task_handle.abort();
         }
-        let mut buf = frames.lock().unwrap();
+        // Mark as already stopped so Drop doesn't cancel again
+        self.cancel = CancellationToken::new();
+        let mut buf = self.frames.lock().unwrap();
         buf.drain(..).collect()
+    }
+}
+
+impl Drop for ScreenRecorder {
+    fn drop(&mut self) {
+        if !self.cancel.is_cancelled() && !self.task_handle.is_finished() {
+            tracing::warn!(
+                "ScreenRecorder dropped without stop_recording — cancelling background task"
+            );
+            self.cancel.cancel();
+            self.task_handle.abort();
+        }
     }
 }
 

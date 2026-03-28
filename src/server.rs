@@ -1139,8 +1139,8 @@ impl MacOSDevToolsServer {
                     },
                     "max_duration_ms": {
                         "type": "integer",
-                        "description": "Auto-stop after this many milliseconds (default: 300000 = 5 min)",
-                        "default": 300000
+                        "description": "Auto-stop after this many milliseconds (default: 60000 = 1 min)",
+                        "default": 60000
                     }
                 },
                 "required": ["output_dir"]
@@ -2046,7 +2046,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 let max_duration_ms = args
                     .get("max_duration_ms")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(300_000)
+                    .unwrap_or(60_000)
                     .clamp(1_000, u32::MAX as u64) as u32;
 
                 let output_path = std::path::PathBuf::from(&output_dir);
