@@ -2337,8 +2337,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_element_at_point" => {
-                let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let (x, y) = parse_xy(&args)?;
                 Ok(
                     crate::cdp::tools::cdp_element_at_point(x, y, self.cdp_client.clone())
                         .await,

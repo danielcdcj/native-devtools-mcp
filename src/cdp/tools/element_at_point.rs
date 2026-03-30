@@ -194,13 +194,17 @@ async fn reverse_lookup_uid(
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
     backend_node_id: i64,
 ) -> Result<(String, String, String), String> {
-    // First try with existing snapshot.
+    // First try with existing snapshot, but only if it matches the current page URL.
     {
         let client_guard = cdp_client.read().await;
         let client = client_guard.as_ref().ok_or("No CDP client")?;
         if let Some(ref snapshot) = client.last_snapshot {
-            if let Some(result) = lookup_in_snapshot(snapshot, backend_node_id) {
-                return Ok(result);
+            let page = client.require_page().map_err(|_| "No selected page".to_string())?;
+            let current_url = page.url().await.ok().flatten().unwrap_or_default();
+            if current_url == snapshot.page_url {
+                if let Some(result) = lookup_in_snapshot(snapshot, backend_node_id) {
+                    return Ok(result);
+                }
             }
         }
     }
