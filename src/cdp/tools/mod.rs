@@ -3,10 +3,12 @@
 //! - `pages`: list_pages, select_page, navigate, new_page, close_page, handle_dialog
 //! - `script`: evaluate_script, take_snapshot, wait_for
 
+mod element_at_point;
 mod input;
 mod pages;
 mod script;
 
+pub use element_at_point::cdp_element_at_point;
 pub use input::{cdp_click, cdp_fill, cdp_hover, cdp_press_key, cdp_type_text};
 pub use pages::{
     cdp_close_page, cdp_handle_dialog, cdp_list_pages, cdp_navigate, cdp_new_page, cdp_select_page,

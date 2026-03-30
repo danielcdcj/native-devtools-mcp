@@ -1429,6 +1429,27 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
+            Tool::new(
+                "cdp_element_at_point",
+                "Given screen coordinates (x, y) in points, resolve the CDP accessibility snapshot UID \
+                 of the DOM element at that position. Returns the element's UID, role, name, and \
+                 backend_node_id. Requires an active CDP connection. Coordinates use the same \
+                 screen-point system as element_at_point and click.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {
+                            "type": "number",
+                            "description": "Screen X coordinate in points"
+                        },
+                        "y": {
+                            "type": "number",
+                            "description": "Screen Y coordinate in points"
+                        }
+                    }
+                }))),
+            ),
         ]
     }
 }
@@ -2311,6 +2332,15 @@ impl ServerHandler for MacOSDevToolsServer {
                     .map(String::from);
                 Ok(
                     crate::cdp::tools::cdp_type_text(text, submit_key, self.cdp_client.clone())
+                        .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_element_at_point" => {
+                let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                Ok(
+                    crate::cdp::tools::cdp_element_at_point(x, y, self.cdp_client.clone())
                         .await,
                 )
             }
