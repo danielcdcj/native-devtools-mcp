@@ -144,6 +144,9 @@ pub fn cdp_error(msg: impl Into<String>) -> CallToolResult {
 /// Stores page_url for stale snapshot detection.
 pub struct SnapshotMap {
     pub uid_to_node: HashMap<String, SnapshotNode>,
+    /// Reverse map: backendNodeId → list of snapshot UIDs.
+    /// Skips entries where backendNodeId is 0 (no DOM backing).
+    pub backend_to_uids: HashMap<i64, Vec<String>>,
     pub page_url: String,
 }
 
