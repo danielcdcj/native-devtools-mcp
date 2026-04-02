@@ -156,7 +156,7 @@ Tools appear dynamically — `get_hover_events` and `stop_hover_tracking` only s
 
 Record the frontmost app's window as timestamped JPEG frames. Automatically follows app switches — when the user moves to a different app, recording captures the new app's window.
 
-* `start_recording`: Begin recording. Inputs: `output_dir` (required — directory for JPEG frames), `fps` (default 5), `max_duration_ms` (default 300000 = 5 min).
+* `start_recording`: Begin recording. Inputs: `output_dir` (required — directory for JPEG frames), `fps` (default 5), `max_duration_ms` (default 60000 = 1 min).
 * `stop_recording`: End session, return all frame metadata as JSON array.
 
 Each frame includes: `{ timestamp_ms, path, app_name, window_id, origin_x, origin_y, scale, pixel_width, pixel_height }`.
@@ -195,6 +195,7 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 *   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "5"}]`.
 *   `cdp_list_pages`: List open tabs/windows with indices. Selected page marked with `*`.
 *   `cdp_select_page(page_idx)`: Switch to a tab/window by index.
+*   `cdp_element_at_point(x, y)`: Given screen coordinates (in points), resolve the CDP accessibility snapshot UID of the DOM element at that position. Returns the element's UID, role, name, and backend_node_id. Requires an active CDP connection.
 
 #### Key Patterns
 

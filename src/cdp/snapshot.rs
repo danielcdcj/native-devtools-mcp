@@ -17,6 +17,7 @@ pub fn convert_cdp_ax_tree(
             Vec::new(),
             SnapshotMap {
                 uid_to_node: HashMap::new(),
+                backend_to_uids: HashMap::new(),
                 page_url: page_url.to_string(),
             },
         );
@@ -52,6 +53,7 @@ pub fn convert_cdp_ax_tree(
     // DFS from root (first node), assigning sequential UIDs.
     let mut snapshot_nodes: Vec<AXSnapshotNode> = Vec::new();
     let mut uid_to_node: HashMap<String, SnapshotNode> = HashMap::new();
+    let mut backend_to_uids: HashMap<i64, Vec<String>> = HashMap::new();
     let mut uid_counter: u32 = 1;
     let mut stack: Vec<(usize, u32)> = vec![(0, 0)];
 
@@ -110,6 +112,14 @@ pub fn convert_cdp_ax_tree(
             },
         );
 
+        // Build reverse map, skipping nodes without a real DOM backing (id 0).
+        if backend_node_id != 0 {
+            backend_to_uids
+                .entry(backend_node_id)
+                .or_insert_with(Vec::new)
+                .push(uid.to_string());
+        }
+
         snapshot_nodes.push(AXSnapshotNode {
             uid,
             role,
@@ -133,6 +143,7 @@ pub fn convert_cdp_ax_tree(
 
     let snapshot_map = SnapshotMap {
         uid_to_node,
+        backend_to_uids,
         page_url: page_url.to_string(),
     };
 
@@ -205,7 +216,48 @@ mod tests {
         assert_eq!(snapshot_map.uid_to_node["2"].backend_node_id, 5);
         assert_eq!(snapshot_map.uid_to_node["3"].backend_node_id, 8);
 
+        // Verify reverse map.
+        assert_eq!(snapshot_map.backend_to_uids.len(), 3); // ids 1, 5, 8
+        assert_eq!(snapshot_map.backend_to_uids[&1].len(), 1);
+        assert_eq!(snapshot_map.backend_to_uids[&5].len(), 1);
+        assert_eq!(snapshot_map.backend_to_uids[&8].len(), 1);
+
         // Verify page_url.
         assert_eq!(snapshot_map.page_url, "https://example.com");
+    }
+
+    #[test]
+    fn reverse_map_skips_zero_backend_ids() {
+        let nodes = vec![
+            json!({
+                "nodeId": "1",
+                "role": {"type": "role", "value": "RootWebArea"},
+                "name": {"type": "computedString", "value": "Test"},
+                "backendDOMNodeId": 0,
+                "childIds": ["2", "3"],
+                "properties": []
+            }),
+            json!({
+                "nodeId": "2",
+                "role": {"type": "role", "value": "button"},
+                "name": {"type": "computedString", "value": "Submit"},
+                "backendDOMNodeId": 42,
+                "childIds": [],
+                "properties": []
+            }),
+            json!({
+                "nodeId": "3",
+                "role": {"type": "role", "value": "button"},
+                "name": {"type": "computedString", "value": "Cancel"},
+                "backendDOMNodeId": 42,
+                "childIds": [],
+                "properties": []
+            }),
+        ];
+        let (_, map) = convert_cdp_ax_tree(&nodes, "http://test");
+        // backend_node_id 0 should NOT be in the reverse map
+        assert!(!map.backend_to_uids.contains_key(&0));
+        // backend_node_id 42 should have 2 UIDs
+        assert_eq!(map.backend_to_uids[&42].len(), 2);
     }
 }

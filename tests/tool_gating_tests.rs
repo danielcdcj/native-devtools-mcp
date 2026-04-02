@@ -218,6 +218,7 @@ mod cdp_tool_gating {
         assert!(names.contains(&"cdp_close_page".to_string()));
         assert!(names.contains(&"cdp_wait_for".to_string()));
         assert!(names.contains(&"cdp_type_text".to_string()));
+        assert!(names.contains(&"cdp_element_at_point".to_string()));
     }
 
     #[test]
@@ -232,8 +233,8 @@ mod cdp_tool_gating {
             disconnected.len()
         );
 
-        // Should add exactly 15 tools (disconnect + 14 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 15);
+        // Should add exactly 16 tools (disconnect + 15 functional tools)
+        assert_eq!(connected.len() - disconnected.len(), 16);
     }
 }
 
