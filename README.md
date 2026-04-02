@@ -73,7 +73,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
 7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
 8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
-9.  `cdp_connect` / `cdp_take_snapshot` / `cdp_click` / `cdp_fill` / `cdp_navigate`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, and tab management without a separate Node.js server.
+9.  `cdp_connect` / `cdp_take_snapshot` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
 
 ## 📦 Installation
 
@@ -269,7 +269,7 @@ cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```
 
-**16 CDP tools** — click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
+**17 CDP tools** — click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
 
 **Chrome 136+ note:** Requires `--user-data-dir=<path>` alongside `--remote-debugging-port` (Chrome silently ignores the debug port with the default profile). Electron apps only need `--remote-debugging-port`.
 
