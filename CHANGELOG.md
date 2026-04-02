@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.0
+
+### New tools
+
+- **`cdp_element_at_point`** — resolve the CDP accessibility snapshot UID of the DOM element at given screen coordinates. Returns the element's UID, role, name, and backend_node_id. Bridges native screen coordinates with CDP's DOM model.
+- **`probe_app`** — classify an app's automation capabilities (native AX, CDP debug port, embedded debug server) to help agents pick the right tool strategy.
+
+### Fixes
+
+- **Screen recorder** — add `Drop` cleanup and reduce default `max_duration` from 5 minutes to 1 minute to prevent runaway recordings.
+- **`cdp_element_at_point`** — validate coordinates and check URL staleness before snapshot lookup to avoid stale results.
+
 ## v0.7.1
 
 ### Windows fixes
