@@ -1,9 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use chromiumoxide::cdp::browser_protocol::dom::{
-    DescribeNodeParams, GetNodeForLocationParams,
-};
+use chromiumoxide::cdp::browser_protocol::dom::{DescribeNodeParams, GetNodeForLocationParams};
 use rmcp::model::{CallToolResult, Content};
 
 use crate::cdp::CdpClient;
@@ -100,9 +98,7 @@ struct WindowGeometry {
     scroll_y: f64,
 }
 
-async fn query_window_geometry(
-    page: &chromiumoxide::Page,
-) -> Result<WindowGeometry, String> {
+async fn query_window_geometry(page: &chromiumoxide::Page) -> Result<WindowGeometry, String> {
     use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
 
     let js = "JSON.stringify([window.screenX, window.screenY, window.outerHeight, \
@@ -178,9 +174,7 @@ async fn element_from_point_fallback(
         .object_id
         .ok_or("elementFromPoint returned null (no element at coordinates)")?;
 
-    let describe_params = DescribeNodeParams::builder()
-        .object_id(object_id)
-        .build();
+    let describe_params = DescribeNodeParams::builder().object_id(object_id).build();
 
     let describe_result = page
         .execute(describe_params)
@@ -199,7 +193,9 @@ async fn reverse_lookup_uid(
         let client_guard = cdp_client.read().await;
         let client = client_guard.as_ref().ok_or("No CDP client")?;
         if let Some(ref snapshot) = client.last_snapshot {
-            let page = client.require_page().map_err(|_| "No selected page".to_string())?;
+            let page = client
+                .require_page()
+                .map_err(|_| "No selected page".to_string())?;
             let current_url = page.url().await.ok().flatten().unwrap_or_default();
             if current_url == snapshot.page_url {
                 if let Some(result) = lookup_in_snapshot(snapshot, backend_node_id) {

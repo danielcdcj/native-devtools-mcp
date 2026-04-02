@@ -2338,10 +2338,7 @@ impl ServerHandler for MacOSDevToolsServer {
             #[cfg(feature = "cdp")]
             "cdp_element_at_point" => {
                 let (x, y) = parse_xy(&args)?;
-                Ok(
-                    crate::cdp::tools::cdp_element_at_point(x, y, self.cdp_client.clone())
-                        .await,
-                )
+                Ok(crate::cdp::tools::cdp_element_at_point(x, y, self.cdp_client.clone()).await)
             }
             _ => Err(McpError::invalid_params(
                 format!("Unknown tool: {}", request.name),
