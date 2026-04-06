@@ -20,8 +20,6 @@ pub struct CdpClient {
     pub handler_handle: JoinHandle<()>,
     pub last_snapshot: Option<SnapshotMap>,
     pub last_page_list: Vec<Page>,
-    /// The port used to connect, stored for auto-reconnect.
-    pub port: u16,
 }
 
 impl CdpClient {
@@ -49,7 +47,6 @@ impl CdpClient {
             handler_handle,
             last_snapshot: None,
             last_page_list: Vec::new(),
-            port,
         })
     }
 

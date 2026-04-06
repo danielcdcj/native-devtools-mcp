@@ -63,6 +63,9 @@ pub struct MacOSDevToolsServer {
     screen_recorder: Arc<RwLock<Option<crate::tools::screen_recorder::ScreenRecorder>>>,
     #[cfg(feature = "cdp")]
     cdp_client: Arc<RwLock<Option<crate::cdp::CdpClient>>>,
+    /// Handle for the CDP connection watchdog task; aborted on disconnect.
+    #[cfg(feature = "cdp")]
+    cdp_watchdog: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -82,6 +85,8 @@ impl MacOSDevToolsServer {
             screen_recorder: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cdp")]
             cdp_client: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "cdp")]
+            cdp_watchdog: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -106,47 +111,72 @@ impl MacOSDevToolsServer {
         self.cdp_client.read().await.is_some()
     }
 
-    /// Check if the CDP connection is alive; if the handler has died (target
-    /// restarted), automatically reconnect using the stored port. Returns
-    /// Ok(true) if reconnected, Ok(false) if already healthy, or Err if
-    /// no connection exists or reconnect failed.
+    /// Verify that a CDP connection exists, returning an error if not.
+    /// The background watchdog handles health-checking and reconnection,
+    /// so this only needs to check presence.
     #[cfg(feature = "cdp")]
-    async fn ensure_cdp_connection(&self) -> Result<bool, CallToolResult> {
-        let mut guard = self.cdp_client.write().await;
-        let client = guard.as_mut().ok_or_else(|| {
-            crate::cdp::cdp_error("No CDP connection. Use cdp_connect first.")
-        })?;
-
-        if client.is_connection_healthy().await {
-            return Ok(false); // healthy, no reconnect needed
+    async fn ensure_cdp_connection(&self) -> Result<(), CallToolResult> {
+        if self.cdp_client.read().await.is_some() {
+            Ok(())
+        } else {
+            Err(crate::cdp::cdp_error(
+                "No CDP connection. Use cdp_connect first.",
+            ))
         }
+    }
 
-        // Handler died — target probably restarted. Try to reconnect.
-        let port = client.port;
-        // Drop the old client
-        if let Some(old) = guard.take() {
-            old.disconnect();
-        }
-        drop(guard);
+    /// Spawn a background task that checks the CDP connection every 5 seconds
+    /// and auto-reconnects if the connection is dead.
+    #[cfg(feature = "cdp")]
+    async fn start_cdp_watchdog(&self, port: u16) {
+        self.stop_cdp_watchdog().await;
+        let cdp_client = self.cdp_client.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        eprintln!(
-            "[native-devtools-mcp] CDP handler died, auto-reconnecting to port {}...",
-            port
-        );
+                let needs_reconnect = {
+                    let mut guard = cdp_client.write().await;
+                    match guard.as_mut() {
+                        Some(client) => !client.is_connection_healthy().await,
+                        None => true,
+                    }
+                };
 
-        match crate::cdp::CdpClient::reconnect(port, 10).await {
-            Ok(new_client) => {
-                *self.cdp_client.write().await = Some(new_client);
-                eprintln!("[native-devtools-mcp] Auto-reconnect succeeded on port {}", port);
-                Ok(true)
+                if needs_reconnect {
+                    // Drop the old client before reconnecting
+                    if let Some(old) = cdp_client.write().await.take() {
+                        old.disconnect();
+                    }
+
+                    eprintln!(
+                        "[native-devtools-mcp] CDP connection lost, auto-reconnecting to port {}...",
+                        port
+                    );
+
+                    match crate::cdp::CdpClient::reconnect(port, 10).await {
+                        Ok(new_client) => {
+                            *cdp_client.write().await = Some(new_client);
+                            eprintln!(
+                                "[native-devtools-mcp] Auto-reconnect succeeded on port {}",
+                                port
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[native-devtools-mcp] Auto-reconnect failed: {}", e);
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("[native-devtools-mcp] Auto-reconnect failed: {}", e);
-                Err(crate::cdp::cdp_error(format!(
-                    "CDP connection lost and auto-reconnect failed: {}. Use cdp_connect to retry manually.",
-                    e
-                )))
-            }
+        });
+        *self.cdp_watchdog.write().await = Some(handle);
+    }
+
+    /// Stop the CDP connection watchdog if running.
+    #[cfg(feature = "cdp")]
+    async fn stop_cdp_watchdog(&self) {
+        if let Some(handle) = self.cdp_watchdog.write().await.take() {
+            handle.abort();
         }
     }
 
@@ -2186,6 +2216,7 @@ impl ServerHandler for MacOSDevToolsServer {
                             "No pages found".to_string()
                         };
                         *self.cdp_client.write().await = Some(client);
+                        self.start_cdp_watchdog(port).await;
                         let _ = context.peer.notify_tool_list_changed().await;
                         Ok(CallToolResult::success(vec![Content::text(format!(
                             "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
@@ -2197,6 +2228,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_disconnect" => {
+                self.stop_cdp_watchdog().await;
                 if let Some(client) = self.cdp_client.write().await.take() {
                     client.disconnect();
                     let _ = context.peer.notify_tool_list_changed().await;
