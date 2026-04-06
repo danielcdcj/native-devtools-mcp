@@ -20,6 +20,8 @@ pub struct CdpClient {
     pub handler_handle: JoinHandle<()>,
     pub last_snapshot: Option<SnapshotMap>,
     pub last_page_list: Vec<Page>,
+    /// The port used to connect, stored for auto-reconnect.
+    pub port: u16,
 }
 
 impl CdpClient {
@@ -47,12 +49,38 @@ impl CdpClient {
             handler_handle,
             last_snapshot: None,
             last_page_list: Vec::new(),
+            port,
         })
     }
 
     /// Disconnect from the browser by aborting the handler task.
     pub fn disconnect(self) {
         self.handler_handle.abort();
+    }
+
+    /// Returns true if the CDP WebSocket handler is still running.
+    pub fn is_handler_alive(&self) -> bool {
+        !self.handler_handle.is_finished()
+    }
+
+    /// Attempt to reconnect to the same port with retries and backoff.
+    /// Returns a fresh CdpClient on success.
+    pub async fn reconnect(port: u16, max_retries: u32) -> Result<Self, String> {
+        let mut last_err = String::new();
+        for attempt in 0..max_retries {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_millis(500 * (1 << attempt.min(4)));
+                tokio::time::sleep(delay).await;
+            }
+            match Self::connect(port).await {
+                Ok(client) => return Ok(client),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(format!(
+            "Auto-reconnect failed after {} attempts on port {}: {}",
+            max_retries, port, last_err
+        ))
     }
 
     /// Get the selected page, or return a tool error.

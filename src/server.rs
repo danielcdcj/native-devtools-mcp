@@ -106,6 +106,50 @@ impl MacOSDevToolsServer {
         self.cdp_client.read().await.is_some()
     }
 
+    /// Check if the CDP connection is alive; if the handler has died (target
+    /// restarted), automatically reconnect using the stored port. Returns
+    /// Ok(true) if reconnected, Ok(false) if already healthy, or Err if
+    /// no connection exists or reconnect failed.
+    #[cfg(feature = "cdp")]
+    async fn ensure_cdp_connection(&self) -> Result<bool, CallToolResult> {
+        let mut guard = self.cdp_client.write().await;
+        let client = guard.as_ref().ok_or_else(|| {
+            crate::cdp::cdp_error("No CDP connection. Use cdp_connect first.")
+        })?;
+
+        if client.is_handler_alive() {
+            return Ok(false); // healthy, no reconnect needed
+        }
+
+        // Handler died — target probably restarted. Try to reconnect.
+        let port = client.port;
+        // Drop the old client
+        if let Some(old) = guard.take() {
+            old.disconnect();
+        }
+        drop(guard);
+
+        eprintln!(
+            "[native-devtools-mcp] CDP handler died, auto-reconnecting to port {}...",
+            port
+        );
+
+        match crate::cdp::CdpClient::reconnect(port, 10).await {
+            Ok(new_client) => {
+                *self.cdp_client.write().await = Some(new_client);
+                eprintln!("[native-devtools-mcp] Auto-reconnect succeeded on port {}", port);
+                Ok(true)
+            }
+            Err(e) => {
+                eprintln!("[native-devtools-mcp] Auto-reconnect failed: {}", e);
+                Err(crate::cdp::cdp_error(format!(
+                    "CDP connection lost and auto-reconnect failed: {}. Use cdp_connect to retry manually.",
+                    e
+                )))
+            }
+        }
+    }
+
     /// Acquire the android device lock and call `f` with a mutable reference.
     /// Returns a "not connected" error result if no device is connected.
     async fn with_android_device<F>(&self, f: F) -> CallToolResult
@@ -2167,10 +2211,14 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_take_snapshot" => {
+                if let Err(e) = self.ensure_cdp_connection().await {
+                    return Ok(e);
+                }
                 Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
             }
             #[cfg(feature = "cdp")]
             "cdp_evaluate_script" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let function = parse_string_field(&args, "function")?;
                 let script_args = args.get("args").and_then(|v| v.as_array()).cloned();
                 Ok(crate::cdp::tools::cdp_evaluate_script(
@@ -2182,6 +2230,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_click" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let uid = parse_string_field(&args, "uid")?;
                 let dbl_click = args
                     .get("dbl_click")
@@ -2201,10 +2250,12 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_list_pages" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 Ok(crate::cdp::tools::cdp_list_pages(self.cdp_client.clone()).await)
             }
             #[cfg(feature = "cdp")]
             "cdp_select_page" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let page_idx = args
                     .get("page_idx")
                     .and_then(|v| v.as_u64())
@@ -2216,6 +2267,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_hover" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let uid = parse_string_field(&args, "uid")?;
                 let include_snapshot = args
                     .get("include_snapshot")
@@ -2228,6 +2280,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_fill" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let uid = parse_string_field(&args, "uid")?;
                 let value = parse_string_field(&args, "value")?;
                 let include_snapshot = args
@@ -2244,6 +2297,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_press_key" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let key = parse_string_field(&args, "key")?;
                 let include_snapshot = args
                     .get("include_snapshot")
@@ -2260,6 +2314,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_handle_dialog" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let action = parse_string_field(&args, "action")?;
                 let prompt_text = args
                     .get("prompt_text")
@@ -2274,6 +2329,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_navigate" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let url = args.get("url").and_then(|v| v.as_str()).map(String::from);
                 let nav_type = args.get("type").and_then(|v| v.as_str()).map(String::from);
                 let timeout = args.get("timeout").and_then(|v| v.as_u64());
@@ -2289,11 +2345,13 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_new_page" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let url = parse_string_field(&args, "url")?;
                 Ok(crate::cdp::tools::cdp_new_page(url, self.cdp_client.clone()).await)
             }
             #[cfg(feature = "cdp")]
             "cdp_close_page" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let page_idx = args
                     .get("page_idx")
                     .and_then(|v| v.as_u64())
@@ -2305,6 +2363,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_wait_for" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let texts: Vec<String> = args
                     .get("text")
                     .and_then(|v| v.as_array())
@@ -2325,6 +2384,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_type_text" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let text = parse_string_field(&args, "text")?;
                 let submit_key = args
                     .get("submit_key")
@@ -2337,6 +2397,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_element_at_point" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let (x, y) = parse_xy(&args)?;
                 Ok(crate::cdp::tools::cdp_element_at_point(x, y, self.cdp_client.clone()).await)
             }
