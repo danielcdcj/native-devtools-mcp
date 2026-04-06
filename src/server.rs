@@ -113,11 +113,11 @@ impl MacOSDevToolsServer {
     #[cfg(feature = "cdp")]
     async fn ensure_cdp_connection(&self) -> Result<bool, CallToolResult> {
         let mut guard = self.cdp_client.write().await;
-        let client = guard.as_ref().ok_or_else(|| {
+        let client = guard.as_mut().ok_or_else(|| {
             crate::cdp::cdp_error("No CDP connection. Use cdp_connect first.")
         })?;
 
-        if client.is_handler_alive() {
+        if client.is_connection_healthy().await {
             return Ok(false); // healthy, no reconnect needed
         }
 

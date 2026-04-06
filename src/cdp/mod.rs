@@ -58,9 +58,24 @@ impl CdpClient {
         self.handler_handle.abort();
     }
 
-    /// Returns true if the CDP WebSocket handler is still running.
-    pub fn is_handler_alive(&self) -> bool {
-        !self.handler_handle.is_finished()
+    /// Actively probe the CDP connection by attempting a lightweight call.
+    /// Returns true if the connection is healthy, false if it's dead/hung.
+    ///
+    /// The passive `handler_handle.is_finished()` check alone is unreliable:
+    /// when the remote end (e.g. Electron) restarts, the WebSocket handler
+    /// often hangs on a pending read rather than cleanly terminating. This
+    /// method issues a real CDP call with a timeout to catch that case.
+    pub async fn is_connection_healthy(&mut self) -> bool {
+        if self.handler_handle.is_finished() {
+            return false;
+        }
+        // Try a cheap CDP call with a short timeout. If the WebSocket is broken
+        // (e.g. Electron restarted), this will hang or error rather than succeed.
+        let probe = self.browser.pages();
+        match tokio::time::timeout(std::time::Duration::from_secs(3), probe).await {
+            Ok(Ok(_)) => true,
+            _ => false,
+        }
     }
 
     /// Attempt to reconnect to the same port with retries and backoff.
