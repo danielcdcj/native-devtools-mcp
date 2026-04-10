@@ -1,7 +1,8 @@
 //! CDP tool implementations, split by concern:
 //! - `input`: click, hover, fill, press_key
 //! - `pages`: list_pages, select_page, navigate, new_page, close_page, handle_dialog
-//! - `script`: evaluate_script, take_snapshot, wait_for
+//! - `script`: evaluate_script, take_ax_snapshot, take_dom_snapshot, find_elements, wait_for
+//! - `element_at_point`: resolve screen coordinates to snapshot UIDs
 
 mod element_at_point;
 mod input;
