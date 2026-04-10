@@ -194,7 +194,7 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 *   `cdp_new_page(url)`: Create a new tab and navigate to URL. Becomes the selected page.
 *   `cdp_close_page(page_idx)`: Close a tab by index. Cannot close the last page.
 *   `cdp_wait_for(text, timeout?)`: Wait for text to appear on the page (polls snapshot, default 10s timeout).
-*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "5"}]`.
+*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "a5"}]`.
 *   `cdp_list_pages`: List open tabs/windows with indices. Selected page marked with `*`.
 *   `cdp_select_page(page_idx)`: Switch to a tab/window by index.
 *   `cdp_element_at_point(x, y)`: Given screen coordinates (in points), resolve the CDP accessibility snapshot UID of the DOM element at that position. Returns the element's UID, role, name, and backend_node_id. Requires an active CDP connection.
@@ -211,10 +211,10 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
 3. cdp_navigate(url="https://example.com")
 4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "Example" ...
-5. cdp_fill(uid="10", value="search query")
+5. cdp_fill(uid="a10", value="search query")
 6. cdp_press_key(key="Enter")
 7. cdp_wait_for(text="Results")
-8. cdp_click(uid="5")                      → "Clicked uid=5 'Submit' (button) at (200, 300)"
+8. cdp_click(uid="a5")                      → "Clicked uid=a5 'Submit' (button) at (200, 300)"
 ```
 
 **Electron app (e.g., Slack, Discord, Signal):**
@@ -225,7 +225,7 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "MyApp" ... (search for buttons, inputs)
 5. cdp_click(uid="a42")                    → click a list item or button
 6. cdp_take_ax_snapshot()                  → fresh snapshot of the new view
-7. cdp_fill(uid="100", value="hello")
+7. cdp_fill(uid="a100", value="hello")
 ```
 
 ### 7. Android Device Control

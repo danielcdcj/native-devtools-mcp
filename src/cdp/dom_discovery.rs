@@ -60,12 +60,13 @@ pub fn build_dom_snapshot(candidates: &[DomCandidate], page_url: &str) -> Snapsh
 ///    contenteditable, elements with interactive ARIA roles, tabindex >= 0)
 /// 2. Filters invisible elements (display:none, visibility:hidden, aria-hidden, zero-size, inert)
 /// 3. Walks open shadow roots and same-origin iframes
-/// 4. Returns matched elements as an array with `__meta` properties attached,
+/// 4. Returns matched elements and a parallel metadata array,
 ///    plus an `inventory` summarizing all interactive elements by role
 ///
-/// Returns `{ elements: Element[], inventory: [...] }` as a non-by-value object.
-/// The caller must use `Runtime.callFunctionOn` to extract metadata from each element
-/// and `DOM.describeNode` to resolve `backendNodeId` for each.
+/// Returns `{ elements: Element[], metadata: [...], inventory: [...] }` as a non-by-value object.
+/// The caller must use `Runtime.callFunctionOn` to extract `metadata` (a JSON array of
+/// `DomCandidate` objects) in one bulk call, then `DOM.describeNode` per element to
+/// resolve `backendNodeId`.
 pub fn dom_walker_js(query: &str, role_filter: Option<&str>, max_results: u32) -> String {
     // Use serde_json::to_string for proper JS string encoding (handles all edge cases)
     let query_json = serde_json::to_string(query).unwrap();
@@ -207,6 +208,7 @@ walk(document, allElements);
 
 const queryLower = QUERY.toLowerCase();
 const matchedElements = [];
+const metadataArray = [];
 const roleCounts = {{}};
 
 for (const el of allElements) {{
@@ -230,8 +232,8 @@ for (const el of allElements) {{
     const disabled = el.disabled === true || el.getAttribute("aria-disabled") === "true";
     const parent = getParentContext(el);
 
-    // Attach metadata to the element for later extraction
-    el.__meta = {{
+    // Store metadata in a parallel array (avoids mutating live DOM elements)
+    metadataArray.push({{
         backendNodeId: 0,
         role,
         label: label.substring(0, 200),
@@ -239,7 +241,7 @@ for (const el of allElements) {{
         disabled,
         parentRole: parent.role,
         parentName: parent.name.substring(0, 100),
-    }};
+    }});
     matchedElements.push(el);
 }}
 
@@ -249,7 +251,7 @@ const inventory = Object.entries(roleCounts).map(([role, data]) => ({{
     sample_labels: data.labels,
 }}));
 
-return {{ elements: matchedElements, inventory }};
+return {{ elements: matchedElements, metadata: metadataArray, inventory }};
 }})()"##
     )
 }

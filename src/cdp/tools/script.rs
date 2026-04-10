@@ -7,7 +7,7 @@ use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, DescribeNodeParams, ResolveNodeParams,
 };
 use chromiumoxide::cdp::js_protocol::runtime::{
-    CallArgument, CallFunctionOnParams, EvaluateParams,
+    CallArgument, CallFunctionOnParams, EvaluateParams, ReleaseObjectParams,
 };
 use chromiumoxide::page::Page;
 use rmcp::model::{CallToolResult, Content};
@@ -332,26 +332,29 @@ async fn resolve_dom_candidates(
         Err(_) => serde_json::json!([]),
     };
 
-    // Step 3: Get elements array length
-    let len_js = "function() { return this.elements.length; }";
-    let len_params = CallFunctionOnParams::builder()
-        .function_declaration(len_js)
+    // Step 3: Extract all metadata in one bulk call (avoids per-element round-trips)
+    let meta_js = "function() { return JSON.stringify(this.metadata); }";
+    let meta_params = CallFunctionOnParams::builder()
+        .function_declaration(meta_js)
         .object_id(result_object_id.clone())
         .return_by_value(true)
         .build();
-    let element_count: usize = match page.execute(len_params.unwrap()).await {
-        Ok(resp) => resp
-            .result
-            .result
-            .value
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize,
-        Err(_) => 0,
-    };
+    let all_metadata: Vec<crate::cdp::dom_discovery::DomCandidate> =
+        match page.execute(meta_params.unwrap()).await {
+            Ok(resp) => resp
+                .result
+                .result
+                .value
+                .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
 
-    // Step 4: For each element, extract metadata + resolve backendNodeId atomically
+    let element_count = all_metadata.len();
+
+    // Step 4: For each element, get a reference and resolve backendNodeId via DOM.describeNode
     let mut candidates = Vec::with_capacity(element_count);
-    for i in 0..element_count {
+    for (i, mut candidate) in all_metadata.into_iter().enumerate() {
         // Get element reference
         let get_el_js = format!("function() {{ return this.elements[{}]; }}", i);
         let el_params = CallFunctionOnParams::builder()
@@ -367,26 +370,7 @@ async fn resolve_dom_candidates(
             Err(_) => continue,
         };
 
-        // Extract metadata from this element
-        let meta_js = "function() { return JSON.stringify(this.__meta); }";
-        let meta_params = CallFunctionOnParams::builder()
-            .function_declaration(meta_js)
-            .object_id(el_object_id.clone())
-            .return_by_value(true)
-            .build();
-        let meta: Option<crate::cdp::dom_discovery::DomCandidate> = page
-            .execute(meta_params.unwrap())
-            .await
-            .ok()
-            .and_then(|r| r.result.result.value)
-            .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()));
-
-        let mut candidate = match meta {
-            Some(c) => c,
-            None => continue,
-        };
-
-        // Resolve backendNodeId via DOM.describeNode on the same object
+        // Resolve backendNodeId via DOM.describeNode on the element
         let describe = DescribeNodeParams::builder()
             .object_id(el_object_id)
             .build();
@@ -403,6 +387,11 @@ async fn resolve_dom_candidates(
 
         candidates.push(candidate);
     }
+
+    // Release the wrapper remote object to avoid memory leaks
+    let _ = page
+        .execute(ReleaseObjectParams::new(result_object_id))
+        .await;
 
     Ok((candidates, inventory))
 }
