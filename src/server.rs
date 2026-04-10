@@ -654,7 +654,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "probe_app",
-                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_take_ax_snapshot, cdp_find_elements).",
+                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_find_elements, cdp_take_dom_snapshot).",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["app_name"],
@@ -1163,7 +1163,7 @@ impl MacOSDevToolsServer {
     fn get_cdp_connect_tool() -> Tool {
         Tool::new(
             "cdp_connect",
-            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_take_ax_snapshot or cdp_find_elements to see page elements.",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_find_elements to discover page elements (preferred), or cdp_take_dom_snapshot for a full page overview.",
             Arc::new(json_to_object(serde_json::json!({
                 "type": "object",
                 "required": ["port"],
@@ -1193,7 +1193,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_take_ax_snapshot",
-                "Take a snapshot of the selected browser page based on the accessibility tree. Returns elements with UIDs prefixed 'a' (e.g., a1, a2). Use this when you need ARIA roles, accessibility properties, or screen reader semantics. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                "Take an accessibility tree snapshot of the selected browser page. Returns elements with UIDs prefixed 'a' (e.g., a1, a2). Rarely needed — prefer cdp_find_elements for targeted lookups or cdp_take_dom_snapshot for full page structure. Only use this when you specifically need ARIA roles or accessibility states that the DOM tools don't provide. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1201,7 +1201,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_take_dom_snapshot",
-                "Take a snapshot of the selected browser page by walking the live DOM. Returns interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use this when you need to find contenteditable editors, placeholder-driven inputs, or custom widgets that may have weak accessibility exposure. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                "Take a full DOM snapshot of the selected browser page. Returns all interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use when you need the complete page structure — captures contenteditable editors, placeholder inputs, and custom widgets that cdp_take_ax_snapshot often misses. For targeted lookups, prefer cdp_find_elements instead. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -1214,7 +1214,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_find_elements",
-                "Search the live DOM of the selected browser page for interactive elements matching a text query. Returns a compact result set with UIDs prefixed 'd' (e.g., d1, d2), plus a page-level inventory of all interactive elements grouped by role. Prefer this over full snapshots for targeted lookups. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                "PREFERRED discovery tool. Search the live DOM for interactive elements matching a text query. Returns a compact result set with UIDs prefixed 'd' (e.g., d1, d2), plus a page-level inventory of all interactive elements grouped by role. Always try this first — it gives focused results without flooding context. Use cdp_take_dom_snapshot only if you need the full page structure. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["query"],
