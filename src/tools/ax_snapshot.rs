@@ -50,7 +50,7 @@ pub fn format_snapshot(nodes: &[AXSnapshotNode]) -> String {
 
     for node in nodes {
         let indent = "  ".repeat(node.depth as usize);
-        let mut parts = vec![format!("uid={} {}", node.uid, node.role)];
+        let mut parts = vec![format!("uid=a{} {}", node.uid, node.role)];
 
         if let Some(name) = &node.name {
             parts.push(format!("\"{}\"", name));
@@ -214,7 +214,7 @@ mod tests {
         let result = format_snapshot(&nodes);
         assert_eq!(
             result,
-            "uid=1 RootWebArea \"Page Title\"\n  uid=2 button \"Submit\"\n  uid=3 textbox value=\"hello\" focused"
+            "uid=a1 RootWebArea \"Page Title\"\n  uid=a2 button \"Submit\"\n  uid=a3 textbox value=\"hello\" focused"
         );
     }
 
@@ -233,7 +233,7 @@ mod tests {
         }];
 
         let result = format_snapshot(&nodes);
-        assert_eq!(result, "uid=1 checkbox \"Remember me\" disabled selected");
+        assert_eq!(result, "uid=a1 checkbox \"Remember me\" disabled selected");
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
         }];
 
         let result = format_snapshot(&nodes);
-        assert_eq!(result, "uid=1 generic");
+        assert_eq!(result, "uid=a1 generic");
     }
 
     #[test]
