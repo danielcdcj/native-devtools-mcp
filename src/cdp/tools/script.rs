@@ -466,3 +466,38 @@ pub async fn cdp_find_elements(
         serde_json::to_string_pretty(&result).unwrap_or_default(),
     )])
 }
+
+pub async fn cdp_take_dom_snapshot(
+    max_nodes: Option<u32>,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let mut guard = cdp_client.write().await;
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
+    };
+
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let max = max_nodes.unwrap_or(500);
+    let page_url = page.url().await.ok().flatten().unwrap_or_default();
+
+    // Use empty query to match all interactive elements
+    let walker_js = crate::cdp::dom_discovery::dom_walker_js("", None, max);
+
+    let (candidates, _inventory) = match resolve_dom_candidates(&page, &walker_js).await {
+        Ok(result) => result,
+        Err(e) => return e,
+    };
+
+    let (nodes, snapshot_map) =
+        crate::cdp::dom_discovery::build_dom_snapshot(candidates, &page_url);
+
+    let output = crate::cdp::dom_discovery::format_dom_snapshot(&nodes);
+    client.last_dom_snapshot = Some(snapshot_map);
+
+    CallToolResult::success(vec![Content::text(output)])
+}
