@@ -176,7 +176,7 @@ pub async fn cdp_evaluate_script(
     }
 }
 
-pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
+pub async fn cdp_take_ax_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
     let mut guard = cdp_client.write().await;
     let client = match guard.as_mut() {
         Some(c) => c,
@@ -265,7 +265,7 @@ pub async fn cdp_wait_for(
         };
 
         if found {
-            return cdp_take_snapshot(cdp_client.clone()).await;
+            return cdp_take_ax_snapshot(cdp_client.clone()).await;
         }
 
         if start.elapsed() >= timeout {
