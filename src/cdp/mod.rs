@@ -3,6 +3,7 @@
 //! Connects to Chrome/Electron apps via their remote debugging port
 //! using the chromiumoxide crate.
 
+pub mod dom_discovery;
 pub mod snapshot;
 pub mod tools;
 
