@@ -192,7 +192,7 @@ async fn reverse_lookup_uid(
     {
         let client_guard = cdp_client.read().await;
         let client = client_guard.as_ref().ok_or("No CDP client")?;
-        if let Some(ref snapshot) = client.last_snapshot {
+        if let Some(ref snapshot) = client.last_ax_snapshot {
             let page = client
                 .require_page()
                 .map_err(|_| "No selected page".to_string())?;
@@ -232,7 +232,7 @@ async fn reverse_lookup_uid(
         let (_, snapshot_map) = crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, &page_url);
 
         let found = lookup_in_snapshot(&snapshot_map, backend_node_id);
-        client.last_snapshot = Some(snapshot_map);
+        client.last_ax_snapshot = Some(snapshot_map);
 
         if let Some(result) = found {
             return Ok(result);

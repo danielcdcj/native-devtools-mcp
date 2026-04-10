@@ -31,14 +31,14 @@ async fn resolve_node(
     page: &Page,
 ) -> Result<(BackendNodeId, String, String), CallToolResult> {
     let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = client.check_snapshot_staleness(&current_url)?;
 
-    let node = snapshot_map.uid_to_node.get(uid).ok_or_else(|| {
-        cdp_error(format!(
-            "uid={} not found. Call cdp_take_snapshot to get current elements.",
-            uid
-        ))
-    })?;
+    let node = crate::cdp::resolve_uid_from_maps(
+        uid,
+        client.last_ax_snapshot.as_ref(),
+        client.last_dom_snapshot.as_ref(),
+        &current_url,
+    )
+    .map_err(cdp_error)?;
 
     Ok((
         BackendNodeId::new(node.backend_node_id),

@@ -83,7 +83,8 @@ pub async fn cdp_select_page(
 
     let url = page.url().await.ok().flatten().unwrap_or_default();
     client.selected_page = Some(page);
-    client.last_snapshot = None;
+    client.last_ax_snapshot = None;
+    client.last_dom_snapshot = None;
 
     CallToolResult::success(vec![Content::text(format!(
         "Selected page [{}]: {}",
@@ -187,7 +188,8 @@ pub async fn cdp_navigate(
                             target_url
                         ));
                     }
-                    client.last_snapshot = None;
+                    client.last_ax_snapshot = None;
+                    client.last_dom_snapshot = None;
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {}",
                         target_url
@@ -197,7 +199,8 @@ pub async fn cdp_navigate(
                 Err(_) => {
                     // Timed out waiting for load event — navigation was sent,
                     // page is likely still loading or already loaded.
-                    client.last_snapshot = None;
+                    client.last_ax_snapshot = None;
+                    client.last_dom_snapshot = None;
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {} (page may still be loading)",
                         target_url
@@ -207,7 +210,8 @@ pub async fn cdp_navigate(
         }
         "reload" => match page.execute(ReloadParams::default()).await {
             Ok(_) => {
-                client.last_snapshot = None;
+                client.last_ax_snapshot = None;
+                client.last_dom_snapshot = None;
                 CallToolResult::success(vec![Content::text("Page reloaded")])
             }
             Err(e) => cdp_error(format!("Reload failed: {}", e)),
@@ -237,7 +241,8 @@ pub async fn cdp_navigate(
                 .await
             {
                 Ok(_) => {
-                    client.last_snapshot = None;
+                    client.last_ax_snapshot = None;
+                    client.last_dom_snapshot = None;
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated {}: {}",
                         action, entry_url
@@ -270,7 +275,8 @@ pub async fn cdp_new_page(
 
     let page_url = page.url().await.ok().flatten().unwrap_or_default();
     client.selected_page = Some(page);
-    client.last_snapshot = None;
+    client.last_ax_snapshot = None;
+    client.last_dom_snapshot = None;
 
     CallToolResult::success(vec![Content::text(format!(
         "Created and selected new page: {}",
@@ -335,7 +341,8 @@ pub async fn cdp_close_page(
             } else {
                 client.selected_page = None;
             }
-            client.last_snapshot = None;
+            client.last_ax_snapshot = None;
+            client.last_dom_snapshot = None;
         }
     }
 

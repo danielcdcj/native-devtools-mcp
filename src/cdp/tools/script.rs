@@ -77,10 +77,6 @@ pub async fn cdp_evaluate_script(
 
     // Args case: resolve UIDs to remote objects and call function with them.
     let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = match client.check_snapshot_staleness(&current_url) {
-        Ok(m) => m,
-        Err(e) => return e,
-    };
 
     let arg_list = match args.as_ref() {
         Some(a) => a,
@@ -92,14 +88,14 @@ pub async fn cdp_evaluate_script(
     let mut uid_backend_pairs: Vec<(String, i64)> = Vec::with_capacity(arg_list.len());
     for arg in arg_list {
         if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
-            let node = match snapshot_map.uid_to_node.get(uid) {
-                Some(n) => n,
-                None => {
-                    return cdp_error(format!(
-                        "uid={} not found. Call cdp_take_snapshot to refresh.",
-                        uid
-                    ));
-                }
+            let node = match crate::cdp::resolve_uid_from_maps(
+                uid,
+                client.last_ax_snapshot.as_ref(),
+                client.last_dom_snapshot.as_ref(),
+                &current_url,
+            ) {
+                Ok(n) => n,
+                Err(msg) => return cdp_error(msg),
             };
             uid_backend_pairs.push((uid.to_string(), node.backend_node_id));
         }
@@ -213,7 +209,7 @@ pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> Ca
                 crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, &page_url);
 
             let output = format_snapshot(&snapshot_nodes);
-            client.last_snapshot = Some(snapshot_map);
+            client.last_ax_snapshot = Some(snapshot_map);
 
             CallToolResult::success(vec![Content::text(output)])
         }

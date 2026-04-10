@@ -13,12 +13,16 @@ use rmcp::model::{CallToolResult, Content};
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
 
+pub const AX_UID_PREFIX: &str = "a";
+pub const DOM_UID_PREFIX: &str = "d";
+
 /// CDP client state, owned by the MCP server.
 pub struct CdpClient {
     pub browser: Browser,
     pub selected_page: Option<Page>,
     pub handler_handle: JoinHandle<()>,
-    pub last_snapshot: Option<SnapshotMap>,
+    pub last_ax_snapshot: Option<SnapshotMap>,
+    pub last_dom_snapshot: Option<SnapshotMap>,
     pub last_page_list: Vec<Page>,
 }
 
@@ -45,7 +49,8 @@ impl CdpClient {
             browser,
             selected_page,
             handler_handle,
-            last_snapshot: None,
+            last_ax_snapshot: None,
+            last_dom_snapshot: None,
             last_page_list: Vec::new(),
         })
     }
@@ -60,27 +65,6 @@ impl CdpClient {
         self.selected_page.clone().ok_or_else(|| {
             cdp_error("No page selected. Use cdp_list_pages and cdp_select_page first.")
         })
-    }
-
-    /// Get the snapshot map, or return a tool error.
-    pub fn require_snapshot(&self) -> Result<&SnapshotMap, CallToolResult> {
-        self.last_snapshot
-            .as_ref()
-            .ok_or_else(|| cdp_error("No snapshot available. Call cdp_take_snapshot first."))
-    }
-
-    /// Verify the snapshot is still valid for the given page URL.
-    pub fn check_snapshot_staleness(
-        &self,
-        current_url: &str,
-    ) -> Result<&SnapshotMap, CallToolResult> {
-        let snapshot = self.require_snapshot()?;
-        if current_url != snapshot.page_url {
-            return Err(cdp_error(
-                "Snapshot is stale \u{2014} page has navigated since last snapshot. Call cdp_take_snapshot again.",
-            ));
-        }
-        Ok(snapshot)
     }
 }
 
@@ -154,4 +138,135 @@ pub struct SnapshotNode {
     pub backend_node_id: i64,
     pub role: String,
     pub name: String,
+}
+
+/// Resolve a prefixed UID to its SnapshotNode from the correct map.
+///
+/// UIDs prefixed with "a" resolve from the AX snapshot map.
+/// UIDs prefixed with "d" resolve from the DOM snapshot map.
+/// Returns an error if the prefix is unknown, the map is missing,
+/// the page has navigated (stale), or the UID is not found.
+pub fn resolve_uid_from_maps<'a>(
+    uid: &str,
+    ax_snapshot: Option<&'a SnapshotMap>,
+    dom_snapshot: Option<&'a SnapshotMap>,
+    current_url: &str,
+) -> Result<&'a SnapshotNode, String> {
+    let (prefix, map) = if uid.starts_with(AX_UID_PREFIX) {
+        (AX_UID_PREFIX, ax_snapshot)
+    } else if uid.starts_with(DOM_UID_PREFIX) {
+        (DOM_UID_PREFIX, dom_snapshot)
+    } else {
+        return Err(format!(
+            "Unknown UID prefix in '{}'. Expected 'a<N>' (AX) or 'd<N>' (DOM).",
+            uid
+        ));
+    };
+
+    let snapshot = map.ok_or_else(|| {
+        format!(
+            "No {} snapshot available. Call {} first.",
+            if prefix == AX_UID_PREFIX { "AX" } else { "DOM" },
+            if prefix == AX_UID_PREFIX {
+                "cdp_take_ax_snapshot"
+            } else {
+                "cdp_take_dom_snapshot or cdp_find_elements"
+            },
+        )
+    })?;
+
+    if current_url != snapshot.page_url {
+        return Err(format!(
+            "Snapshot is stale — page has navigated since last snapshot. Call {} again.",
+            if prefix == AX_UID_PREFIX {
+                "cdp_take_ax_snapshot"
+            } else {
+                "cdp_take_dom_snapshot or cdp_find_elements"
+            },
+        ));
+    }
+
+    snapshot.uid_to_node.get(uid).ok_or_else(|| {
+        format!(
+            "uid={} not found in {} snapshot. Take a fresh snapshot.",
+            uid,
+            if prefix == AX_UID_PREFIX { "AX" } else { "DOM" },
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_uid_ax_prefix() {
+        let mut ax_map = SnapshotMap {
+            uid_to_node: HashMap::new(),
+            backend_to_uids: HashMap::new(),
+            page_url: "https://example.com".to_string(),
+        };
+        ax_map.uid_to_node.insert(
+            "a1".to_string(),
+            SnapshotNode {
+                backend_node_id: 42,
+                role: "button".to_string(),
+                name: "Submit".to_string(),
+            },
+        );
+
+        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, "https://example.com");
+        assert!(result.is_ok());
+        let node = result.unwrap();
+        assert_eq!(node.backend_node_id, 42);
+        assert_eq!(node.role, "button");
+    }
+
+    #[test]
+    fn resolve_uid_dom_prefix() {
+        let mut dom_map = SnapshotMap {
+            uid_to_node: HashMap::new(),
+            backend_to_uids: HashMap::new(),
+            page_url: "https://example.com".to_string(),
+        };
+        dom_map.uid_to_node.insert(
+            "d5".to_string(),
+            SnapshotNode {
+                backend_node_id: 99,
+                role: "textbox".to_string(),
+                name: "Search".to_string(),
+            },
+        );
+
+        let result = resolve_uid_from_maps("d5", None, Some(&dom_map), "https://example.com");
+        assert!(result.is_ok());
+        let node = result.unwrap();
+        assert_eq!(node.backend_node_id, 99);
+    }
+
+    #[test]
+    fn resolve_uid_unknown_prefix_fails() {
+        let result = resolve_uid_from_maps("x1", None, None, "https://example.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_uid_stale_page_fails() {
+        let mut ax_map = SnapshotMap {
+            uid_to_node: HashMap::new(),
+            backend_to_uids: HashMap::new(),
+            page_url: "https://old.com".to_string(),
+        };
+        ax_map.uid_to_node.insert(
+            "a1".to_string(),
+            SnapshotNode {
+                backend_node_id: 1,
+                role: "button".to_string(),
+                name: "Ok".to_string(),
+            },
+        );
+
+        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, "https://new.com");
+        assert!(result.is_err());
+    }
 }
