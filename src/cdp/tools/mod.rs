@@ -21,7 +21,7 @@ pub use script::{
 
 // Shared helpers used by input tools.
 
-use crate::cdp::{cdp_error, CdpClient};
+use crate::cdp::{cdp_error, page_url, CdpClient};
 use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
 };
@@ -34,7 +34,7 @@ async fn resolve_node(
     client: &CdpClient,
     page: &Page,
 ) -> Result<(BackendNodeId, String, String), CallToolResult> {
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
+    let current_url = page_url(page).await;
 
     let node = crate::cdp::resolve_uid_from_maps(
         uid,

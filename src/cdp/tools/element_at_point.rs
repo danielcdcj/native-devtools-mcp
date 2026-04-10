@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 use chromiumoxide::cdp::browser_protocol::dom::{DescribeNodeParams, GetNodeForLocationParams};
 use rmcp::model::{CallToolResult, Content};
 
-use crate::cdp::{CdpClient, SnapshotMap};
+use crate::cdp::{page_url, CdpClient, SnapshotMap};
 
 /// Resolve screen coordinates to a CDP snapshot UID from either the AX or DOM snapshot.
 pub async fn cdp_element_at_point(
@@ -67,7 +67,7 @@ pub async fn cdp_element_at_point(
     };
 
     // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
+    let current_url = page_url(&page).await;
 
     if let Some((uid, role, name)) = lookup_uid(client, backend_node_id, &current_url) {
         let json = serde_json::json!({

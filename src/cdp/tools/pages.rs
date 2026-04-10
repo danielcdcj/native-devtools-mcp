@@ -1,6 +1,6 @@
 //! CDP page management tools: list, select, navigate, new, close, handle_dialog.
 
-use crate::cdp::{cdp_error, is_extension_url, CdpClient};
+use crate::cdp::{cdp_error, is_extension_url, page_url, CdpClient};
 use chromiumoxide::cdp::browser_protocol::page::{
     GetNavigationHistoryParams, HandleJavaScriptDialogParams, NavigateParams,
     NavigateToHistoryEntryParams, ReloadParams,
@@ -25,7 +25,7 @@ pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallT
     let mut filtered: Vec<chromiumoxide::page::Page> = Vec::new();
     let mut urls: Vec<String> = Vec::new();
     for page in pages {
-        let url = page.url().await.ok().flatten().unwrap_or_default();
+        let url = page_url(&page).await;
         if !is_extension_url(&url) {
             filtered.push(page);
             urls.push(url);
@@ -81,10 +81,9 @@ pub async fn cdp_select_page(
         return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
     }
 
-    let url = page.url().await.ok().flatten().unwrap_or_default();
+    let url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.last_ax_snapshot = None;
-    client.last_dom_snapshot = None;
+    client.invalidate_snapshots();
 
     CallToolResult::success(vec![Content::text(format!(
         "Selected page [{}]: {}",
@@ -188,8 +187,7 @@ pub async fn cdp_navigate(
                             target_url
                         ));
                     }
-                    client.last_ax_snapshot = None;
-                    client.last_dom_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {}",
                         target_url
@@ -199,8 +197,7 @@ pub async fn cdp_navigate(
                 Err(_) => {
                     // Timed out waiting for load event — navigation was sent,
                     // page is likely still loading or already loaded.
-                    client.last_ax_snapshot = None;
-                    client.last_dom_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {} (page may still be loading)",
                         target_url
@@ -210,8 +207,7 @@ pub async fn cdp_navigate(
         }
         "reload" => match page.execute(ReloadParams::default()).await {
             Ok(_) => {
-                client.last_ax_snapshot = None;
-                client.last_dom_snapshot = None;
+                client.invalidate_snapshots();
                 CallToolResult::success(vec![Content::text("Page reloaded")])
             }
             Err(e) => cdp_error(format!("Reload failed: {}", e)),
@@ -241,8 +237,7 @@ pub async fn cdp_navigate(
                 .await
             {
                 Ok(_) => {
-                    client.last_ax_snapshot = None;
-                    client.last_dom_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated {}: {}",
                         action, entry_url
@@ -273,10 +268,9 @@ pub async fn cdp_new_page(
         Err(e) => return cdp_error(format!("Failed to create new page: {}", e)),
     };
 
-    let page_url = page.url().await.ok().flatten().unwrap_or_default();
+    let page_url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.last_ax_snapshot = None;
-    client.last_dom_snapshot = None;
+    client.invalidate_snapshots();
 
     CallToolResult::success(vec![Content::text(format!(
         "Created and selected new page: {}",
@@ -341,8 +335,7 @@ pub async fn cdp_close_page(
             } else {
                 client.selected_page = None;
             }
-            client.last_ax_snapshot = None;
-            client.last_dom_snapshot = None;
+            client.invalidate_snapshots();
         }
     }
 

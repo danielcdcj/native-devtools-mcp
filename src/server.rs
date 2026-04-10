@@ -1178,6 +1178,9 @@ impl MacOSDevToolsServer {
     }
 
     #[cfg(feature = "cdp")]
+    const UID_DESC: &'static str =
+        "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements";
+
     fn get_cdp_tools() -> Vec<Tool> {
         vec![
             Tool::new(
@@ -1247,7 +1250,7 @@ impl MacOSDevToolsServer {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "uid": { "type": "string", "description": "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements" }
+                                    "uid": { "type": "string", "description": (Self::UID_DESC) }
                                 }
                             },
                             "description": "Optional element arguments from snapshot UIDs"
@@ -1264,7 +1267,7 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements"
+                            "description": (Self::UID_DESC)
                         },
                         "dbl_click": {
                             "type": "boolean",
@@ -1308,7 +1311,7 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements"
+                            "description": (Self::UID_DESC)
                         },
                         "include_snapshot": {
                             "type": "boolean",
@@ -1326,7 +1329,7 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements"
+                            "description": (Self::UID_DESC)
                         },
                         "value": {
                             "type": "string",
@@ -2171,7 +2174,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 match crate::cdp::CdpClient::connect(port).await {
                     Ok(client) => {
                         let page_info = if let Some(page) = client.selected_page.as_ref() {
-                            let url = page.url().await.ok().flatten().unwrap_or_default();
+                            let url = crate::cdp::page_url(page).await;
                             format!("Selected page: {}", url)
                         } else {
                             "No pages found".to_string()

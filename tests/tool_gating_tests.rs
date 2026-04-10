@@ -238,7 +238,6 @@ mod cdp_tool_gating {
         );
 
         // Should add exactly 18 tools (disconnect + 17 functional tools)
-        // (was 16 with cdp_take_snapshot; now +2 for cdp_take_dom_snapshot and cdp_find_elements)
         assert_eq!(connected.len() - disconnected.len(), 18);
     }
 }

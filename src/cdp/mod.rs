@@ -61,12 +61,25 @@ impl CdpClient {
         self.handler_handle.abort();
     }
 
+    /// Clear both snapshot caches (AX and DOM).
+    ///
+    /// Call after any navigation or page switch that invalidates element UIDs.
+    pub fn invalidate_snapshots(&mut self) {
+        self.last_ax_snapshot = None;
+        self.last_dom_snapshot = None;
+    }
+
     /// Get the selected page, or return a tool error.
     pub fn require_page(&self) -> Result<Page, CallToolResult> {
         self.selected_page.clone().ok_or_else(|| {
             cdp_error("No page selected. Use cdp_list_pages and cdp_select_page first.")
         })
     }
+}
+
+/// Convenience helper to get the URL of a page, returning an empty string on failure.
+pub async fn page_url(page: &Page) -> String {
+    page.url().await.ok().flatten().unwrap_or_default()
 }
 
 /// Return true if the URL belongs to a Chrome extension.
@@ -77,7 +90,7 @@ pub(crate) fn is_extension_url(url: &str) -> bool {
 /// Find the first non-extension page from a list of pages.
 async fn first_non_extension_page(pages: &[Page]) -> Option<Page> {
     for page in pages {
-        let url = page.url().await.ok().flatten().unwrap_or_default();
+        let url = page_url(page).await;
         if !is_extension_url(&url) {
             return Some(page.clone());
         }
@@ -153,10 +166,14 @@ pub fn resolve_uid_from_maps<'a>(
     dom_snapshot: Option<&'a SnapshotMap>,
     current_url: &str,
 ) -> Result<&'a SnapshotNode, String> {
-    let (prefix, map) = if uid.starts_with(AX_UID_PREFIX) {
-        (AX_UID_PREFIX, ax_snapshot)
+    let (map, label, tool_hint) = if uid.starts_with(AX_UID_PREFIX) {
+        (ax_snapshot, "AX", "cdp_take_ax_snapshot")
     } else if uid.starts_with(DOM_UID_PREFIX) {
-        (DOM_UID_PREFIX, dom_snapshot)
+        (
+            dom_snapshot,
+            "DOM",
+            "cdp_take_dom_snapshot or cdp_find_elements",
+        )
     } else {
         return Err(format!(
             "Unknown UID prefix in '{}'. Expected 'a<N>' (AX) or 'd<N>' (DOM).",
@@ -164,34 +181,20 @@ pub fn resolve_uid_from_maps<'a>(
         ));
     };
 
-    let snapshot = map.ok_or_else(|| {
-        format!(
-            "No {} snapshot available. Call {} first.",
-            if prefix == AX_UID_PREFIX { "AX" } else { "DOM" },
-            if prefix == AX_UID_PREFIX {
-                "cdp_take_ax_snapshot"
-            } else {
-                "cdp_take_dom_snapshot or cdp_find_elements"
-            },
-        )
-    })?;
+    let snapshot =
+        map.ok_or_else(|| format!("No {} snapshot available. Call {} first.", label, tool_hint))?;
 
     if current_url != snapshot.page_url {
         return Err(format!(
             "Snapshot is stale — page has navigated since last snapshot. Call {} again.",
-            if prefix == AX_UID_PREFIX {
-                "cdp_take_ax_snapshot"
-            } else {
-                "cdp_take_dom_snapshot or cdp_find_elements"
-            },
+            tool_hint,
         ));
     }
 
     snapshot.uid_to_node.get(uid).ok_or_else(|| {
         format!(
             "uid={} not found in {} snapshot. Take a fresh snapshot.",
-            uid,
-            if prefix == AX_UID_PREFIX { "AX" } else { "DOM" },
+            uid, label,
         )
     })
 }

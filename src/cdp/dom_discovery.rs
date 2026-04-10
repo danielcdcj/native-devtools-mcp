@@ -21,29 +21,13 @@ pub struct DomCandidate {
     pub parent_name: String,
 }
 
-/// A DOM snapshot node for text formatting.
-pub struct DomSnapshotNode {
-    pub uid: u32,
-    pub role: String,
-    pub label: String,
-    pub tag: String,
-    pub disabled: bool,
-    pub parent_role: String,
-    pub parent_name: String,
-}
-
 /// Build a SnapshotMap from DOM candidates, assigning d<N> prefixed UIDs.
-pub fn build_dom_snapshot(
-    candidates: Vec<DomCandidate>,
-    page_url: &str,
-) -> (Vec<DomSnapshotNode>, SnapshotMap) {
+pub fn build_dom_snapshot(candidates: &[DomCandidate], page_url: &str) -> SnapshotMap {
     let mut uid_to_node = HashMap::new();
     let mut backend_to_uids: HashMap<i64, Vec<String>> = HashMap::new();
-    let mut nodes = Vec::with_capacity(candidates.len());
 
     for (i, candidate) in candidates.iter().enumerate() {
-        let uid_num = (i + 1) as u32;
-        let uid_key = format!("d{}", uid_num);
+        let uid_key = format!("d{}", i + 1);
 
         uid_to_node.insert(
             uid_key.clone(),
@@ -60,25 +44,13 @@ pub fn build_dom_snapshot(
                 .or_default()
                 .push(uid_key);
         }
-
-        nodes.push(DomSnapshotNode {
-            uid: uid_num,
-            role: candidate.role.clone(),
-            label: candidate.label.clone(),
-            tag: candidate.tag.clone(),
-            disabled: candidate.disabled,
-            parent_role: candidate.parent_role.clone(),
-            parent_name: candidate.parent_name.clone(),
-        });
     }
 
-    let map = SnapshotMap {
+    SnapshotMap {
         uid_to_node,
         backend_to_uids,
         page_url: page_url.to_string(),
-    };
-
-    (nodes, map)
+    }
 }
 
 /// Build the JavaScript expression that walks the DOM and returns interactive candidates.
@@ -213,7 +185,7 @@ function isInteractive(el) {{
 function walk(root, results) {{
     const elements = root.querySelectorAll("*");
     for (const el of elements) {{
-        if (isInteractive(el) && isVisible(el)) {{
+        if (isInteractive(el)) {{
             results.push(el);
         }}
         if (el.shadowRoot) {{
@@ -240,21 +212,23 @@ const roleCounts = {{}};
 for (const el of allElements) {{
     const label = getLabel(el);
     const role = getRole(el);
-    const tag = el.tagName.toLowerCase();
-    const disabled = el.disabled === true || el.getAttribute("aria-disabled") === "true";
-    const parent = getParentContext(el);
 
-    // Inventory
+    // Inventory counts all interactive elements regardless of visibility or text match
     if (!roleCounts[role]) roleCounts[role] = {{ count: 0, labels: [] }};
     roleCounts[role].count++;
     if (roleCounts[role].labels.length < 3 && label) {{
         roleCounts[role].labels.push(label.substring(0, 80));
     }}
 
-    // Match filter
+    // Match filter: cheap checks first, expensive isVisible last
     if (ROLE_FILTER && role !== ROLE_FILTER) continue;
     if (!label.toLowerCase().includes(queryLower)) continue;
     if (matchedElements.length >= MAX) continue;
+    if (!isVisible(el)) continue;
+
+    const tag = el.tagName.toLowerCase();
+    const disabled = el.disabled === true || el.getAttribute("aria-disabled") === "true";
+    const parent = getParentContext(el);
 
     // Attach metadata to the element for later extraction
     el.__meta = {{
@@ -280,11 +254,11 @@ return {{ elements: matchedElements, inventory }};
     )
 }
 
-/// Format DOM snapshot nodes as indented text (similar to AX snapshot format).
-pub fn format_dom_snapshot(nodes: &[DomSnapshotNode]) -> String {
-    let mut lines = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        let mut parts = vec![format!("uid=d{} {}", node.uid, node.role)];
+/// Format DOM candidates as indented text (similar to AX snapshot format).
+pub fn format_dom_snapshot(candidates: &[DomCandidate]) -> String {
+    let mut lines = Vec::with_capacity(candidates.len());
+    for (i, node) in candidates.iter().enumerate() {
+        let mut parts = vec![format!("uid=d{} {}", i + 1, node.role)];
         if !node.label.is_empty() {
             parts.push(format!("\"{}\"", node.label));
         }
@@ -324,8 +298,7 @@ mod tests {
             },
         ];
 
-        let (nodes, map) = build_dom_snapshot(candidates, "https://example.com");
-        assert_eq!(nodes.len(), 2);
+        let map = build_dom_snapshot(&candidates, "https://example.com");
         assert_eq!(map.uid_to_node.len(), 2);
         assert!(map.uid_to_node.contains_key("d1"));
         assert!(map.uid_to_node.contains_key("d2"));
@@ -347,7 +320,7 @@ mod tests {
             parent_name: "Confirm".to_string(),
         }];
 
-        let (_, map) = build_dom_snapshot(candidates, "https://test.com");
+        let map = build_dom_snapshot(&candidates, "https://test.com");
         assert_eq!(map.backend_to_uids[&42], vec!["d1"]);
     }
 
@@ -370,9 +343,9 @@ mod tests {
 
     #[test]
     fn format_dom_snapshot_basic() {
-        let nodes = vec![
-            DomSnapshotNode {
-                uid: 1,
+        let candidates = vec![
+            DomCandidate {
+                backend_node_id: 10,
                 role: "button".to_string(),
                 label: "Submit".to_string(),
                 tag: "button".to_string(),
@@ -380,8 +353,8 @@ mod tests {
                 parent_role: "form".to_string(),
                 parent_name: "Login".to_string(),
             },
-            DomSnapshotNode {
-                uid: 2,
+            DomCandidate {
+                backend_node_id: 20,
                 role: "textbox".to_string(),
                 label: "".to_string(),
                 tag: "input".to_string(),
@@ -391,7 +364,7 @@ mod tests {
             },
         ];
 
-        let result = format_dom_snapshot(&nodes);
+        let result = format_dom_snapshot(&candidates);
         assert_eq!(
             result,
             "uid=d1 button \"Submit\" tag=button\nuid=d2 textbox tag=input disabled"
