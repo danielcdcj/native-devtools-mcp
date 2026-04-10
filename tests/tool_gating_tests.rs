@@ -178,7 +178,9 @@ mod cdp_tool_gating {
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         assert!(!names.contains(&"cdp_disconnect".to_string()));
-        assert!(!names.contains(&"cdp_take_snapshot".to_string()));
+        assert!(!names.contains(&"cdp_take_ax_snapshot".to_string()));
+        assert!(!names.contains(&"cdp_take_dom_snapshot".to_string()));
+        assert!(!names.contains(&"cdp_find_elements".to_string()));
         assert!(!names.contains(&"cdp_evaluate_script".to_string()));
         assert!(!names.contains(&"cdp_click".to_string()));
         assert!(!names.contains(&"cdp_list_pages".to_string()));
@@ -204,7 +206,9 @@ mod cdp_tool_gating {
 
         // Connected-only tools
         assert!(names.contains(&"cdp_disconnect".to_string()));
-        assert!(names.contains(&"cdp_take_snapshot".to_string()));
+        assert!(names.contains(&"cdp_take_ax_snapshot".to_string()));
+        assert!(names.contains(&"cdp_take_dom_snapshot".to_string()));
+        assert!(names.contains(&"cdp_find_elements".to_string()));
         assert!(names.contains(&"cdp_evaluate_script".to_string()));
         assert!(names.contains(&"cdp_click".to_string()));
         assert!(names.contains(&"cdp_list_pages".to_string()));
@@ -233,8 +237,9 @@ mod cdp_tool_gating {
             disconnected.len()
         );
 
-        // Should add exactly 16 tools (disconnect + 15 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 16);
+        // Should add exactly 18 tools (disconnect + 17 functional tools)
+        // (was 16 with cdp_take_snapshot; now +2 for cdp_take_dom_snapshot and cdp_find_elements)
+        assert_eq!(connected.len() - disconnected.len(), 18);
     }
 }
 
