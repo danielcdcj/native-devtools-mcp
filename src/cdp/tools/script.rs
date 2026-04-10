@@ -371,10 +371,16 @@ async fn resolve_dom_candidates(
         };
 
         // Resolve backendNodeId via DOM.describeNode on the element
+        let el_oid_for_release = el_object_id.clone();
         let describe = DescribeNodeParams::builder()
             .object_id(el_object_id)
             .build();
-        match page.execute(describe).await {
+        let describe_result = page.execute(describe).await;
+        // Release the per-element remote object handle
+        let _ = page
+            .execute(ReleaseObjectParams::new(el_oid_for_release))
+            .await;
+        match describe_result {
             Ok(desc_resp) => {
                 let id = *desc_resp.result.node.backend_node_id.inner();
                 if id == 0 {

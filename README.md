@@ -264,7 +264,7 @@ launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--us
 cdp_connect(port=9222)
 cdp_navigate(url="https://example.com")
 cdp_take_ax_snapshot()        # accessibility tree with element UIDs (a1, a2, ...)
-cdp_fill(uid="10", value="search query")
+cdp_fill(uid="a10", value="search query")
 cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```
