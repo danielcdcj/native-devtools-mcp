@@ -80,7 +80,7 @@ pub fn find_window_by_id_direct(window_id: u32) -> Result<Option<WindowInfo>, St
     }
 
     let list: CFArray<*const c_void> = unsafe { CFArray::wrap_under_create_rule(ptr) };
-    if list.len() == 0 {
+    if list.is_empty() {
         return Ok(None);
     }
 
