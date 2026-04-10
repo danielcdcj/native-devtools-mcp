@@ -6,7 +6,9 @@ This document tracks feature parity between our CDP tools and [chrome-devtools-m
 
 | chrome-devtools-mcp | native-devtools-mcp | Notes |
 |---|---|---|
-| `take_snapshot` | `cdp_take_snapshot` | Accessibility tree snapshot with UIDs |
+| `take_snapshot` | `cdp_take_ax_snapshot` | Accessibility tree snapshot with a-prefixed UIDs |
+| — | `cdp_take_dom_snapshot` | DOM-native snapshot of interactive elements with d-prefixed UIDs |
+| — | `cdp_find_elements` | Search live DOM for interactive elements by text query |
 | `click` | `cdp_click` | Click by UID, supports double-click |
 | `hover` | `cdp_hover` | Hover by UID |
 | `fill` | `cdp_fill` | Fill input/textarea/select by UID |

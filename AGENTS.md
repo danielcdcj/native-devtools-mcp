@@ -35,14 +35,14 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. |
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
-| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_snapshot()` → `cdp_click(uid="42")` | CDP is more reliable than coordinates for web content. |
-| "Type in a web input" | `cdp_take_snapshot()` → `cdp_fill(uid="42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
+| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_ax_snapshot()` → `cdp_click(uid="a42")` | CDP is more reliable than coordinates for web content. |
+| "Type in a web input" | `cdp_take_ax_snapshot()` → `cdp_fill(uid="a42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
 | "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
 | "Navigate to a URL" | `cdp_navigate(url="https://example.com")` | Also supports back, forward, reload. |
 | "Press Enter or shortcut" | `cdp_press_key(key="Enter")` or `cdp_press_key(key="Control+A")` | Supports modifier combos. |
 | "Wait for page content" | `cdp_wait_for(text="Success")` | Polls snapshot until text appears or timeout. |
 | "Switch browser tabs" | `cdp_list_pages()` → `cdp_select_page(page_idx=1)` | List tabs, then select by index. |
-| "Get browser page structure" | `cdp_take_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
+| "Get browser page structure" | `cdp_take_ax_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
 
 ---
 
@@ -182,7 +182,9 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 
 *   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
 *   `cdp_disconnect`: Disconnect and hide CDP tools.
-*   `cdp_take_snapshot`: Accessibility tree snapshot — returns elements with unique UIDs, roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
+*   `cdp_take_ax_snapshot`: Accessibility tree snapshot — returns elements with UIDs prefixed `a` (e.g., a1, a2), roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
+*   `cdp_take_dom_snapshot(max_nodes?)`: DOM-native snapshot of interactive elements — returns UIDs prefixed `d` (e.g., d1, d2). Use when AX snapshot misses contenteditable or custom widgets.
+*   `cdp_find_elements(query, role?, max_results?)`: Search the live DOM for interactive elements matching a text query. Returns matches with `d`-prefixed UIDs plus a page-level inventory.
 *   `cdp_click(uid, dbl_click?)`: Click an element by UID. Scrolls into view automatically.
 *   `cdp_hover(uid)`: Hover over an element by UID.
 *   `cdp_fill(uid, value)`: Type text into an input/textarea or select an option from a `<select>`.
@@ -208,7 +210,7 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
 2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
 3. cdp_navigate(url="https://example.com")
-4. cdp_take_snapshot()                     → uid=1 RootWebArea "Example" ...
+4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "Example" ...
 5. cdp_fill(uid="10", value="search query")
 6. cdp_press_key(key="Enter")
 7. cdp_wait_for(text="Results")
@@ -220,9 +222,9 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 1. quit_app(app_name="MyElectronApp")
 2. launch_app(app_name="MyElectronApp", args=["--remote-debugging-port=9333"])
 3. cdp_connect(port=9333)                  → "Connected. Selected page: file:///...app.html"
-4. cdp_take_snapshot()                     → uid=1 RootWebArea "MyApp" ... (search for buttons, inputs)
-5. cdp_click(uid="42")                     → click a list item or button
-6. cdp_take_snapshot()                     → fresh snapshot of the new view
+4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "MyApp" ... (search for buttons, inputs)
+5. cdp_click(uid="a42")                    → click a list item or button
+6. cdp_take_ax_snapshot()                  → fresh snapshot of the new view
 7. cdp_fill(uid="100", value="hello")
 ```
 
