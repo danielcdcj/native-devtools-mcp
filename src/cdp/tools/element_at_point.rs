@@ -84,7 +84,8 @@ pub async fn cdp_element_at_point(
             "Snapshots are stale — page has navigated. Call cdp_take_dom_snapshot or cdp_take_ax_snapshot again."
         }
         LookupResult::NotInSnapshot => {
-            "Element not in any snapshot. Call cdp_take_dom_snapshot or cdp_find_elements to get a UID."
+            "Element not in any snapshot. Call cdp_take_ax_snapshot, \
+             cdp_take_dom_snapshot, or cdp_find_elements to get a UID."
         }
     };
 
