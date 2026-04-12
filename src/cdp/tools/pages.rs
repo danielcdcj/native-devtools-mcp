@@ -76,6 +76,10 @@ pub async fn cdp_select_page(
     }
 
     let page = client.last_page_list[page_idx].clone();
+    let same_page = client
+        .selected_page
+        .as_ref()
+        .is_some_and(|sel| sel.target_id() == page.target_id());
 
     if let Err(e) = page.bring_to_front().await {
         return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
@@ -83,7 +87,9 @@ pub async fn cdp_select_page(
 
     let url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.invalidate_snapshots();
+    if !same_page {
+        client.invalidate_snapshots();
+    }
 
     CallToolResult::success(vec![Content::text(format!(
         "Selected page [{}]: {}",

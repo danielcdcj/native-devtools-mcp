@@ -67,55 +67,84 @@ pub async fn cdp_element_at_point(
     };
 
     // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
-    // Stale-snapshot detection uses the generation counter, which tracks
-    // page-lifecycle events including same-URL reloads.
-    if let Some((uid, role, name)) = lookup_uid(client, backend_node_id) {
-        let json = serde_json::json!({
-            "uid": uid,
-            "role": role,
-            "name": name,
-            "backend_node_id": backend_node_id,
-        });
-        CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        )])
-    } else {
-        // Element not in any snapshot — return raw backendNodeId without minting a UID.
-        let json = serde_json::json!({
-            "uid": null,
-            "backend_node_id": backend_node_id,
-            "note": "Element not in any snapshot. Call cdp_take_dom_snapshot or cdp_find_elements to get a UID.",
-        });
-        CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&json).unwrap_or_default(),
-        )])
-    }
+    let note = match lookup_uid(client, backend_node_id) {
+        LookupResult::Found { uid, role, name } => {
+            let json = serde_json::json!({
+                "uid": uid,
+                "role": role,
+                "name": name,
+                "backend_node_id": backend_node_id,
+            });
+            return CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&json).unwrap_or_default(),
+            )]);
+        }
+        LookupResult::Stale => {
+            "Snapshots are stale — page has navigated. Call cdp_take_dom_snapshot or cdp_take_ax_snapshot again."
+        }
+        LookupResult::NotInSnapshot => {
+            "Element not in any snapshot. Call cdp_take_dom_snapshot or cdp_find_elements to get a UID."
+        }
+    };
+
+    // Not found — return raw backendNodeId without minting a UID.
+    let json = serde_json::json!({
+        "uid": null,
+        "backend_node_id": backend_node_id,
+        "note": note,
+    });
+    CallToolResult::success(vec![Content::text(
+        serde_json::to_string_pretty(&json).unwrap_or_default(),
+    )])
 }
 
-/// Read-only lookup across both snapshot maps. Prefers DOM snapshot, falls back to AX.
-/// Never auto-refreshes — returns None if the node isn't in either map.
-///
-/// A snapshot whose stamped generation doesn't match `client.generation` is
-/// treated as stale and skipped — this catches same-URL reloads and SPA
-/// navigations that the old URL-based check silently accepted.
-fn lookup_uid(client: &CdpClient, backend_node_id: i64) -> Option<(String, String, String)> {
-    // Prefer DOM snapshot
-    if let Some(dom) = &client.last_dom_snapshot {
-        if dom.generation == client.generation {
-            if let Some(result) = lookup_in_snapshot(dom, backend_node_id) {
-                return Some(result);
-            }
+enum LookupResult {
+    Found {
+        uid: String,
+        role: String,
+        name: String,
+    },
+    /// At least one snapshot exists but its generation doesn't match
+    /// `client.generation`. The page has navigated since the snapshot
+    /// was taken — the caller should re-snapshot before resolving.
+    Stale,
+    /// The backendNodeId isn't present in any fresh snapshot. Either no
+    /// snapshot has been taken yet, or the element wasn't captured.
+    NotInSnapshot,
+}
+
+/// Read-only lookup across both snapshot maps. Prefers DOM, falls back to AX.
+/// Distinguishes "stale" (a snapshot exists but at a previous generation)
+/// from "not in snapshot" (no matching entry in any fresh snapshot).
+fn lookup_uid(client: &CdpClient, backend_node_id: i64) -> LookupResult {
+    let dom_fresh = client
+        .last_dom_snapshot
+        .as_ref()
+        .filter(|s| s.generation == client.generation);
+    let ax_fresh = client
+        .last_ax_snapshot
+        .as_ref()
+        .filter(|s| s.generation == client.generation);
+
+    if let Some(dom) = dom_fresh {
+        if let Some((uid, role, name)) = lookup_in_snapshot(dom, backend_node_id) {
+            return LookupResult::Found { uid, role, name };
         }
     }
-    // Fall back to AX snapshot
-    if let Some(ax) = &client.last_ax_snapshot {
-        if ax.generation == client.generation {
-            if let Some(result) = lookup_in_snapshot(ax, backend_node_id) {
-                return Some(result);
-            }
+    if let Some(ax) = ax_fresh {
+        if let Some((uid, role, name)) = lookup_in_snapshot(ax, backend_node_id) {
+            return LookupResult::Found { uid, role, name };
         }
     }
-    None
+
+    let has_stale_snapshot = (client.last_dom_snapshot.is_some() && dom_fresh.is_none())
+        || (client.last_ax_snapshot.is_some() && ax_fresh.is_none());
+
+    if has_stale_snapshot {
+        LookupResult::Stale
+    } else {
+        LookupResult::NotInSnapshot
+    }
 }
 
 struct WindowGeometry {
