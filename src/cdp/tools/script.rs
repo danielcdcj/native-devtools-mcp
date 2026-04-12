@@ -80,8 +80,6 @@ pub async fn cdp_evaluate_script(
     }
 
     // Args case: resolve UIDs to remote objects and call function with them.
-    let current_url = page_url(&page).await;
-
     let arg_list = match args.as_ref() {
         Some(a) => a,
         None => return cdp_error("args required when passing element references"),
@@ -90,12 +88,14 @@ pub async fn cdp_evaluate_script(
 
     // Collect (uid, backend_node_id) pairs first to avoid borrow issues.
     let mut uid_backend_pairs: Vec<(String, i64)> = Vec::with_capacity(arg_list.len());
+    let current_url = page_url(&page).await;
     for arg in arg_list {
         if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
             let node = match crate::cdp::resolve_uid_from_maps(
                 uid,
                 client.last_ax_snapshot.as_ref(),
                 client.last_dom_snapshot.as_ref(),
+                client.generation,
                 &current_url,
             ) {
                 Ok(n) => n,
@@ -207,10 +207,11 @@ pub async fn cdp_take_ax_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) ->
                 .map(|n| serde_json::to_value(n).unwrap_or_default())
                 .collect();
 
+            let generation = client.generation;
             let page_url = page_url(&page).await;
 
             let (snapshot_nodes, snapshot_map) =
-                crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, &page_url);
+                crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, page_url, generation);
 
             let output = format_snapshot(&snapshot_nodes);
             client.last_ax_snapshot = Some(snapshot_map);
@@ -421,6 +422,7 @@ pub async fn cdp_find_elements(
 
     let max = max_results.unwrap_or(10);
     let page_url = page_url(&page).await;
+    let generation = client.generation;
 
     let walker_js = crate::cdp::dom_discovery::dom_walker_js(&query, role.as_deref(), max);
 
@@ -430,7 +432,8 @@ pub async fn cdp_find_elements(
     };
 
     // Build snapshot map and format response
-    let snapshot_map = crate::cdp::dom_discovery::build_dom_snapshot(&candidates, &page_url);
+    let snapshot_map =
+        crate::cdp::dom_discovery::build_dom_snapshot(&candidates, page_url.clone(), generation);
 
     let matches_json: Vec<serde_json::Value> = candidates
         .iter()
@@ -479,6 +482,7 @@ pub async fn cdp_take_dom_snapshot(
 
     let max = max_nodes.unwrap_or(500);
     let page_url = page_url(&page).await;
+    let generation = client.generation;
 
     // Use empty query to match all interactive elements
     let walker_js = crate::cdp::dom_discovery::dom_walker_js("", None, max);
@@ -488,7 +492,8 @@ pub async fn cdp_take_dom_snapshot(
         Err(e) => return e,
     };
 
-    let snapshot_map = crate::cdp::dom_discovery::build_dom_snapshot(&candidates, &page_url);
+    let snapshot_map =
+        crate::cdp::dom_discovery::build_dom_snapshot(&candidates, page_url, generation);
 
     let output = crate::cdp::dom_discovery::format_dom_snapshot(&candidates);
     client.last_dom_snapshot = Some(snapshot_map);

@@ -76,6 +76,10 @@ pub async fn cdp_select_page(
     }
 
     let page = client.last_page_list[page_idx].clone();
+    let same_page = client
+        .selected_page
+        .as_ref()
+        .is_some_and(|sel| sel.target_id() == page.target_id());
 
     if let Err(e) = page.bring_to_front().await {
         return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
@@ -83,7 +87,9 @@ pub async fn cdp_select_page(
 
     let url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.invalidate_snapshots();
+    if !same_page {
+        client.invalidate_snapshots();
+    }
 
     CallToolResult::success(vec![Content::text(format!(
         "Selected page [{}]: {}",
@@ -324,6 +330,10 @@ pub async fn cdp_close_page(
     // browser.pages() which iterates an unordered HashMap. This is a best-effort
     // heuristic; the selected page may not match the browser's visually active tab.
     if is_selected {
+        // Invalidate up front: even if there is no replacement page, the
+        // snapshots we hold refer to a closed target and must be dropped.
+        client.invalidate_snapshots();
+
         let new_idx = if page_idx < client.last_page_list.len() {
             page_idx
         } else {
@@ -335,7 +345,8 @@ pub async fn cdp_close_page(
             } else {
                 client.selected_page = None;
             }
-            client.invalidate_snapshots();
+        } else {
+            client.selected_page = None;
         }
     }
 

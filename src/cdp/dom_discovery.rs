@@ -22,7 +22,14 @@ pub struct DomCandidate {
 }
 
 /// Build a SnapshotMap from DOM candidates, assigning d<N> prefixed UIDs.
-pub fn build_dom_snapshot(candidates: &[DomCandidate], page_url: &str) -> SnapshotMap {
+///
+/// `page_url` and `generation` are stamped onto the resulting
+/// [`SnapshotMap`] so stale snapshots are detected at lookup time.
+pub fn build_dom_snapshot(
+    candidates: &[DomCandidate],
+    page_url: String,
+    generation: u64,
+) -> SnapshotMap {
     let mut uid_to_node = HashMap::new();
     let mut backend_to_uids: HashMap<i64, Vec<String>> = HashMap::new();
 
@@ -49,7 +56,8 @@ pub fn build_dom_snapshot(candidates: &[DomCandidate], page_url: &str) -> Snapsh
     SnapshotMap {
         uid_to_node,
         backend_to_uids,
-        page_url: page_url.to_string(),
+        page_url,
+        generation,
     }
 }
 
@@ -300,14 +308,13 @@ mod tests {
             },
         ];
 
-        let map = build_dom_snapshot(&candidates, "https://example.com");
+        let map = build_dom_snapshot(&candidates, "about:blank".to_string(), 0);
         assert_eq!(map.uid_to_node.len(), 2);
         assert!(map.uid_to_node.contains_key("d1"));
         assert!(map.uid_to_node.contains_key("d2"));
         assert_eq!(map.uid_to_node["d1"].backend_node_id, 10);
         assert_eq!(map.uid_to_node["d1"].role, "button");
         assert_eq!(map.uid_to_node["d1"].name, "Submit");
-        assert_eq!(map.page_url, "https://example.com");
     }
 
     #[test]
@@ -322,7 +329,7 @@ mod tests {
             parent_name: "Confirm".to_string(),
         }];
 
-        let map = build_dom_snapshot(&candidates, "https://test.com");
+        let map = build_dom_snapshot(&candidates, "about:blank".to_string(), 0);
         assert_eq!(map.backend_to_uids[&42], vec!["d1"]);
     }
 

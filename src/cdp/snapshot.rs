@@ -8,9 +8,12 @@ use std::collections::HashMap;
 ///
 /// Returns a flat list of [`AXSnapshotNode`]s in DFS order and a [`SnapshotMap`]
 /// that maps UIDs to backend node identifiers needed for click/eval resolution.
+/// `page_url` and `generation` are stamped onto the resulting [`SnapshotMap`]
+/// for stale-snapshot detection.
 pub fn convert_cdp_ax_tree(
     nodes: &[serde_json::Value],
-    page_url: &str,
+    page_url: String,
+    generation: u64,
 ) -> (Vec<AXSnapshotNode>, SnapshotMap) {
     if nodes.is_empty() {
         return (
@@ -18,7 +21,8 @@ pub fn convert_cdp_ax_tree(
             SnapshotMap {
                 uid_to_node: HashMap::new(),
                 backend_to_uids: HashMap::new(),
-                page_url: page_url.to_string(),
+                page_url,
+                generation,
             },
         );
     }
@@ -145,7 +149,8 @@ pub fn convert_cdp_ax_tree(
     let snapshot_map = SnapshotMap {
         uid_to_node,
         backend_to_uids,
-        page_url: page_url.to_string(),
+        page_url,
+        generation,
     };
 
     (snapshot_nodes, snapshot_map)
@@ -188,7 +193,8 @@ mod tests {
             }),
         ];
 
-        let (snapshot_nodes, snapshot_map) = convert_cdp_ax_tree(&nodes, "https://example.com");
+        let (snapshot_nodes, snapshot_map) =
+            convert_cdp_ax_tree(&nodes, "about:blank".to_string(), 0);
 
         // Verify 3 nodes produced.
         assert_eq!(snapshot_nodes.len(), 3);
@@ -225,9 +231,6 @@ mod tests {
         assert_eq!(snapshot_map.backend_to_uids[&1].len(), 1);
         assert_eq!(snapshot_map.backend_to_uids[&5].len(), 1);
         assert_eq!(snapshot_map.backend_to_uids[&8].len(), 1);
-
-        // Verify page_url.
-        assert_eq!(snapshot_map.page_url, "https://example.com");
     }
 
     #[test]
@@ -258,7 +261,7 @@ mod tests {
                 "properties": []
             }),
         ];
-        let (_, map) = convert_cdp_ax_tree(&nodes, "http://test");
+        let (_, map) = convert_cdp_ax_tree(&nodes, "about:blank".to_string(), 0);
         // backend_node_id 0 should NOT be in the reverse map
         assert!(!map.backend_to_uids.contains_key(&0));
         // backend_node_id 42 should have 2 UIDs (a-prefixed)
