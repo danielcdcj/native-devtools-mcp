@@ -134,10 +134,15 @@ fn lookup_uid(client: &CdpClient, backend_node_id: i64, current_url: &str) -> Lo
         }
     }
 
-    let has_stale_snapshot = (client.last_dom_snapshot.is_some() && dom_fresh.is_none())
+    // Only report "stale" when every snapshot we hold is actually stale —
+    // otherwise at least one fresh snapshot failed to match and the right
+    // hint is to take a fresh snapshot of the other kind, not re-take the
+    // one that's already current.
+    let has_any_fresh = dom_fresh.is_some() || ax_fresh.is_some();
+    let has_any_stale = (client.last_dom_snapshot.is_some() && dom_fresh.is_none())
         || (client.last_ax_snapshot.is_some() && ax_fresh.is_none());
 
-    if has_stale_snapshot {
+    if !has_any_fresh && has_any_stale {
         LookupResult::Stale
     } else {
         LookupResult::NotInSnapshot
