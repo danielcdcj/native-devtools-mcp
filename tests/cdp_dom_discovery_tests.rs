@@ -57,7 +57,7 @@ use native_devtools_mcp::cdp::tools::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
 async fn contenteditable_found_by_placeholder() {
-    let Some(mut h) = Harness::launch().await else {
+    let Some(mut h) = Harness::launch_or_skip().await else {
         return;
     };
     h.navigate(HTML_CONTENTEDITABLE).await;
@@ -93,7 +93,7 @@ async fn contenteditable_found_by_placeholder() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
 async fn custom_button_uses_aria_label() {
-    let Some(mut h) = Harness::launch().await else {
+    let Some(mut h) = Harness::launch_or_skip().await else {
         return;
     };
     h.navigate(HTML_CUSTOM_BUTTON).await;
@@ -134,7 +134,7 @@ async fn custom_button_uses_aria_label() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
 async fn duplicate_labels_disambiguated_by_parent() {
-    let Some(mut h) = Harness::launch().await else {
+    let Some(mut h) = Harness::launch_or_skip().await else {
         return;
     };
     h.navigate(HTML_DUPLICATE_LABELS).await;
@@ -176,7 +176,7 @@ async fn duplicate_labels_disambiguated_by_parent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
 async fn shadow_root_and_iframe_traversed() {
-    let Some(mut h) = Harness::launch().await else {
+    let Some(mut h) = Harness::launch_or_skip().await else {
         return;
     };
     h.navigate(HTML_SHADOW_AND_IFRAME).await;
@@ -195,11 +195,7 @@ async fn shadow_root_and_iframe_traversed() {
         "find_elements (shadow) failed: {:?}",
         shadow
     );
-    assert!(
-        content_text(&shadow).contains("ShadowBtn"),
-        "shadow-root button not found:\n{}",
-        content_text(&shadow)
-    );
+    assert_matches_label(&shadow, "ShadowBtn");
 
     // `IframeBtn` lives inside a same-origin iframe (srcdoc).
     let iframe = cdp_find_elements(
@@ -215,10 +211,30 @@ async fn shadow_root_and_iframe_traversed() {
         "find_elements (iframe) failed: {:?}",
         iframe
     );
+    assert_matches_label(&iframe, "IframeBtn");
+}
+
+/// Parse a `cdp_find_elements` response and assert that its `matches`
+/// array contains at least one entry whose label equals `expected`.
+/// The plain `inventory` field is ignored on purpose — it's populated
+/// before query/visibility filtering, so a regression that empties
+/// `matches` but leaves `inventory` would otherwise silently pass.
+fn assert_matches_label(result: &rmcp::model::CallToolResult, expected: &str) {
+    let body = content_text(result);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).expect("find_elements returns JSON");
+    let matches = parsed
+        .get("matches")
+        .and_then(|v| v.as_array())
+        .unwrap_or_else(|| panic!("response missing `matches` array:\n{body}"));
+    let found = matches.iter().any(|m| {
+        m.get("label")
+            .and_then(|l| l.as_str())
+            .is_some_and(|l| l == expected)
+    });
     assert!(
-        content_text(&iframe).contains("IframeBtn"),
-        "iframe button not found:\n{}",
-        content_text(&iframe)
+        found,
+        "no entry in `matches` with label={expected:?}; body:\n{body}"
     );
 }
 
@@ -236,7 +252,7 @@ async fn shadow_root_and_iframe_traversed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
 async fn mixed_ax_and_dom_uids_resolve_independently() {
-    let Some(mut h) = Harness::launch().await else {
+    let Some(mut h) = Harness::launch_or_skip().await else {
         return;
     };
     h.navigate(HTML_MIXED_AX_DOM).await;

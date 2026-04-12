@@ -77,34 +77,32 @@ pub struct Harness {
     client: ClientHandle,
 }
 
+/// Result of trying to bring up the harness.
+///
+/// `NoChrome` is a host-not-capable skip — `launch()` returns it when no
+/// Chrome/Chromium binary exists in the expected locations. All other
+/// failures (temp dir creation, port allocation, spawn, debug-port
+/// readiness, `CdpClient::connect`) are surfaced as `Err` so tests fail
+/// loudly instead of going silently green.
+pub enum LaunchOutcome {
+    Ready(Harness),
+    NoChrome,
+}
+
 impl Harness {
-    /// Spawn Chrome and connect. Returns `None` (and prints to stderr) if
-    /// Chrome is not installed or launch fails — the caller should treat
-    /// that as a skip, not a failure.
-    pub async fn launch() -> Option<Self> {
+    /// Spawn Chrome and connect.
+    pub async fn launch() -> Result<LaunchOutcome, String> {
         let chrome_path = match find_chrome_binary() {
             Some(p) => p,
             None => {
                 eprintln!("[harness] skipping: no Chrome/Chromium binary found");
-                return None;
+                return Ok(LaunchOutcome::NoChrome);
             }
         };
 
-        let profile = match TempDir::new() {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("[harness] skipping: cannot create temp profile dir: {e}");
-                return None;
-            }
-        };
+        let profile = TempDir::new().map_err(|e| format!("cannot create temp profile dir: {e}"))?;
 
-        let port = match pick_free_port() {
-            Some(p) => p,
-            None => {
-                eprintln!("[harness] skipping: could not acquire a free port");
-                return None;
-            }
-        };
+        let port = pick_free_port().ok_or_else(|| "could not acquire a free port".to_string())?;
 
         let mut cmd = Command::new(&chrome_path);
         cmd.arg("--headless=new")
@@ -122,38 +120,38 @@ impl Harness {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[harness] skipping: failed to spawn Chrome: {e}");
-                return None;
-            }
-        };
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn Chrome at {chrome_path:?}: {e}"))?;
 
-        // Wait for the debug port to come up; chromiumoxide's own connect
-        // helper will fail fast if we race ahead of Chrome.
         if let Err(e) = wait_for_debug_port(port, Duration::from_secs(15)).await {
-            eprintln!("[harness] skipping: Chrome never opened debug port: {e}");
-            let mut child = child;
             let _ = child.kill();
-            return None;
+            return Err(format!("Chrome never opened debug port {port}: {e}"));
         }
 
         let client = match CdpClient::connect(port).await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[harness] skipping: CdpClient::connect failed: {e}");
-                let mut child = child;
                 let _ = child.kill();
-                return None;
+                return Err(format!("CdpClient::connect(port={port}) failed: {e}"));
             }
         };
 
-        Some(Self {
+        Ok(LaunchOutcome::Ready(Self {
             chrome: Some(child),
             _profile: profile,
             client: Arc::new(RwLock::new(Some(client))),
-        })
+        }))
+    }
+
+    /// Convenience wrapper for scenarios: panic on real failures, return
+    /// `None` only for the "no Chrome installed" skip.
+    pub async fn launch_or_skip() -> Option<Self> {
+        match Self::launch().await {
+            Ok(LaunchOutcome::Ready(h)) => Some(h),
+            Ok(LaunchOutcome::NoChrome) => None,
+            Err(e) => panic!("harness launch failed: {e}"),
+        }
     }
 
     /// Return a clone of the shared client handle, suitable for passing into
