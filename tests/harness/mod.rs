@@ -12,6 +12,12 @@
 //! **Platforms:** macOS and Linux. Windows is currently skipped because
 //! `find_chrome_binary` only knows about Unix Chrome locations.
 //!
+//! **Host requirements:** in addition to Chrome, the harness binds an
+//! ephemeral TCP port on `127.0.0.1`. Sandboxed environments that block
+//! loopback listeners will surface that as `harness launch failed: could
+//! not acquire a free port` — not a silent skip — so a CI regression
+//! cannot hide behind the Chrome-missing short-circuit.
+//!
 //! Keep this module focused on *harness mechanics*. Scenario HTML fixtures
 //! live in this file because they are small, self-contained, and closely tied
 //! to the assertions; scenario *logic* stays in `cdp_dom_discovery_tests.rs`.

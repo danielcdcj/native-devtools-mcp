@@ -22,8 +22,15 @@
 //!
 //! # Gating
 //!
-//! All scenarios are `#[ignore]`d because they require a Google Chrome binary
-//! on the host. CI jobs that have Chrome should run them with:
+//! All scenarios are `#[ignore]`d. They require:
+//!
+//! - A Google Chrome / Chromium binary on the host (macOS or Linux;
+//!   Windows is currently unsupported by the harness).
+//! - Permission to bind an ephemeral loopback TCP port. Sandboxed
+//!   environments that disable local listeners will see every scenario
+//!   panic with "could not acquire a free port" rather than skip.
+//!
+//! CI jobs that meet both should run them with:
 //!
 //! ```bash
 //! cargo test --test cdp_dom_discovery_tests -- --ignored --test-threads=1
@@ -34,8 +41,9 @@
 //! belt-and-braces insurance against stray global state (dialog handlers,
 //! etc).
 //!
-//! If Chrome is not installed or not on the platform we expect (macOS /
-//! Linux), every test short-circuits to `skip!` and records why.
+//! If Chrome is not installed, every test short-circuits with a stderr
+//! skip note. Any other launch failure (temp dir, port, spawn, debug-port
+//! wait, connect) panics so a harness regression fails loud.
 
 #![cfg(feature = "cdp")]
 
