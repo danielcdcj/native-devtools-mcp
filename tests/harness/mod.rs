@@ -9,6 +9,9 @@
 //! * an `Arc<RwLock<Option<CdpClient>>>` shaped exactly like the MCP server's
 //!   runtime state, so tool functions work unmodified.
 //!
+//! **Platforms:** macOS and Linux. Windows is currently skipped because
+//! `find_chrome_binary` only knows about Unix Chrome locations.
+//!
 //! Keep this module focused on *harness mechanics*. Scenario HTML fixtures
 //! live in this file because they are small, self-contained, and closely tied
 //! to the assertions; scenario *logic* stays in `cdp_dom_discovery_tests.rs`.
@@ -176,11 +179,27 @@ impl Harness {
             content_text(&result)
         );
 
-        // Give the page a frame to paint + attach custom elements /
-        // shadow roots / iframe contents. CDP doesn't expose a "fully
-        // settled" signal here; 200ms is empirically enough for these
-        // tiny fixtures and keeps the suite snappy.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Wait for `document.readyState === 'complete'` so shadow roots,
+        // custom elements, and iframe documents have attached before the
+        // scenario queries them. Polls against the live page rather than
+        // sleeping an arbitrary interval.
+        self.wait_for_ready(Duration::from_secs(5)).await;
+    }
+
+    async fn wait_for_ready(&self, timeout: Duration) {
+        let start = Instant::now();
+        loop {
+            if self.eval_bool("document.readyState === 'complete'").await {
+                return;
+            }
+            if start.elapsed() >= timeout {
+                panic!(
+                    "page did not reach readyState=complete within {:?}",
+                    timeout
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     /// Evaluate a JS boolean expression in the page context. Convenience
@@ -212,16 +231,10 @@ async fn wait_for_debug_port(port: u16, timeout: Duration) -> Result<(), String>
     let start = Instant::now();
     let url = format!("http://127.0.0.1:{port}/json/version");
     loop {
-        // `ureq` is already in the dependency tree — use it for a tiny
-        // blocking GET inside `spawn_blocking` to avoid pulling in another
-        // HTTP client.
         let u = url.clone();
-        let ok = tokio::task::spawn_blocking(move || {
-            let agent = ureq::Agent::new_with_defaults();
-            agent.get(&u).call().is_ok()
-        })
-        .await
-        .unwrap_or(false);
+        let ok = tokio::task::spawn_blocking(move || ureq::get(&u).call().is_ok())
+            .await
+            .unwrap_or(false);
 
         if ok {
             return Ok(());
@@ -261,60 +274,48 @@ fn text_of(content: &Content) -> Option<String> {
 // Snapshot-text parsers (small, test-only)
 // ---------------------------------------------------------------------------
 
-/// Find the first `a<N>` UID in an AX snapshot whose role matches and whose
-/// name contains the given substring.
-///
-/// AX snapshot format (from `tools::ax_snapshot::format_snapshot`) puts each
-/// node on its own line like: `  button "AxButton"`. The rendered UID is the
-/// numeric `uid` field. The snapshot map uses the same numeric → `a<N>`
-/// mapping, so we count the Nth node that appears.
-///
-/// This is a scenario helper — if the format evolves we'll update both the
-/// formatter and this parser in lockstep.
+/// Find the first `a<N>` UID in an AX snapshot whose role matches as a
+/// whole token and whose name contains the given substring. AX snapshot
+/// lines are `<indent>uid=a<N> <role> "<name>" ...` from
+/// `tools::ax_snapshot::format_snapshot`.
 pub fn find_ax_uid(snapshot: &str, role: &str, name_substring: &str) -> Option<String> {
-    for line in snapshot.lines() {
-        // Lines look like: `[uid=a5] button "AxButton"`
-        // But format_snapshot may differ — accept either `uid=aN` or a
-        // preceding numeric uid that we prefix.
-        if let Some(uid) = extract_uid(line, 'a') {
-            if line.contains(role) && line.contains(name_substring) {
-                return Some(uid);
-            }
-        }
-    }
-    None
+    find_uid_in_snapshot(snapshot, 'a', role, name_substring)
 }
 
-/// Find the first `d<N>` UID in a DOM snapshot whose role matches and whose
-/// label contains the given substring. The DOM snapshot format (see
-/// `dom_discovery::format_dom_snapshot`) is stable: `uid=dN role "label"
-/// tag=…`.
+/// Find the first `d<N>` UID in a DOM snapshot whose role matches as a
+/// whole token and whose label contains the given substring. DOM snapshot
+/// lines are `uid=d<N> <role> "<label>" tag=<tag> ...` from
+/// `dom_discovery::format_dom_snapshot`.
 pub fn find_dom_uid(snapshot: &str, role: &str, label_substring: &str) -> Option<String> {
+    find_uid_in_snapshot(snapshot, 'd', role, label_substring)
+}
+
+/// Parse a snapshot line formatted as `uid=<prefix><N> <role> "<text>" …`
+/// and return the UID when the role token is an exact match and the text
+/// contains the substring.
+fn find_uid_in_snapshot(
+    snapshot: &str,
+    prefix: char,
+    role: &str,
+    text_substring: &str,
+) -> Option<String> {
     for line in snapshot.lines() {
-        if let Some(uid) = extract_uid(line, 'd') {
-            if line.contains(role) && line.contains(label_substring) {
-                return Some(uid);
-            }
+        let mut tokens = line.split_whitespace();
+        let uid_token = tokens.next()?;
+        let uid = uid_token.strip_prefix("uid=")?;
+        if !uid_starts_with_prefix(uid, prefix) {
+            continue;
+        }
+        if tokens.next() == Some(role) && line.contains(text_substring) {
+            return Some(uid.to_string());
         }
     }
     None
 }
 
-fn extract_uid(line: &str, prefix: char) -> Option<String> {
-    // Accept `uid=aN` / `uid=dN` or a bare `aN`/`dN` at the start of a token.
-    for token in line.split_whitespace() {
-        let candidate = token
-            .strip_prefix("uid=")
-            .unwrap_or(token)
-            .trim_end_matches(|c: char| !c.is_alphanumeric());
-        if candidate.starts_with(prefix)
-            && candidate.len() > 1
-            && candidate[1..].chars().all(|c| c.is_ascii_digit())
-        {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+fn uid_starts_with_prefix(uid: &str, prefix: char) -> bool {
+    let mut chars = uid.chars();
+    chars.next() == Some(prefix) && chars.clone().count() > 0 && chars.all(|c| c.is_ascii_digit())
 }
 
 // ---------------------------------------------------------------------------
