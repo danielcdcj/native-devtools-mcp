@@ -324,6 +324,10 @@ pub async fn cdp_close_page(
     // browser.pages() which iterates an unordered HashMap. This is a best-effort
     // heuristic; the selected page may not match the browser's visually active tab.
     if is_selected {
+        // Invalidate up front: even if there is no replacement page, the
+        // snapshots we hold refer to a closed target and must be dropped.
+        client.invalidate_snapshots();
+
         let new_idx = if page_idx < client.last_page_list.len() {
             page_idx
         } else {
@@ -335,7 +339,8 @@ pub async fn cdp_close_page(
             } else {
                 client.selected_page = None;
             }
-            client.invalidate_snapshots();
+        } else {
+            client.selected_page = None;
         }
     }
 
