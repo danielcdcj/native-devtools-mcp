@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 use chromiumoxide::cdp::browser_protocol::dom::{DescribeNodeParams, GetNodeForLocationParams};
 use rmcp::model::{CallToolResult, Content};
 
-use crate::cdp::{page_url, CdpClient, SnapshotMap};
+use crate::cdp::{CdpClient, SnapshotMap};
 
 /// Resolve screen coordinates to a CDP snapshot UID from either the AX or DOM snapshot.
 pub async fn cdp_element_at_point(
@@ -67,9 +67,9 @@ pub async fn cdp_element_at_point(
     };
 
     // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
-    let current_url = page_url(&page).await;
-
-    if let Some((uid, role, name)) = lookup_uid(client, backend_node_id, &current_url) {
+    // Stale-snapshot detection uses the generation counter, which tracks
+    // page-lifecycle events including same-URL reloads.
+    if let Some((uid, role, name)) = lookup_uid(client, backend_node_id) {
         let json = serde_json::json!({
             "uid": uid,
             "role": role,
@@ -94,14 +94,14 @@ pub async fn cdp_element_at_point(
 
 /// Read-only lookup across both snapshot maps. Prefers DOM snapshot, falls back to AX.
 /// Never auto-refreshes — returns None if the node isn't in either map.
-fn lookup_uid(
-    client: &CdpClient,
-    backend_node_id: i64,
-    current_url: &str,
-) -> Option<(String, String, String)> {
+///
+/// A snapshot whose stamped generation doesn't match `client.generation` is
+/// treated as stale and skipped — this catches same-URL reloads and SPA
+/// navigations that the old URL-based check silently accepted.
+fn lookup_uid(client: &CdpClient, backend_node_id: i64) -> Option<(String, String, String)> {
     // Prefer DOM snapshot
     if let Some(dom) = &client.last_dom_snapshot {
-        if dom.page_url == current_url {
+        if dom.generation == client.generation {
             if let Some(result) = lookup_in_snapshot(dom, backend_node_id) {
                 return Some(result);
             }
@@ -109,7 +109,7 @@ fn lookup_uid(
     }
     // Fall back to AX snapshot
     if let Some(ax) = &client.last_ax_snapshot {
-        if ax.page_url == current_url {
+        if ax.generation == client.generation {
             if let Some(result) = lookup_in_snapshot(ax, backend_node_id) {
                 return Some(result);
             }

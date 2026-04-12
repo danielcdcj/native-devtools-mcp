@@ -21,7 +21,7 @@ pub use script::{
 
 // Shared helpers used by input tools.
 
-use crate::cdp::{cdp_error, page_url, CdpClient};
+use crate::cdp::{cdp_error, CdpClient};
 use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
 };
@@ -29,18 +29,18 @@ use chromiumoxide::page::Page;
 use rmcp::model::CallToolResult;
 
 /// Resolve a UID to a backend node ID and element metadata from the snapshot.
-async fn resolve_node(
+///
+/// Staleness is determined by comparing `client.generation` against the
+/// snapshot's stamped generation — no page I/O required.
+fn resolve_node(
     uid: &str,
     client: &CdpClient,
-    page: &Page,
 ) -> Result<(BackendNodeId, String, String), CallToolResult> {
-    let current_url = page_url(page).await;
-
     let node = crate::cdp::resolve_uid_from_maps(
         uid,
         client.last_ax_snapshot.as_ref(),
         client.last_dom_snapshot.as_ref(),
-        &current_url,
+        client.generation,
     )
     .map_err(cdp_error)?;
 
@@ -82,7 +82,7 @@ async fn resolve_element_center(
     client: &CdpClient,
     page: &Page,
 ) -> Result<(String, String, f64, f64), CallToolResult> {
-    let (backend_node_id, node_role, node_name) = resolve_node(uid, client, page).await?;
+    let (backend_node_id, node_role, node_name) = resolve_node(uid, client)?;
 
     let scroll_params = ScrollIntoViewIfNeededParams::builder()
         .backend_node_id(backend_node_id)

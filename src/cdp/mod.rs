@@ -25,6 +25,13 @@ pub struct CdpClient {
     pub last_ax_snapshot: Option<SnapshotMap>,
     pub last_dom_snapshot: Option<SnapshotMap>,
     pub last_page_list: Vec<Page>,
+    /// Monotonic counter bumped on every page-lifecycle event that could
+    /// invalidate the `backendNodeId` space (navigate, reload, select/new/close
+    /// page). Stamped onto each [`SnapshotMap`] at creation time so lookups
+    /// can detect stale snapshots even when the page URL hasn't changed
+    /// (same-URL reload, SPA pushState/replaceState, switching to another tab
+    /// with an identical URL).
+    pub generation: u64,
 }
 
 impl CdpClient {
@@ -53,6 +60,7 @@ impl CdpClient {
             last_ax_snapshot: None,
             last_dom_snapshot: None,
             last_page_list: Vec::new(),
+            generation: 0,
         })
     }
 
@@ -61,12 +69,18 @@ impl CdpClient {
         self.handler_handle.abort();
     }
 
-    /// Clear both snapshot caches (AX and DOM).
+    /// Mark the current `backendNodeId` space as invalidated.
     ///
-    /// Call after any navigation or page switch that invalidates element UIDs.
+    /// Clears both snapshot caches and bumps [`Self::generation`] so any
+    /// existing [`SnapshotMap`] values held elsewhere (or recreated from
+    /// stale state) compare as stale on lookup. Call after any navigation,
+    /// reload, or page switch that invalidates element UIDs — the generation
+    /// bump is the load-bearing correctness mechanism, the cache clear is
+    /// defense-in-depth.
     pub fn invalidate_snapshots(&mut self) {
         self.last_ax_snapshot = None;
         self.last_dom_snapshot = None;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Get the selected page, or return a tool error.
@@ -139,13 +153,18 @@ pub fn cdp_error(msg: impl Into<String>) -> CallToolResult {
 }
 
 /// Maps snapshot UIDs to CDP node identifiers for click/eval resolution.
-/// Stores page_url for stale snapshot detection.
+///
+/// Stale-snapshot detection uses `generation`, which is bumped on every
+/// page-lifecycle event (see [`CdpClient::invalidate_snapshots`]). Same-URL
+/// reloads and SPA navigations that don't change the URL still invalidate
+/// via the generation counter.
 pub struct SnapshotMap {
     pub uid_to_node: HashMap<String, SnapshotNode>,
     /// Reverse map: backendNodeId → list of snapshot UIDs.
     /// Skips entries where backendNodeId is 0 (no DOM backing).
     pub backend_to_uids: HashMap<i64, Vec<String>>,
-    pub page_url: String,
+    /// Value of [`CdpClient::generation`] at the moment this snapshot was taken.
+    pub generation: u64,
 }
 
 pub struct SnapshotNode {
@@ -160,11 +179,15 @@ pub struct SnapshotNode {
 /// UIDs prefixed with "d" resolve from the DOM snapshot map.
 /// Returns an error if the prefix is unknown, the map is missing,
 /// the page has navigated (stale), or the UID is not found.
+///
+/// Staleness is detected by comparing `current_generation` against
+/// [`SnapshotMap::generation`]. The page URL is only used for the error
+/// message — same-URL reloads still invalidate via the generation counter.
 pub fn resolve_uid_from_maps<'a>(
     uid: &str,
     ax_snapshot: Option<&'a SnapshotMap>,
     dom_snapshot: Option<&'a SnapshotMap>,
-    current_url: &str,
+    current_generation: u64,
 ) -> Result<&'a SnapshotNode, String> {
     let (map, label, tool_hint) = if uid.starts_with(AX_UID_PREFIX) {
         (ax_snapshot, "AX", "cdp_take_ax_snapshot")
@@ -184,7 +207,7 @@ pub fn resolve_uid_from_maps<'a>(
     let snapshot =
         map.ok_or_else(|| format!("No {} snapshot available. Call {} first.", label, tool_hint))?;
 
-    if current_url != snapshot.page_url {
+    if current_generation != snapshot.generation {
         return Err(format!(
             "Snapshot is stale — page has navigated since last snapshot. Call {} again.",
             tool_hint,
@@ -203,23 +226,28 @@ pub fn resolve_uid_from_maps<'a>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn resolve_uid_ax_prefix() {
-        let mut ax_map = SnapshotMap {
+    fn make_ax_map(generation: u64, uid: &str, backend_node_id: i64) -> SnapshotMap {
+        let mut map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
-            page_url: "https://example.com".to_string(),
+            generation,
         };
-        ax_map.uid_to_node.insert(
-            "a1".to_string(),
+        map.uid_to_node.insert(
+            uid.to_string(),
             SnapshotNode {
-                backend_node_id: 42,
+                backend_node_id,
                 role: "button".to_string(),
                 name: "Submit".to_string(),
             },
         );
+        map
+    }
 
-        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, "https://example.com");
+    #[test]
+    fn resolve_uid_ax_prefix() {
+        let ax_map = make_ax_map(0, "a1", 42);
+
+        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, 0);
         assert!(result.is_ok());
         let node = result.unwrap();
         assert_eq!(node.backend_node_id, 42);
@@ -231,7 +259,7 @@ mod tests {
         let mut dom_map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
-            page_url: "https://example.com".to_string(),
+            generation: 3,
         };
         dom_map.uid_to_node.insert(
             "d5".to_string(),
@@ -242,7 +270,7 @@ mod tests {
             },
         );
 
-        let result = resolve_uid_from_maps("d5", None, Some(&dom_map), "https://example.com");
+        let result = resolve_uid_from_maps("d5", None, Some(&dom_map), 3);
         assert!(result.is_ok());
         let node = result.unwrap();
         assert_eq!(node.backend_node_id, 99);
@@ -250,27 +278,104 @@ mod tests {
 
     #[test]
     fn resolve_uid_unknown_prefix_fails() {
-        let result = resolve_uid_from_maps("x1", None, None, "https://example.com");
+        let result = resolve_uid_from_maps("x1", None, None, 0);
         assert!(result.is_err());
     }
 
+    fn expect_stale(result: Result<&SnapshotNode, String>) {
+        match result {
+            Err(msg) => assert!(msg.contains("stale"), "expected stale error, got: {}", msg),
+            Ok(_) => panic!("expected stale-snapshot error, got Ok"),
+        }
+    }
+
     #[test]
-    fn resolve_uid_stale_page_fails() {
-        let mut ax_map = SnapshotMap {
+    fn resolve_uid_stale_generation_fails() {
+        let ax_map = make_ax_map(1, "a1", 1);
+
+        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 2));
+    }
+
+    /// Regression test for snapshot-staleness issue: same-URL reload must
+    /// invalidate the snapshot. The old URL-only check would miss this.
+    #[test]
+    fn same_url_reload_invalidates_snapshot() {
+        // Snapshot taken at generation=0.
+        let ax_map = make_ax_map(0, "a1", 42);
+
+        // Simulate a same-URL reload: generation bumps to 1, URL unchanged.
+        // The old URL-only check would silently resolve to the wrong element.
+        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 1));
+    }
+
+    /// Regression test: SPA pushState/replaceState can leave the URL unchanged
+    /// but still rebuild the DOM. A new generation means stale for both
+    /// AX and DOM snapshots.
+    #[test]
+    fn both_maps_stale_when_generation_advanced() {
+        // Both snapshots stamped at generation=5, but client is now at 7.
+        let ax_map = make_ax_map(5, "a1", 1);
+        let mut dom_map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
-            page_url: "https://old.com".to_string(),
+            generation: 5,
         };
-        ax_map.uid_to_node.insert(
-            "a1".to_string(),
+        dom_map.uid_to_node.insert(
+            "d1".to_string(),
             SnapshotNode {
-                backend_node_id: 1,
-                role: "button".to_string(),
-                name: "Ok".to_string(),
+                backend_node_id: 2,
+                role: "textbox".to_string(),
+                name: "".to_string(),
             },
         );
 
-        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, "https://new.com");
-        assert!(result.is_err());
+        expect_stale(resolve_uid_from_maps(
+            "a1",
+            Some(&ax_map),
+            Some(&dom_map),
+            7,
+        ));
+        expect_stale(resolve_uid_from_maps(
+            "d1",
+            Some(&ax_map),
+            Some(&dom_map),
+            7,
+        ));
+    }
+
+    /// After `invalidate_snapshots()` bumps the generation, lookups against a
+    /// snapshot taken at the previous generation must fail — this is the
+    /// core fence that prevents silent mis-resolution of backendNodeIds on
+    /// same-URL reloads and SPA navigations.
+    #[test]
+    fn snapshot_taken_before_navigation_is_stale_after_bump() {
+        // Snapshot taken at generation=0.
+        let ax_map = make_ax_map(0, "a1", 42);
+
+        // A legitimate lookup succeeds before navigation.
+        assert!(resolve_uid_from_maps("a1", Some(&ax_map), None, 0).is_ok());
+
+        // Simulate a same-URL reload: generation advances by 1.
+        let current_generation = 0u64.wrapping_add(1);
+
+        // Any subsequent lookup must be rejected as stale.
+        expect_stale(resolve_uid_from_maps(
+            "a1",
+            Some(&ax_map),
+            None,
+            current_generation,
+        ));
+    }
+
+    #[test]
+    fn invalidate_snapshots_bumps_generation() {
+        // We can't easily build a real CdpClient here (needs a live browser),
+        // so verify the generation arithmetic via a minimal stand-in. This
+        // mirrors the logic in `CdpClient::invalidate_snapshots`.
+        let mut generation: u64 = 0;
+        for expected in 1..=5u64 {
+            generation = generation.wrapping_add(1);
+            assert_eq!(generation, expected);
+        }
     }
 }

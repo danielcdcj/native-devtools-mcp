@@ -130,7 +130,7 @@ pub async fn cdp_fill(
         Err(e) => return e,
     };
 
-    let (backend_node_id, node_role, node_name) = match resolve_node(&uid, client, &page).await {
+    let (backend_node_id, node_role, node_name) = match resolve_node(&uid, client) {
         Ok(v) => v,
         Err(e) => return e,
     };
