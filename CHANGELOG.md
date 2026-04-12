@@ -34,7 +34,9 @@ This means you can now automate **Chrome browsers** and **Electron apps** (Signa
 #### 16 new `cdp_*` tools
 
 - **`cdp_connect` / `cdp_disconnect`** — connect to a running Chrome/Electron instance on a given port
-- **`cdp_take_snapshot`** — accessibility tree snapshot of the browser page (element UIDs, roles, names)
+- **`cdp_take_ax_snapshot`** — accessibility tree snapshot of the browser page (element UIDs prefixed `a`, roles, names)
+- **`cdp_take_dom_snapshot`** — DOM-native snapshot of interactive elements (element UIDs prefixed `d`)
+- **`cdp_find_elements`** — search the live DOM for interactive elements matching a text query
 - **`cdp_evaluate_script`** — evaluate JavaScript in the page, with optional element references from the snapshot
 - **`cdp_click`** — click a DOM element by UID (scroll-into-view, more reliable than screen coordinates for web content)
 - **`cdp_hover`** — hover over a DOM element by UID
@@ -59,8 +61,8 @@ launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--us
 # Connect and automate
 cdp_connect(port=9222)
 cdp_navigate(url="https://example.com")
-cdp_take_snapshot()
-cdp_fill(uid="10", value="search query")
+cdp_take_ax_snapshot()
+cdp_fill(uid="a10", value="search query")
 cdp_press_key(key="Enter")
 ```
 

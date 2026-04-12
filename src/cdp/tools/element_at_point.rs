@@ -4,9 +4,9 @@ use tokio::sync::RwLock;
 use chromiumoxide::cdp::browser_protocol::dom::{DescribeNodeParams, GetNodeForLocationParams};
 use rmcp::model::{CallToolResult, Content};
 
-use crate::cdp::CdpClient;
+use crate::cdp::{page_url, CdpClient, SnapshotMap};
 
-/// Resolve screen coordinates to a CDP accessibility snapshot UID.
+/// Resolve screen coordinates to a CDP snapshot UID from either the AX or DOM snapshot.
 pub async fn cdp_element_at_point(
     x: f64,
     y: f64,
@@ -66,26 +66,56 @@ pub async fn cdp_element_at_point(
         }
     };
 
-    // Step 5: Reverse-lookup in snapshot map.
-    drop(client_guard);
-    let result = reverse_lookup_uid(cdp_client.clone(), backend_node_id).await;
-    match result {
-        Ok((uid, role, name)) => {
-            let json = serde_json::json!({
-                "uid": uid,
-                "role": role,
-                "name": name,
-                "backend_node_id": backend_node_id,
-            });
-            CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&json).unwrap_or_default(),
-            )])
-        }
-        Err(e) => CallToolResult::error(vec![Content::text(format!(
-            "Element found (backendNodeId={}) but not in accessibility snapshot: {}",
-            backend_node_id, e,
-        ))]),
+    // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
+    let current_url = page_url(&page).await;
+
+    if let Some((uid, role, name)) = lookup_uid(client, backend_node_id, &current_url) {
+        let json = serde_json::json!({
+            "uid": uid,
+            "role": role,
+            "name": name,
+            "backend_node_id": backend_node_id,
+        });
+        CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        )])
+    } else {
+        // Element not in any snapshot — return raw backendNodeId without minting a UID.
+        let json = serde_json::json!({
+            "uid": null,
+            "backend_node_id": backend_node_id,
+            "note": "Element not in any snapshot. Call cdp_take_dom_snapshot or cdp_find_elements to get a UID.",
+        });
+        CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        )])
     }
+}
+
+/// Read-only lookup across both snapshot maps. Prefers DOM snapshot, falls back to AX.
+/// Never auto-refreshes — returns None if the node isn't in either map.
+fn lookup_uid(
+    client: &CdpClient,
+    backend_node_id: i64,
+    current_url: &str,
+) -> Option<(String, String, String)> {
+    // Prefer DOM snapshot
+    if let Some(dom) = &client.last_dom_snapshot {
+        if dom.page_url == current_url {
+            if let Some(result) = lookup_in_snapshot(dom, backend_node_id) {
+                return Some(result);
+            }
+        }
+    }
+    // Fall back to AX snapshot
+    if let Some(ax) = &client.last_ax_snapshot {
+        if ax.page_url == current_url {
+            if let Some(result) = lookup_in_snapshot(ax, backend_node_id) {
+                return Some(result);
+            }
+        }
+    }
+    None
 }
 
 struct WindowGeometry {
@@ -184,69 +214,8 @@ async fn element_from_point_fallback(
     Ok(*describe_result.result.node.backend_node_id.inner())
 }
 
-async fn reverse_lookup_uid(
-    cdp_client: Arc<RwLock<Option<CdpClient>>>,
-    backend_node_id: i64,
-) -> Result<(String, String, String), String> {
-    // First try with existing snapshot, but only if it matches the current page URL.
-    {
-        let client_guard = cdp_client.read().await;
-        let client = client_guard.as_ref().ok_or("No CDP client")?;
-        if let Some(ref snapshot) = client.last_snapshot {
-            let page = client
-                .require_page()
-                .map_err(|_| "No selected page".to_string())?;
-            let current_url = page.url().await.ok().flatten().unwrap_or_default();
-            if current_url == snapshot.page_url {
-                if let Some(result) = lookup_in_snapshot(snapshot, backend_node_id) {
-                    return Ok(result);
-                }
-            }
-        }
-    }
-
-    // Take a fresh snapshot and retry once.
-    {
-        let mut client_guard = cdp_client.write().await;
-        let client = client_guard.as_mut().ok_or("No CDP client")?;
-        let page = client
-            .require_page()
-            .map_err(|_| "No selected page".to_string())?;
-
-        // Take fresh snapshot using the same logic as cdp_take_snapshot.
-        let result = page
-            .execute(
-                chromiumoxide::cdp::browser_protocol::accessibility::GetFullAxTreeParams::default(),
-            )
-            .await
-            .map_err(|e| format!("Failed to get accessibility tree: {}", e))?;
-
-        let nodes_json: Vec<serde_json::Value> = result
-            .result
-            .nodes
-            .iter()
-            .map(|n| serde_json::to_value(n).unwrap_or_default())
-            .collect();
-
-        let page_url = page.url().await.ok().flatten().unwrap_or_default();
-        let (_, snapshot_map) = crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, &page_url);
-
-        let found = lookup_in_snapshot(&snapshot_map, backend_node_id);
-        client.last_snapshot = Some(snapshot_map);
-
-        if let Some(result) = found {
-            return Ok(result);
-        }
-    }
-
-    Err(format!(
-        "backendNodeId {} not found in accessibility snapshot after refresh",
-        backend_node_id
-    ))
-}
-
 fn lookup_in_snapshot(
-    snapshot: &crate::cdp::SnapshotMap,
+    snapshot: &SnapshotMap,
     backend_node_id: i64,
 ) -> Option<(String, String, String)> {
     let uids = snapshot.backend_to_uids.get(&backend_node_id)?;

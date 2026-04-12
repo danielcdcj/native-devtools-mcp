@@ -73,7 +73,7 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
 7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
 8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
-9.  `cdp_connect` / `cdp_take_snapshot` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
+9.  `cdp_connect` / `cdp_take_ax_snapshot` / `cdp_take_dom_snapshot` / `cdp_find_elements` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
 
 ## 📦 Installation
 
@@ -263,8 +263,8 @@ launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--us
 # Connect and automate
 cdp_connect(port=9222)
 cdp_navigate(url="https://example.com")
-cdp_take_snapshot()           # accessibility tree with element UIDs
-cdp_fill(uid="10", value="search query")
+cdp_take_ax_snapshot()        # accessibility tree with element UIDs (a1, a2, ...)
+cdp_fill(uid="a10", value="search query")
 cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```

@@ -1,7 +1,8 @@
 //! CDP tool implementations, split by concern:
 //! - `input`: click, hover, fill, press_key
 //! - `pages`: list_pages, select_page, navigate, new_page, close_page, handle_dialog
-//! - `script`: evaluate_script, take_snapshot, wait_for
+//! - `script`: evaluate_script, take_ax_snapshot, take_dom_snapshot, find_elements, wait_for
+//! - `element_at_point`: resolve screen coordinates to snapshot UIDs
 
 mod element_at_point;
 mod input;
@@ -13,11 +14,14 @@ pub use input::{cdp_click, cdp_fill, cdp_hover, cdp_press_key, cdp_type_text};
 pub use pages::{
     cdp_close_page, cdp_handle_dialog, cdp_list_pages, cdp_navigate, cdp_new_page, cdp_select_page,
 };
-pub use script::{cdp_evaluate_script, cdp_take_snapshot, cdp_wait_for};
+pub use script::{
+    cdp_evaluate_script, cdp_find_elements, cdp_take_ax_snapshot, cdp_take_dom_snapshot,
+    cdp_wait_for,
+};
 
 // Shared helpers used by input tools.
 
-use crate::cdp::{cdp_error, CdpClient};
+use crate::cdp::{cdp_error, page_url, CdpClient};
 use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, GetBoxModelParams, ResolveNodeParams, ScrollIntoViewIfNeededParams,
 };
@@ -30,15 +34,15 @@ async fn resolve_node(
     client: &CdpClient,
     page: &Page,
 ) -> Result<(BackendNodeId, String, String), CallToolResult> {
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = client.check_snapshot_staleness(&current_url)?;
+    let current_url = page_url(page).await;
 
-    let node = snapshot_map.uid_to_node.get(uid).ok_or_else(|| {
-        cdp_error(format!(
-            "uid={} not found. Call cdp_take_snapshot to get current elements.",
-            uid
-        ))
-    })?;
+    let node = crate::cdp::resolve_uid_from_maps(
+        uid,
+        client.last_ax_snapshot.as_ref(),
+        client.last_dom_snapshot.as_ref(),
+        &current_url,
+    )
+    .map_err(cdp_error)?;
 
     Ok((
         BackendNodeId::new(node.backend_node_id),

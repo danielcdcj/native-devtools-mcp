@@ -268,7 +268,7 @@ pub fn start_polling(
             // Element differs from confirmed — check candidate state
             let cand_matches = candidate
                 .as_ref()
-                .map_or(false, |c| elements_equal(&c.element, &current_element));
+                .is_some_and(|c| elements_equal(&c.element, &current_element));
 
             if cand_matches {
                 let cand = candidate.as_ref().unwrap();

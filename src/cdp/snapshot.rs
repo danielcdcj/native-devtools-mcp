@@ -103,8 +103,9 @@ pub fn convert_cdp_ax_tree(
         }
 
         let backend_node_id = node["backendDOMNodeId"].as_i64().unwrap_or(0);
+        let uid_key = format!("a{}", uid);
         uid_to_node.insert(
-            uid.to_string(),
+            uid_key.clone(),
             SnapshotNode {
                 backend_node_id,
                 role: role.clone(),
@@ -116,8 +117,8 @@ pub fn convert_cdp_ax_tree(
         if backend_node_id != 0 {
             backend_to_uids
                 .entry(backend_node_id)
-                .or_insert_with(Vec::new)
-                .push(uid.to_string());
+                .or_default()
+                .push(uid_key);
         }
 
         snapshot_nodes.push(AXSnapshotNode {
@@ -210,11 +211,14 @@ mod tests {
         assert_eq!(snapshot_nodes[2].value, Some("hello".to_string()));
         assert!(snapshot_nodes[2].focused);
 
-        // Verify SnapshotMap has 3 entries with correct backend_node_ids.
+        // Verify SnapshotMap has 3 entries with a-prefixed keys.
         assert_eq!(snapshot_map.uid_to_node.len(), 3);
-        assert_eq!(snapshot_map.uid_to_node["1"].backend_node_id, 1);
-        assert_eq!(snapshot_map.uid_to_node["2"].backend_node_id, 5);
-        assert_eq!(snapshot_map.uid_to_node["3"].backend_node_id, 8);
+        assert!(snapshot_map.uid_to_node.contains_key("a1"));
+        assert!(snapshot_map.uid_to_node.contains_key("a2"));
+        assert!(snapshot_map.uid_to_node.contains_key("a3"));
+        assert_eq!(snapshot_map.uid_to_node["a1"].backend_node_id, 1);
+        assert_eq!(snapshot_map.uid_to_node["a2"].backend_node_id, 5);
+        assert_eq!(snapshot_map.uid_to_node["a3"].backend_node_id, 8);
 
         // Verify reverse map.
         assert_eq!(snapshot_map.backend_to_uids.len(), 3); // ids 1, 5, 8
@@ -257,7 +261,8 @@ mod tests {
         let (_, map) = convert_cdp_ax_tree(&nodes, "http://test");
         // backend_node_id 0 should NOT be in the reverse map
         assert!(!map.backend_to_uids.contains_key(&0));
-        // backend_node_id 42 should have 2 UIDs
+        // backend_node_id 42 should have 2 UIDs (a-prefixed)
         assert_eq!(map.backend_to_uids[&42].len(), 2);
+        assert_eq!(map.backend_to_uids[&42], vec!["a2", "a3"]);
     }
 }

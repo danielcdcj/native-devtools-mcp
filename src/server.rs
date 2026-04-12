@@ -654,7 +654,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "probe_app",
-                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_take_snapshot).",
+                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_find_elements, cdp_take_dom_snapshot).",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["app_name"],
@@ -1163,7 +1163,7 @@ impl MacOSDevToolsServer {
     fn get_cdp_connect_tool() -> Tool {
         Tool::new(
             "cdp_connect",
-            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_take_snapshot to see page elements.",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_find_elements to discover page elements (preferred), or cdp_take_dom_snapshot for a full page overview.",
             Arc::new(json_to_object(serde_json::json!({
                 "type": "object",
                 "required": ["port"],
@@ -1178,6 +1178,9 @@ impl MacOSDevToolsServer {
     }
 
     #[cfg(feature = "cdp")]
+    const UID_DESC: &'static str =
+        "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements";
+
     fn get_cdp_tools() -> Vec<Tool> {
         vec![
             Tool::new(
@@ -1189,16 +1192,51 @@ impl MacOSDevToolsServer {
                 }))),
             ),
             Tool::new(
-                "cdp_take_snapshot",
-                "Take a text snapshot of the selected browser page based on the accessibility tree. Returns page elements with unique IDs (uid), roles, and names. Always take a fresh snapshot before clicking or interacting — element UIDs change between snapshots. Prefer this over take_screenshot for identifying clickable elements in web content.",
+                "cdp_take_ax_snapshot",
+                "Take an accessibility tree snapshot of the selected browser page. Returns elements with UIDs prefixed 'a' (e.g., a1, a2). Rarely needed — prefer cdp_find_elements for targeted lookups or cdp_take_dom_snapshot for full page structure. Only use this when you specifically need ARIA roles or accessibility states that the DOM tools don't provide. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
                 }))),
             ),
             Tool::new(
+                "cdp_take_dom_snapshot",
+                "Take a full DOM snapshot of the selected browser page. Returns all interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use when you need the complete page structure — captures contenteditable editors, placeholder inputs, and custom widgets that cdp_take_ax_snapshot often misses. For targeted lookups, prefer cdp_find_elements instead. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "max_nodes": {
+                            "type": "integer",
+                            "description": "Maximum number of nodes to return (default: 500)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_find_elements",
+                "PREFERRED discovery tool. Search the live DOM for interactive elements matching a text query. Returns a compact result set with UIDs prefixed 'd' (e.g., d1, d2), plus a page-level inventory of all interactive elements grouped by role. Always try this first — it gives focused results without flooding context. Use cdp_take_dom_snapshot only if you need the full page structure. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Text to search for in element labels"
+                        },
+                        "role": {
+                            "type": "string",
+                            "description": "Optional role filter (e.g., 'textbox', 'button')"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum matches to return (default: 10)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
                 "cdp_evaluate_script",
-                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_snapshot via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: '5'}].",
+                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: 'a5'}].",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["function"],
@@ -1212,7 +1250,7 @@ impl MacOSDevToolsServer {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "uid": { "type": "string", "description": "Element UID from cdp_take_snapshot" }
+                                    "uid": { "type": "string", "description": (Self::UID_DESC) }
                                 }
                             },
                             "description": "Optional element arguments from snapshot UIDs"
@@ -1222,14 +1260,14 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_click",
-                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content. Always call cdp_take_snapshot first to get current element UIDs.",
+                "Click a DOM element by its UID from a cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["uid"],
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "Element UID from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "dbl_click": {
                             "type": "boolean",
@@ -1237,7 +1275,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1273,11 +1311,11 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1291,7 +1329,7 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "value": {
                             "type": "string",
@@ -1299,7 +1337,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1317,7 +1355,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -2136,7 +2174,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 match crate::cdp::CdpClient::connect(port).await {
                     Ok(client) => {
                         let page_info = if let Some(page) = client.selected_page.as_ref() {
-                            let url = page.url().await.ok().flatten().unwrap_or_default();
+                            let url = crate::cdp::page_url(page).await;
                             format!("Selected page: {}", url)
                         } else {
                             "No pages found".to_string()
@@ -2166,8 +2204,35 @@ impl ServerHandler for MacOSDevToolsServer {
                 }
             }
             #[cfg(feature = "cdp")]
-            "cdp_take_snapshot" => {
-                Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
+            "cdp_take_ax_snapshot" => {
+                Ok(crate::cdp::tools::cdp_take_ax_snapshot(self.cdp_client.clone()).await)
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_take_dom_snapshot" => {
+                let max_nodes = args
+                    .get("max_nodes")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
+                Ok(
+                    crate::cdp::tools::cdp_take_dom_snapshot(max_nodes, self.cdp_client.clone())
+                        .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_find_elements" => {
+                let query = parse_string_field(&args, "query")?;
+                let role = args.get("role").and_then(|v| v.as_str()).map(String::from);
+                let max_results = args
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
+                Ok(crate::cdp::tools::cdp_find_elements(
+                    query,
+                    role,
+                    max_results,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_evaluate_script" => {

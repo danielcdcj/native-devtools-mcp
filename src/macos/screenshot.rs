@@ -232,8 +232,8 @@ pub fn capture_window_cg_jpeg(
 /// (macOS uses BGRA byte order), and encodes directly to JPEG.
 /// Uses `chunks_exact` for the inner loop to let the compiler auto-vectorize.
 fn cg_image_to_jpeg(cg_image: &core_graphics::image::CGImage) -> Result<Vec<u8>, ScreenshotError> {
-    let width = cg_image.width() as usize;
-    let height = cg_image.height() as usize;
+    let width = cg_image.width();
+    let height = cg_image.height();
     let bytes_per_row = cg_image.bytes_per_row();
     let data = cg_image.data();
     let raw_bytes = data.bytes();
