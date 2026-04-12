@@ -67,7 +67,8 @@ pub async fn cdp_element_at_point(
     };
 
     // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
-    let note = match lookup_uid(client, backend_node_id) {
+    let current_url = crate::cdp::page_url(&page).await;
+    let note = match lookup_uid(client, backend_node_id, &current_url) {
         LookupResult::Found { uid, role, name } => {
             let json = serde_json::json!({
                 "uid": uid,
@@ -114,17 +115,13 @@ enum LookupResult {
 }
 
 /// Read-only lookup across both snapshot maps. Prefers DOM, falls back to AX.
-/// Distinguishes "stale" (a snapshot exists but at a previous generation)
-/// from "not in snapshot" (no matching entry in any fresh snapshot).
-fn lookup_uid(client: &CdpClient, backend_node_id: i64) -> LookupResult {
-    let dom_fresh = client
-        .last_dom_snapshot
-        .as_ref()
-        .filter(|s| s.generation == client.generation);
-    let ax_fresh = client
-        .last_ax_snapshot
-        .as_ref()
-        .filter(|s| s.generation == client.generation);
+/// Distinguishes "stale" (a snapshot exists but its generation or URL no
+/// longer match the live page) from "not in snapshot" (no matching entry
+/// in any fresh snapshot).
+fn lookup_uid(client: &CdpClient, backend_node_id: i64, current_url: &str) -> LookupResult {
+    let fresh = |s: &&SnapshotMap| s.generation == client.generation && s.page_url == current_url;
+    let dom_fresh = client.last_dom_snapshot.as_ref().filter(fresh);
+    let ax_fresh = client.last_ax_snapshot.as_ref().filter(fresh);
 
     if let Some(dom) = dom_fresh {
         if let Some((uid, role, name)) = lookup_in_snapshot(dom, backend_node_id) {

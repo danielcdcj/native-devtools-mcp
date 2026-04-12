@@ -151,15 +151,22 @@ pub fn cdp_error(msg: impl Into<String>) -> CallToolResult {
 
 /// Maps snapshot UIDs to CDP node identifiers for click/eval resolution.
 ///
-/// Stale-snapshot detection uses `generation`, which is bumped on every
-/// page-lifecycle event (see [`CdpClient::invalidate_snapshots`]). Same-URL
-/// reloads and SPA navigations that don't change the URL still invalidate
-/// via the generation counter.
+/// Stale-snapshot detection uses two signals:
+/// - `generation`, bumped on every page-lifecycle event the client drives
+///   (navigate, reload, page switch) — catches same-URL reloads and SPA
+///   navigations that don't change the URL.
+/// - `page_url`, compared against the live page URL at lookup time —
+///   catches out-of-band navigations (user clicks a link, JS `location.href`)
+///   that happen between our tool calls.
+///
+/// Either signal mismatching is enough to reject the snapshot as stale.
 pub struct SnapshotMap {
     pub uid_to_node: HashMap<String, SnapshotNode>,
     /// Reverse map: backendNodeId → list of snapshot UIDs.
     /// Skips entries where backendNodeId is 0 (no DOM backing).
     pub backend_to_uids: HashMap<i64, Vec<String>>,
+    /// URL of the page at the moment this snapshot was taken.
+    pub page_url: String,
     /// Value of [`CdpClient::generation`] at the moment this snapshot was taken.
     pub generation: u64,
 }
@@ -174,14 +181,15 @@ pub struct SnapshotNode {
 ///
 /// UIDs prefixed with "a" resolve from the AX snapshot map.
 /// UIDs prefixed with "d" resolve from the DOM snapshot map.
-/// Returns an error if the prefix is unknown, the map is missing,
-/// the snapshot's generation doesn't match `current_generation`
-/// (page has navigated), or the UID is not found.
+/// Returns an error if the prefix is unknown, the map is missing, the
+/// snapshot is stale (generation bumped or the live page URL changed
+/// out-of-band), or the UID is not found.
 pub fn resolve_uid_from_maps<'a>(
     uid: &str,
     ax_snapshot: Option<&'a SnapshotMap>,
     dom_snapshot: Option<&'a SnapshotMap>,
     current_generation: u64,
+    current_url: &str,
 ) -> Result<&'a SnapshotNode, String> {
     let (map, label, tool_hint) = if uid.starts_with(AX_UID_PREFIX) {
         (ax_snapshot, "AX", "cdp_take_ax_snapshot")
@@ -201,7 +209,7 @@ pub fn resolve_uid_from_maps<'a>(
     let snapshot =
         map.ok_or_else(|| format!("No {} snapshot available. Call {} first.", label, tool_hint))?;
 
-    if current_generation != snapshot.generation {
+    if current_generation != snapshot.generation || current_url != snapshot.page_url {
         return Err(format!(
             "Snapshot is stale — page has navigated since last snapshot. Call {} again.",
             tool_hint,
@@ -220,10 +228,13 @@ pub fn resolve_uid_from_maps<'a>(
 mod tests {
     use super::*;
 
+    const URL: &str = "https://example.com/";
+
     fn make_ax_map(generation: u64, uid: &str, backend_node_id: i64) -> SnapshotMap {
         let mut map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
+            page_url: URL.to_string(),
             generation,
         };
         map.uid_to_node.insert(
@@ -241,7 +252,7 @@ mod tests {
     fn resolve_uid_ax_prefix() {
         let ax_map = make_ax_map(0, "a1", 42);
 
-        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, 0);
+        let result = resolve_uid_from_maps("a1", Some(&ax_map), None, 0, URL);
         assert!(result.is_ok());
         let node = result.unwrap();
         assert_eq!(node.backend_node_id, 42);
@@ -253,6 +264,7 @@ mod tests {
         let mut dom_map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
+            page_url: URL.to_string(),
             generation: 3,
         };
         dom_map.uid_to_node.insert(
@@ -264,7 +276,7 @@ mod tests {
             },
         );
 
-        let result = resolve_uid_from_maps("d5", None, Some(&dom_map), 3);
+        let result = resolve_uid_from_maps("d5", None, Some(&dom_map), 3, URL);
         assert!(result.is_ok());
         let node = result.unwrap();
         assert_eq!(node.backend_node_id, 99);
@@ -272,7 +284,7 @@ mod tests {
 
     #[test]
     fn resolve_uid_unknown_prefix_fails() {
-        let result = resolve_uid_from_maps("x1", None, None, 0);
+        let result = resolve_uid_from_maps("x1", None, None, 0, URL);
         assert!(result.is_err());
     }
 
@@ -287,7 +299,7 @@ mod tests {
     fn resolve_uid_stale_generation_fails() {
         let ax_map = make_ax_map(1, "a1", 1);
 
-        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 2));
+        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 2, URL));
     }
 
     /// Same-URL reload bumps the generation, so a snapshot taken before
@@ -296,17 +308,33 @@ mod tests {
     fn same_url_reload_invalidates_snapshot() {
         let ax_map = make_ax_map(0, "a1", 42);
 
-        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 1));
+        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 1, URL));
+    }
+
+    /// An out-of-band navigation (user clicks a link, `location.href = ...`)
+    /// changes the live URL without bumping our generation. The snapshot
+    /// must still be rejected.
+    #[test]
+    fn out_of_band_url_change_invalidates_snapshot() {
+        let ax_map = make_ax_map(0, "a1", 42);
+
+        expect_stale(resolve_uid_from_maps(
+            "a1",
+            Some(&ax_map),
+            None,
+            0,
+            "https://example.com/different",
+        ));
     }
 
     /// A generation advance past either snapshot must mark both as stale.
     #[test]
     fn both_maps_stale_when_generation_advanced() {
-        // Both snapshots stamped at generation=5, but client is now at 7.
         let ax_map = make_ax_map(5, "a1", 1);
         let mut dom_map = SnapshotMap {
             uid_to_node: HashMap::new(),
             backend_to_uids: HashMap::new(),
+            page_url: URL.to_string(),
             generation: 5,
         };
         dom_map.uid_to_node.insert(
@@ -323,23 +351,25 @@ mod tests {
             Some(&ax_map),
             Some(&dom_map),
             7,
+            URL,
         ));
         expect_stale(resolve_uid_from_maps(
             "d1",
             Some(&ax_map),
             Some(&dom_map),
             7,
+            URL,
         ));
     }
 
-    /// A snapshot looked up at its stamped generation succeeds; bumping
-    /// the generation causes the same snapshot to be rejected as stale.
+    /// A snapshot looked up at its stamped generation and URL succeeds;
+    /// bumping the generation causes the same snapshot to be rejected.
     #[test]
     fn snapshot_taken_before_navigation_is_stale_after_bump() {
         let ax_map = make_ax_map(0, "a1", 42);
 
-        assert!(resolve_uid_from_maps("a1", Some(&ax_map), None, 0).is_ok());
+        assert!(resolve_uid_from_maps("a1", Some(&ax_map), None, 0, URL).is_ok());
 
-        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 1));
+        expect_stale(resolve_uid_from_maps("a1", Some(&ax_map), None, 1, URL));
     }
 }

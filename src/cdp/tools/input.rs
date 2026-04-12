@@ -130,7 +130,8 @@ pub async fn cdp_fill(
         Err(e) => return e,
     };
 
-    let (backend_node_id, node_role, node_name) = match resolve_node(&uid, client) {
+    let current_url = crate::cdp::page_url(&page).await;
+    let (backend_node_id, node_role, node_name) = match resolve_node(&uid, client, &current_url) {
         Ok(v) => v,
         Err(e) => return e,
     };
