@@ -124,6 +124,13 @@ impl MacOSDevToolsServer {
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
+    ///
+    /// CDP tools are always listed (independent of `cdp_connected`) so the
+    /// tool surface does not mutate mid-session — clients that prompt-cache
+    /// the tool list stay warm. Each CDP tool handler returns a clean
+    /// "No CDP connection" error when called without an active connection.
+    /// The `cdp_connected` parameter is accepted for API stability but is
+    /// no longer used to gate visibility.
     pub fn get_tools(
         app_connected: bool,
         android_connected: bool,
@@ -131,6 +138,7 @@ impl MacOSDevToolsServer {
         hover_tracking: bool,
         recording: bool,
     ) -> Vec<Tool> {
+        let _ = cdp_connected;
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
         if app_connected {
@@ -143,12 +151,8 @@ impl MacOSDevToolsServer {
         #[cfg(feature = "cdp")]
         {
             tools.push(Self::get_cdp_connect_tool());
-            if cdp_connected {
-                tools.extend(Self::get_cdp_tools());
-            }
+            tools.extend(Self::get_cdp_tools());
         }
-        #[cfg(not(feature = "cdp"))]
-        let _ = cdp_connected;
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
         tools
@@ -1267,7 +1271,7 @@ impl MacOSDevToolsServer {
         vec![
             Tool::new(
                 "cdp_disconnect",
-                "Disconnect from the Chrome/Electron app. CDP tools will no longer be available until cdp_connect is called again.",
+                "Disconnect from the Chrome/Electron app. CDP tools remain listed but will return a 'not connected' error until cdp_connect is called again.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -2262,9 +2266,10 @@ impl ServerHandler for MacOSDevToolsServer {
                             "No pages found".to_string()
                         };
                         *self.cdp_client.write().await = Some(client);
-                        let _ = context.peer.notify_tool_list_changed().await;
+                        // Tool list does not change on CDP connect/disconnect — CDP
+                        // tools are always listed so prompt caches remain stable.
                         Ok(CallToolResult::success(vec![Content::text(format!(
-                            "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
+                            "Connected to Chrome/Electron on port {}. CDP tool calls will now succeed.\n{}",
                             port, page_info
                         ))]))
                     }
@@ -2275,9 +2280,11 @@ impl ServerHandler for MacOSDevToolsServer {
             "cdp_disconnect" => {
                 if let Some(client) = self.cdp_client.write().await.take() {
                     client.disconnect();
-                    let _ = context.peer.notify_tool_list_changed().await;
+                    // Tool list is unchanged on disconnect — CDP tools remain
+                    // listed and will return "not connected" errors until
+                    // cdp_connect succeeds again.
                     Ok(CallToolResult::success(vec![Content::text(
-                        "Disconnected from Chrome/Electron. CDP tools are no longer available.",
+                        "Disconnected from Chrome/Electron. CDP tool calls will return a 'not connected' error until cdp_connect is called again.",
                     )]))
                 } else {
                     Ok(CallToolResult::error(vec![Content::text(

@@ -165,80 +165,136 @@ mod android_tool_gating {
 mod cdp_tool_gating {
     use super::*;
 
+    /// The full set of CDP tools — used by visibility checks below.
+    /// Kept in sync with `get_cdp_connect_tool` + `get_cdp_tools` in
+    /// `src/server.rs`.
+    const CDP_TOOL_NAMES: &[&str] = &[
+        "cdp_connect",
+        "cdp_disconnect",
+        "cdp_take_ax_snapshot",
+        "cdp_take_dom_snapshot",
+        "cdp_find_elements",
+        "cdp_evaluate_script",
+        "cdp_click",
+        "cdp_list_pages",
+        "cdp_select_page",
+        "cdp_hover",
+        "cdp_fill",
+        "cdp_press_key",
+        "cdp_handle_dialog",
+        "cdp_navigate",
+        "cdp_new_page",
+        "cdp_close_page",
+        "cdp_wait_for",
+        "cdp_type_text",
+        "cdp_element_at_point",
+    ];
+
     #[test]
-    fn test_cdp_connect_always_visible() {
+    fn test_cdp_tools_always_visible_when_disconnected() {
+        // CDP tools are now listed unconditionally so the tool surface does
+        // not mutate mid-session. Handlers return a clean "No CDP connection"
+        // error when called without an active connection.
         let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-        assert!(names.contains(&"cdp_connect".to_string()));
+        for tool in CDP_TOOL_NAMES {
+            assert!(
+                names.contains(&tool.to_string()),
+                "{} should be listed even without a CDP connection",
+                tool
+            );
+        }
     }
 
     #[test]
-    fn test_cdp_tools_hidden_when_disconnected() {
-        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
-        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-
-        assert!(!names.contains(&"cdp_disconnect".to_string()));
-        assert!(!names.contains(&"cdp_take_ax_snapshot".to_string()));
-        assert!(!names.contains(&"cdp_take_dom_snapshot".to_string()));
-        assert!(!names.contains(&"cdp_find_elements".to_string()));
-        assert!(!names.contains(&"cdp_evaluate_script".to_string()));
-        assert!(!names.contains(&"cdp_click".to_string()));
-        assert!(!names.contains(&"cdp_list_pages".to_string()));
-        assert!(!names.contains(&"cdp_select_page".to_string()));
-        assert!(!names.contains(&"cdp_hover".to_string()));
-        assert!(!names.contains(&"cdp_fill".to_string()));
-        assert!(!names.contains(&"cdp_press_key".to_string()));
-        assert!(!names.contains(&"cdp_handle_dialog".to_string()));
-        assert!(!names.contains(&"cdp_navigate".to_string()));
-        assert!(!names.contains(&"cdp_new_page".to_string()));
-        assert!(!names.contains(&"cdp_close_page".to_string()));
-        assert!(!names.contains(&"cdp_wait_for".to_string()));
-        assert!(!names.contains(&"cdp_type_text".to_string()));
-    }
-
-    #[test]
-    fn test_cdp_tools_visible_when_connected() {
+    fn test_cdp_tools_always_visible_when_connected() {
         let tools = MacOSDevToolsServer::get_tools(false, false, true, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-
-        // Base tool still visible
-        assert!(names.contains(&"cdp_connect".to_string()));
-
-        // Connected-only tools
-        assert!(names.contains(&"cdp_disconnect".to_string()));
-        assert!(names.contains(&"cdp_take_ax_snapshot".to_string()));
-        assert!(names.contains(&"cdp_take_dom_snapshot".to_string()));
-        assert!(names.contains(&"cdp_find_elements".to_string()));
-        assert!(names.contains(&"cdp_evaluate_script".to_string()));
-        assert!(names.contains(&"cdp_click".to_string()));
-        assert!(names.contains(&"cdp_list_pages".to_string()));
-        assert!(names.contains(&"cdp_select_page".to_string()));
-        assert!(names.contains(&"cdp_hover".to_string()));
-        assert!(names.contains(&"cdp_fill".to_string()));
-        assert!(names.contains(&"cdp_press_key".to_string()));
-        assert!(names.contains(&"cdp_handle_dialog".to_string()));
-        assert!(names.contains(&"cdp_navigate".to_string()));
-        assert!(names.contains(&"cdp_new_page".to_string()));
-        assert!(names.contains(&"cdp_close_page".to_string()));
-        assert!(names.contains(&"cdp_wait_for".to_string()));
-        assert!(names.contains(&"cdp_type_text".to_string()));
-        assert!(names.contains(&"cdp_element_at_point".to_string()));
+        for tool in CDP_TOOL_NAMES {
+            assert!(
+                names.contains(&tool.to_string()),
+                "{} should be listed when connected",
+                tool
+            );
+        }
     }
 
     #[test]
-    fn test_cdp_connection_adds_tools() {
+    fn test_cdp_tool_list_is_stable_across_connection_state() {
+        // The visible tool list must be identical regardless of
+        // `cdp_connected` — mid-session tool-list changes are the whole
+        // reason these tools are now unconditional.
         let disconnected = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let connected = MacOSDevToolsServer::get_tools(false, false, true, false, false);
-
-        assert!(
-            connected.len() > disconnected.len(),
-            "CDP connected state should expose more tools: {} vs {}",
+        assert_eq!(
+            disconnected.len(),
             connected.len(),
-            disconnected.len()
+            "CDP connection state must not change the number of visible tools"
         );
+        let dn: Vec<_> = disconnected.iter().map(|t| t.name.to_string()).collect();
+        let cn: Vec<_> = connected.iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(dn, cn);
+    }
+}
 
-        // Should add exactly 18 tools (disconnect + 17 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 18);
+#[cfg(test)]
+#[cfg(feature = "cdp")]
+mod cdp_not_connected_errors {
+    //! Calling CDP tool handlers without an active connection must return a
+    //! structured error, not panic or silently no-op. This guards the
+    //! "tools always listed" guarantee.
+
+    use native_devtools_mcp::cdp::tools;
+    use native_devtools_mcp::cdp::CdpClient;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn empty_client() -> Arc<RwLock<Option<CdpClient>>> {
+        Arc::new(RwLock::new(None))
+    }
+
+    fn assert_not_connected(result: &rmcp::model::CallToolResult) {
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "expected error result when CDP is not connected, got: {:?}",
+            result
+        );
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            text.to_lowercase().contains("no cdp connection"),
+            "error should mention 'No CDP connection', got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn cdp_click_without_connection_returns_clean_error() {
+        let result = tools::cdp_click("a1".to_string(), false, false, empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_take_ax_snapshot_without_connection_returns_clean_error() {
+        let result = tools::cdp_take_ax_snapshot(empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_list_pages_without_connection_returns_clean_error() {
+        let result = tools::cdp_list_pages(empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_element_at_point_without_connection_returns_clean_error() {
+        let result = tools::cdp_element_at_point(0.0, 0.0, empty_client()).await;
+        assert_not_connected(&result);
     }
 }
 
