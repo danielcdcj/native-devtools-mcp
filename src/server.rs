@@ -1630,7 +1630,7 @@ impl ServerHandler for MacOSDevToolsServer {
 
     async fn list_tools(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
