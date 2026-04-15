@@ -179,10 +179,31 @@ fn select_click_variant(params: &ClickParams) -> Result<ClickVariant, String> {
         return Err(describe_click_coord_error(params));
     }
 
-    // Partial within the same "family" is also an error: e.g. x without y,
-    // or screenshot_x without screenshot_y.
+    // Multiple families active: a true mixed payload. Describe exactly which
+    // families the caller is mixing so they know *what* to remove, not just
+    // which variant they were closest to. `describe_click_coord_error`'s
+    // "closest variant / missing: ..." shape is misleading here because it
+    // can report `missing: (none)` when one of the mixed variants is
+    // already complete.
     if active_count > 1 {
-        return Err(describe_click_coord_error(params));
+        let mut active: Vec<&str> = Vec::new();
+        if screen_active {
+            active.push("screen (x, y)");
+        }
+        if window_active {
+            active.push("window-relative (window_x, window_y, window_id)");
+        }
+        if screenshot_active {
+            active
+                .push("screenshot (screenshot_x/y + origin/scale, or legacy screenshot_window_id)");
+        }
+        return Err(format!(
+            "click received fields from multiple coordinate variants: {}. \
+             Send exactly one variant. Prefer screenshot-pixels after take_screenshot: \
+             screenshot_x, screenshot_y, screenshot_origin_x, screenshot_origin_y, \
+             screenshot_scale.",
+            active.join(" + ")
+        ));
     }
 
     // Exactly one family is active — now require its fields to be complete.
@@ -1261,12 +1282,33 @@ mod tests {
         p.screenshot_scale = Some(2.0);
 
         let err = select_click_variant(&p).unwrap_err();
-        // Either naming screen or screenshot-pixels is fine; the key is
-        // that we refuse the mix and report the error.
+        // The message must explicitly flag the mix (naming both families),
+        // not just report a "closest variant" with missing: (none).
         assert!(
-            err.to_lowercase().contains("screen") || err.to_lowercase().contains("screenshot"),
-            "err: {err}"
+            err.contains("multiple coordinate variants"),
+            "err should flag the mix, got: {err}"
         );
+        assert!(err.contains("screen"), "err: {err}");
+        assert!(err.contains("screenshot"), "err: {err}");
+        assert!(!err.contains("missing: (none)"), "err: {err}");
+    }
+
+    #[test]
+    fn test_select_variant_rejects_mixed_screen_and_window_relative() {
+        let mut p = empty_click_params();
+        p.x = Some(100.0);
+        p.y = Some(200.0);
+        p.window_x = Some(10.0);
+        p.window_y = Some(20.0);
+        p.window_id = Some(42);
+
+        let err = select_click_variant(&p).unwrap_err();
+        assert!(
+            err.contains("multiple coordinate variants"),
+            "err should flag the mix, got: {err}"
+        );
+        assert!(err.contains("screen"), "err: {err}");
+        assert!(err.contains("window-relative"), "err: {err}");
     }
 
     #[test]
