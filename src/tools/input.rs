@@ -91,121 +91,88 @@ fn default_click_count() -> u32 {
 ///
 /// Pure function — used by `click` when no variant validates successfully.
 fn describe_click_coord_error(params: &ClickParams) -> String {
-    let mut provided: Vec<&'static str> = Vec::new();
-    if params.x.is_some() {
-        provided.push("x");
-    }
-    if params.y.is_some() {
-        provided.push("y");
-    }
-    if params.window_x.is_some() {
-        provided.push("window_x");
-    }
-    if params.window_y.is_some() {
-        provided.push("window_y");
-    }
-    if params.window_id.is_some() {
-        provided.push("window_id");
-    }
-    if params.screenshot_x.is_some() {
-        provided.push("screenshot_x");
-    }
-    if params.screenshot_y.is_some() {
-        provided.push("screenshot_y");
-    }
-    if params.screenshot_origin_x.is_some() {
-        provided.push("screenshot_origin_x");
-    }
-    if params.screenshot_origin_y.is_some() {
-        provided.push("screenshot_origin_y");
-    }
-    if params.screenshot_scale.is_some() {
-        provided.push("screenshot_scale");
-    }
-    if params.screenshot_window_id.is_some() {
-        provided.push("screenshot_window_id");
-    }
-
-    // Score each variant by how many of its fields are set.
-    let screenshot_pixels_score = [
-        params.screenshot_x.is_some(),
-        params.screenshot_y.is_some(),
-        params.screenshot_origin_x.is_some(),
-        params.screenshot_origin_y.is_some(),
-        params.screenshot_scale.is_some(),
-    ]
-    .iter()
-    .filter(|b| **b)
-    .count();
-    let screen_score = [params.x.is_some(), params.y.is_some()]
-        .iter()
-        .filter(|b| **b)
-        .count();
-    let window_score = [
-        params.window_x.is_some(),
-        params.window_y.is_some(),
-        params.window_id.is_some(),
-    ]
-    .iter()
-    .filter(|b| **b)
-    .count();
-    let legacy_score = [
-        params.screenshot_x.is_some(),
-        params.screenshot_y.is_some(),
-        params.screenshot_window_id.is_some(),
-    ]
-    .iter()
-    .filter(|b| **b)
-    .count();
-
-    let (closest_variant, missing): (&str, Vec<&str>) = {
-        let mut best = ("screenshot-pixels", screenshot_pixels_score);
-        for (name, score) in [
-            ("screen", screen_score),
-            ("window-relative", window_score),
-            ("screenshot-pixels-legacy", legacy_score),
-        ] {
-            if score > best.1 {
-                best = (name, score);
-            }
-        }
-        let missing: Vec<&str> = match best.0 {
-            "screenshot-pixels" => [
+    // (variant_name, [(field_name, is_provided), ...])
+    // Order matters: the first listed variant wins ties, which is why
+    // "screenshot-pixels" is first — it's the preferred variant and a
+    // natural target to steer callers toward.
+    let variants: [(&str, &[(&str, bool)]); 4] = [
+        (
+            "screenshot-pixels",
+            &[
                 ("screenshot_x", params.screenshot_x.is_some()),
                 ("screenshot_y", params.screenshot_y.is_some()),
                 ("screenshot_origin_x", params.screenshot_origin_x.is_some()),
                 ("screenshot_origin_y", params.screenshot_origin_y.is_some()),
                 ("screenshot_scale", params.screenshot_scale.is_some()),
-            ]
-            .into_iter()
-            .filter_map(|(n, present)| if present { None } else { Some(n) })
-            .collect(),
-            "screen" => [("x", params.x.is_some()), ("y", params.y.is_some())]
-                .into_iter()
-                .filter_map(|(n, present)| if present { None } else { Some(n) })
-                .collect(),
-            "window-relative" => [
+            ],
+        ),
+        (
+            "screen",
+            &[("x", params.x.is_some()), ("y", params.y.is_some())],
+        ),
+        (
+            "window-relative",
+            &[
                 ("window_x", params.window_x.is_some()),
                 ("window_y", params.window_y.is_some()),
                 ("window_id", params.window_id.is_some()),
-            ]
-            .into_iter()
-            .filter_map(|(n, present)| if present { None } else { Some(n) })
-            .collect(),
-            _ => [
+            ],
+        ),
+        (
+            "screenshot-pixels-legacy",
+            &[
                 ("screenshot_x", params.screenshot_x.is_some()),
                 ("screenshot_y", params.screenshot_y.is_some()),
                 (
                     "screenshot_window_id",
                     params.screenshot_window_id.is_some(),
                 ),
-            ]
-            .into_iter()
-            .filter_map(|(n, present)| if present { None } else { Some(n) })
-            .collect(),
-        };
-        (best.0, missing)
-    };
+            ],
+        ),
+    ];
+
+    // Every field in the union, preserving source order for a stable message.
+    let all_fields: &[(&str, bool)] = &[
+        ("x", params.x.is_some()),
+        ("y", params.y.is_some()),
+        ("window_x", params.window_x.is_some()),
+        ("window_y", params.window_y.is_some()),
+        ("window_id", params.window_id.is_some()),
+        ("screenshot_x", params.screenshot_x.is_some()),
+        ("screenshot_y", params.screenshot_y.is_some()),
+        ("screenshot_origin_x", params.screenshot_origin_x.is_some()),
+        ("screenshot_origin_y", params.screenshot_origin_y.is_some()),
+        ("screenshot_scale", params.screenshot_scale.is_some()),
+        (
+            "screenshot_window_id",
+            params.screenshot_window_id.is_some(),
+        ),
+    ];
+
+    let provided: Vec<&str> = all_fields
+        .iter()
+        .filter_map(|(n, p)| if *p { Some(*n) } else { None })
+        .collect();
+
+    // Closest variant = highest count of provided fields.
+    // Ties are broken in favor of earlier variants (so "screenshot-pixels"
+    // wins ties as the preferred form). std's `max_by_key` returns the last
+    // maximal element, so we invert with `min_by_key` on a (negative_score,
+    // index) tuple to pick the earliest best.
+    let (closest_variant, fields) = variants
+        .iter()
+        .enumerate()
+        .min_by_key(|(idx, (_, fields))| {
+            let score = fields.iter().filter(|(_, p)| *p).count() as isize;
+            (-score, *idx)
+        })
+        .map(|(_, v)| *v)
+        .expect("variants table is non-empty");
+
+    let missing: Vec<&str> = fields
+        .iter()
+        .filter_map(|(n, p)| if *p { None } else { Some(*n) })
+        .collect();
 
     let provided_str = if provided.is_empty() {
         "(no coordinate fields)".to_string()
