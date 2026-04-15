@@ -178,10 +178,10 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 - **Chrome 136+:** Must launch with both `--remote-debugging-port=PORT` and `--user-data-dir=PATH` (non-default profile required — Chrome silently ignores the debug port with the default profile). The profile is persistent across launches.
 - **Electron apps** (Signal, Discord, Slack, VS Code, etc.): Only need `--remote-debugging-port=PORT`. No `--user-data-dir` required — Electron respects the flag with its default profile.
 
-#### Tools (available after `cdp_connect`)
+#### Tools (always listed; calls fail with "No CDP connection" until `cdp_connect` succeeds)
 
 *   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
-*   `cdp_disconnect`: Disconnect and hide CDP tools.
+*   `cdp_disconnect`: Disconnect the CDP client. The CDP tools stay listed; subsequent calls return a "not connected" error until `cdp_connect` is called again.
 *   `cdp_take_ax_snapshot`: Accessibility tree snapshot — returns elements with UIDs prefixed `a` (e.g., a1, a2), roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
 *   `cdp_take_dom_snapshot(max_nodes?)`: DOM-native snapshot of interactive elements — returns UIDs prefixed `d` (e.g., d1, d2). Use when AX snapshot misses contenteditable or custom widgets.
 *   `cdp_find_elements(query, role?, max_results?)`: Search the live DOM for interactive elements matching a text query. Returns matches with `d`-prefixed UIDs plus a page-level inventory.

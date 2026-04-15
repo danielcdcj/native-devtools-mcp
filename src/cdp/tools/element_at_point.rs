@@ -15,7 +15,11 @@ pub async fn cdp_element_at_point(
     let client_guard = cdp_client.read().await;
     let client = match client_guard.as_ref() {
         Some(c) => c,
-        None => return CallToolResult::error(vec![Content::text("No CDP connection active")]),
+        None => {
+            return CallToolResult::error(vec![Content::text(
+                "No CDP connection. Use cdp_connect first.",
+            )])
+        }
     };
 
     let page = match client.require_page() {

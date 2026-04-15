@@ -10,6 +10,7 @@ use rmcp::{
     model::{
         CallToolRequestParam, CallToolResult, Implementation, ListToolsResult,
         PaginatedRequestParam, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
     Error as McpError,
@@ -50,6 +51,74 @@ fn json_to_object(value: Value) -> rmcp::model::JsonObject {
     match value {
         Value::Object(map) => map,
         _ => Default::default(),
+    }
+}
+
+// ============================================================================
+// Tool safety-hint annotations
+//
+// Each tool is tagged with the MCP `ToolAnnotations` hints
+// (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) so clients
+// can reason about safety before invoking. These are *hints* per the MCP spec.
+// ============================================================================
+
+/// Read-only, idempotent, closed-world (queries: screenshots, snapshots, finds).
+fn annotate_read_only() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(true)
+        .idempotent(true)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Non-destructive state change on a closed world (clicks, typing, scrolling,
+/// focusing, launching a local app, connecting to a local debug server).
+fn annotate_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Destructive tool on a closed world (quit app, close tab).
+fn annotate_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(false)
+}
+
+/// Non-destructive state change that reaches an open world (e.g. web
+/// navigation, arbitrary URL loads).
+fn annotate_open_world_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(true)
+}
+
+/// Arbitrary code evaluation in an open world (JS eval in a browser page).
+fn annotate_open_world_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(true)
+}
+
+/// Apply the given annotation to every tool in `tools` whose name appears in
+/// `names`. Missing names are silently ignored because the conditional tool
+/// groups (app_*, android_*, cdp_*, hover, recording) aren't always present.
+/// The `test_every_tool_has_annotations` test catches any tool left without
+/// an annotation.
+fn annotate_tools(tools: &mut [Tool], names: &[&str], annotation: ToolAnnotations) {
+    for name in names {
+        if let Some(tool) = tools.iter_mut().find(|t| t.name.as_ref() == *name) {
+            tool.annotations = Some(annotation.clone());
+        }
     }
 }
 
@@ -124,6 +193,13 @@ impl MacOSDevToolsServer {
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
+    ///
+    /// CDP tools are always listed (independent of `cdp_connected`) so the
+    /// tool surface does not mutate mid-session — clients that prompt-cache
+    /// the tool list stay warm. Each CDP tool handler returns a clean
+    /// "No CDP connection" error when called without an active connection.
+    /// The `cdp_connected` parameter is accepted for API stability but is
+    /// no longer used to gate visibility.
     pub fn get_tools(
         app_connected: bool,
         android_connected: bool,
@@ -131,6 +207,7 @@ impl MacOSDevToolsServer {
         hover_tracking: bool,
         recording: bool,
     ) -> Vec<Tool> {
+        let _ = cdp_connected;
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
         if app_connected {
@@ -143,15 +220,130 @@ impl MacOSDevToolsServer {
         #[cfg(feature = "cdp")]
         {
             tools.push(Self::get_cdp_connect_tool());
-            if cdp_connected {
-                tools.extend(Self::get_cdp_tools());
-            }
+            tools.extend(Self::get_cdp_tools());
         }
-        #[cfg(not(feature = "cdp"))]
-        let _ = cdp_connected;
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
+        Self::apply_tool_annotations(&mut tools);
         tools
+    }
+
+    /// Attach MCP safety-hint annotations (readOnlyHint, destructiveHint,
+    /// idempotentHint, openWorldHint) to every tool in the list.
+    ///
+    /// Classification keys off tool *name* (not description or schema) so
+    /// it's stable across schema edits. Tool names absent from `tools`
+    /// (conditional groups gated by connection state) are ignored —
+    /// `test_every_tool_has_annotations` catches any unclassified tool.
+    fn apply_tool_annotations(tools: &mut [Tool]) {
+        // Read-only queries: screenshots, snapshots, finds, metadata.
+        annotate_tools(
+            tools,
+            &[
+                "take_screenshot",
+                "list_windows",
+                "list_apps",
+                "get_displays",
+                "find_text",
+                "element_at_point",
+                "find_image",
+                "take_ax_snapshot",
+                "probe_app",
+                "android_list_devices",
+                "app_get_info",
+                "app_get_tree",
+                "app_query",
+                "app_get_element",
+                "app_list_windows",
+                "app_screenshot",
+                "android_screenshot",
+                "android_find_text",
+                "android_list_apps",
+                "android_get_display_info",
+                "android_get_current_activity",
+            ],
+            annotate_read_only(),
+        );
+
+        // Non-destructive state changes: clicks, typing, launches, sessions.
+        annotate_tools(
+            tools,
+            &[
+                "focus_window",
+                "launch_app",
+                "click",
+                "move_mouse",
+                "drag",
+                "scroll",
+                "type_text",
+                "press_key",
+                "load_image",
+                "app_connect",
+                "android_connect",
+                "start_hover_tracking",
+                "start_recording",
+                "app_disconnect",
+                "app_click",
+                "app_type",
+                "app_press_key",
+                "app_focus",
+                "app_focus_window",
+                "android_disconnect",
+                "android_click",
+                "android_swipe",
+                "android_type_text",
+                "android_press_key",
+                "android_launch_app",
+                "get_hover_events",
+                "stop_hover_tracking",
+                "stop_recording",
+            ],
+            annotate_state_change(),
+        );
+
+        annotate_tools(tools, &["quit_app"], annotate_destructive());
+
+        #[cfg(feature = "cdp")]
+        {
+            annotate_tools(
+                tools,
+                &[
+                    "cdp_take_ax_snapshot",
+                    "cdp_take_dom_snapshot",
+                    "cdp_find_elements",
+                    "cdp_list_pages",
+                    "cdp_element_at_point",
+                    "cdp_wait_for",
+                ],
+                annotate_read_only(),
+            );
+            annotate_tools(
+                tools,
+                &[
+                    "cdp_connect",
+                    "cdp_disconnect",
+                    "cdp_click",
+                    "cdp_hover",
+                    "cdp_fill",
+                    "cdp_press_key",
+                    "cdp_handle_dialog",
+                    "cdp_type_text",
+                    "cdp_select_page",
+                ],
+                annotate_state_change(),
+            );
+            annotate_tools(
+                tools,
+                &["cdp_navigate", "cdp_new_page"],
+                annotate_open_world_state_change(),
+            );
+            annotate_tools(
+                tools,
+                &["cdp_evaluate_script"],
+                annotate_open_world_destructive(),
+            );
+            annotate_tools(tools, &["cdp_close_page"], annotate_destructive());
+        }
     }
 
     /// Tools that are always available (system tools, CGEvent tools, etc.)
@@ -292,54 +484,16 @@ impl MacOSDevToolsServer {
             // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
-                "Click at screen coordinates. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission on macOS.",
+                "Click at screen coordinates. Choose exactly one of three coordinate variants: \
+                 (1) 'screenshot-pixels' — PREFERRED after take_screenshot: pass the screenshot image \
+                 pixel (screenshot_x, screenshot_y) together with screenshot_origin_x, screenshot_origin_y, \
+                 and screenshot_scale from the take_screenshot metadata; \
+                 (2) 'screen' — absolute screen coordinates (x, y), use with find_text results; \
+                 (3) 'window-relative' — (window_x, window_y, window_id). \
+                 Works with any app (egui, Electron, etc.). Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "x": {
-                            "type": "number",
-                            "description": "Screen X coordinate"
-                        },
-                        "y": {
-                            "type": "number",
-                            "description": "Screen Y coordinate"
-                        },
-                        "window_x": {
-                            "type": "number",
-                            "description": "X coordinate relative to window (use with window_id)"
-                        },
-                        "window_y": {
-                            "type": "number",
-                            "description": "Y coordinate relative to window (use with window_id)"
-                        },
-                        "window_id": {
-                            "type": "integer",
-                            "description": "Window ID for window-relative coordinates"
-                        },
-                        "screenshot_x": {
-                            "type": "number",
-                            "description": "X pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
-                        },
-                        "screenshot_y": {
-                            "type": "number",
-                            "description": "Y pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
-                        },
-                        "screenshot_origin_x": {
-                            "type": "number",
-                            "description": "Screenshot origin X (from take_screenshot metadata)"
-                        },
-                        "screenshot_origin_y": {
-                            "type": "number",
-                            "description": "Screenshot origin Y (from take_screenshot metadata)"
-                        },
-                        "screenshot_scale": {
-                            "type": "number",
-                            "description": "Screenshot scale factor (from take_screenshot metadata)"
-                        },
-                        "screenshot_window_id": {
-                            "type": "integer",
-                            "description": "Window ID the screenshot was taken from (legacy: lookup window at click time)"
-                        },
                         "button": {
                             "type": "string",
                             "enum": ["left", "right", "center"],
@@ -350,7 +504,127 @@ impl MacOSDevToolsServer {
                             "description": "Number of clicks (1=single, 2=double)",
                             "default": 1
                         }
-                    }
+                    },
+                    "oneOf": [
+                        {
+                            "title": "screenshot-pixels",
+                            "description": "PREFERRED after take_screenshot. Pixel coordinates inside the screenshot image plus the origin+scale metadata that take_screenshot returned. The tool converts them to screen coordinates for you.",
+                            "type": "object",
+                            "required": [
+                                "screenshot_x",
+                                "screenshot_y",
+                                "screenshot_origin_x",
+                                "screenshot_origin_y",
+                                "screenshot_scale"
+                            ],
+                            "properties": {
+                                "screenshot_x": {
+                                    "type": "number",
+                                    "description": "X pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_y": {
+                                    "type": "number",
+                                    "description": "Y pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_origin_x": {
+                                    "type": "number",
+                                    "description": "screenshot_origin_x from take_screenshot metadata"
+                                },
+                                "screenshot_origin_y": {
+                                    "type": "number",
+                                    "description": "screenshot_origin_y from take_screenshot metadata"
+                                },
+                                "screenshot_scale": {
+                                    "type": "number",
+                                    "description": "screenshot_scale from take_screenshot metadata"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "screen",
+                            "description": "Absolute screen coordinates. Use with find_text results (its x/y are already screen coordinates).",
+                            "type": "object",
+                            "required": ["x", "y"],
+                            "properties": {
+                                "x": {
+                                    "type": "number",
+                                    "description": "Absolute screen X coordinate"
+                                },
+                                "y": {
+                                    "type": "number",
+                                    "description": "Absolute screen Y coordinate"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "window-relative",
+                            "description": "Coordinates relative to a specific window's top-left corner. Requires window_id from list_windows.",
+                            "type": "object",
+                            "required": ["window_x", "window_y", "window_id"],
+                            "properties": {
+                                "window_x": {
+                                    "type": "number",
+                                    "description": "X coordinate relative to window's top-left"
+                                },
+                                "window_y": {
+                                    "type": "number",
+                                    "description": "Y coordinate relative to window's top-left"
+                                },
+                                "window_id": {
+                                    "type": "integer",
+                                    "description": "Target window ID (from list_windows)"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "screenshot-pixels-legacy",
+                            "description": "DEPRECATED — prefer the 'screenshot-pixels' variant. Retained for back-compat: pass screenshot_x/screenshot_y plus screenshot_window_id and the window is looked up at click time. Newer callers should pass screenshot_origin_x/y + screenshot_scale from take_screenshot metadata instead.",
+                            "type": "object",
+                            "required": [
+                                "screenshot_x",
+                                "screenshot_y",
+                                "screenshot_window_id"
+                            ],
+                            "properties": {
+                                "screenshot_x": {
+                                    "type": "number",
+                                    "description": "X pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_y": {
+                                    "type": "number",
+                                    "description": "Y pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_window_id": {
+                                    "type": "integer",
+                                    "description": "Window ID the screenshot was taken from (looked up at click time)"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        }
+                    ]
                 }))),
             ),
             Tool::new(
@@ -1185,7 +1459,7 @@ impl MacOSDevToolsServer {
         vec![
             Tool::new(
                 "cdp_disconnect",
-                "Disconnect from the Chrome/Electron app. CDP tools will no longer be available until cdp_connect is called again.",
+                "Disconnect from the Chrome/Electron app. CDP tools remain listed but will return a 'not connected' error until cdp_connect is called again.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -1544,7 +1818,7 @@ impl ServerHandler for MacOSDevToolsServer {
 
     async fn list_tools(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
@@ -2180,9 +2454,10 @@ impl ServerHandler for MacOSDevToolsServer {
                             "No pages found".to_string()
                         };
                         *self.cdp_client.write().await = Some(client);
-                        let _ = context.peer.notify_tool_list_changed().await;
+                        // Tool list does not change on CDP connect/disconnect — CDP
+                        // tools are always listed so prompt caches remain stable.
                         Ok(CallToolResult::success(vec![Content::text(format!(
-                            "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
+                            "Connected to Chrome/Electron on port {}. CDP tool calls will now succeed.\n{}",
                             port, page_info
                         ))]))
                     }
@@ -2193,13 +2468,17 @@ impl ServerHandler for MacOSDevToolsServer {
             "cdp_disconnect" => {
                 if let Some(client) = self.cdp_client.write().await.take() {
                     client.disconnect();
-                    let _ = context.peer.notify_tool_list_changed().await;
+                    // Tool list is unchanged on disconnect — CDP tools remain
+                    // listed and will return "not connected" errors until
+                    // cdp_connect succeeds again.
                     Ok(CallToolResult::success(vec![Content::text(
-                        "Disconnected from Chrome/Electron. CDP tools are no longer available.",
+                        "Disconnected from Chrome/Electron. CDP tool calls will return a 'not connected' error until cdp_connect is called again.",
                     )]))
                 } else {
+                    // Use the canonical "not connected" message shared by every
+                    // CDP tool handler so clients see one stable error shape.
                     Ok(CallToolResult::error(vec![Content::text(
-                        "No CDP connection active.",
+                        "No CDP connection. Use cdp_connect first.",
                     )]))
                 }
             }
