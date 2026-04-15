@@ -85,6 +85,181 @@ fn default_click_count() -> u32 {
     1
 }
 
+/// Identifier for the one concrete coordinate variant resolved for a click.
+/// Each variant corresponds to a branch of the `click` tool's `oneOf`
+/// JSON schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClickVariant {
+    /// Screen-space (x, y).
+    Screen,
+    /// Window-relative (window_x, window_y, window_id).
+    WindowRelative,
+    /// Screenshot image pixels + origin/scale metadata (preferred).
+    ScreenshotPixels,
+    /// Legacy screenshot pixels (screenshot_x, screenshot_y, screenshot_window_id).
+    ScreenshotPixelsLegacy,
+}
+
+impl ClickVariant {
+    fn title(self) -> &'static str {
+        match self {
+            ClickVariant::Screen => "screen",
+            ClickVariant::WindowRelative => "window-relative",
+            ClickVariant::ScreenshotPixels => "screenshot-pixels",
+            ClickVariant::ScreenshotPixelsLegacy => "screenshot-pixels-legacy",
+        }
+    }
+}
+
+/// Select exactly one coordinate variant from the submitted params, enforcing
+/// the `oneOf` contract the MCP schema advertises. Returns the matched
+/// variant or a descriptive error message naming what went wrong.
+///
+/// A valid call has every required field of exactly one variant set and no
+/// field from any other variant set. This protects us from clients that
+/// don't validate schemas: a payload mixing `x`/`y` with screenshot fields
+/// used to silently pick the first fully-populated branch; it now fails
+/// fast with a clear message.
+///
+/// Pure function — no I/O.
+fn select_click_variant(params: &ClickParams) -> Result<ClickVariant, String> {
+    // Fields of every variant, in their declared order.
+    const SCREEN_FIELDS: &[&str] = &["x", "y"];
+    const WINDOW_FIELDS: &[&str] = &["window_x", "window_y", "window_id"];
+    const SCREENSHOT_PIXELS_FIELDS: &[&str] = &[
+        "screenshot_x",
+        "screenshot_y",
+        "screenshot_origin_x",
+        "screenshot_origin_y",
+        "screenshot_scale",
+    ];
+    const LEGACY_FIELDS: &[&str] = &["screenshot_x", "screenshot_y", "screenshot_window_id"];
+
+    let screen_present = [params.x.is_some(), params.y.is_some()];
+    let window_present = [
+        params.window_x.is_some(),
+        params.window_y.is_some(),
+        params.window_id.is_some(),
+    ];
+    let pixels_present = [
+        params.screenshot_x.is_some(),
+        params.screenshot_y.is_some(),
+        params.screenshot_origin_x.is_some(),
+        params.screenshot_origin_y.is_some(),
+        params.screenshot_scale.is_some(),
+    ];
+    let legacy_present = [
+        params.screenshot_x.is_some(),
+        params.screenshot_y.is_some(),
+        params.screenshot_window_id.is_some(),
+    ];
+
+    // A variant "has activity" if any of its unique fields are present; this
+    // determines which variants the caller was trying to use so we can
+    // reject mixes.
+    let screen_active = params.x.is_some() || params.y.is_some();
+    let window_active =
+        params.window_x.is_some() || params.window_y.is_some() || params.window_id.is_some();
+    // The two screenshot variants overlap on (screenshot_x, screenshot_y),
+    // so disambiguate by their unique fields.
+    let pixels_unique_active = params.screenshot_origin_x.is_some()
+        || params.screenshot_origin_y.is_some()
+        || params.screenshot_scale.is_some();
+    let legacy_unique_active = params.screenshot_window_id.is_some();
+    let any_screenshot_coord = params.screenshot_x.is_some() || params.screenshot_y.is_some();
+
+    let screenshot_active = pixels_unique_active || legacy_unique_active || any_screenshot_coord;
+
+    let active_count = [screen_active, window_active, screenshot_active]
+        .iter()
+        .filter(|b| **b)
+        .count();
+
+    if active_count == 0 {
+        return Err(describe_click_coord_error(params));
+    }
+
+    // Partial within the same "family" is also an error: e.g. x without y,
+    // or screenshot_x without screenshot_y.
+    if active_count > 1 {
+        return Err(describe_click_coord_error(params));
+    }
+
+    // Exactly one family is active — now require its fields to be complete.
+    if screen_active {
+        if screen_present.iter().all(|p| *p) {
+            return Ok(ClickVariant::Screen);
+        }
+        return Err(format_missing_fields_error(
+            ClickVariant::Screen,
+            SCREEN_FIELDS,
+            &screen_present,
+        ));
+    }
+    if window_active {
+        if window_present.iter().all(|p| *p) {
+            return Ok(ClickVariant::WindowRelative);
+        }
+        return Err(format_missing_fields_error(
+            ClickVariant::WindowRelative,
+            WINDOW_FIELDS,
+            &window_present,
+        ));
+    }
+    // Screenshot family: pick the variant the caller clearly intended.
+    if pixels_unique_active && legacy_unique_active {
+        return Err(
+            "click received screenshot_origin_*/screenshot_scale (screenshot-pixels variant) \
+             together with screenshot_window_id (screenshot-pixels-legacy variant). \
+             Send exactly one. Prefer screenshot-pixels: screenshot_x, screenshot_y, \
+             screenshot_origin_x, screenshot_origin_y, screenshot_scale."
+                .to_string(),
+        );
+    }
+    if pixels_unique_active {
+        if pixels_present.iter().all(|p| *p) {
+            return Ok(ClickVariant::ScreenshotPixels);
+        }
+        return Err(format_missing_fields_error(
+            ClickVariant::ScreenshotPixels,
+            SCREENSHOT_PIXELS_FIELDS,
+            &pixels_present,
+        ));
+    }
+    if legacy_unique_active {
+        if legacy_present.iter().all(|p| *p) {
+            return Ok(ClickVariant::ScreenshotPixelsLegacy);
+        }
+        return Err(format_missing_fields_error(
+            ClickVariant::ScreenshotPixelsLegacy,
+            LEGACY_FIELDS,
+            &legacy_present,
+        ));
+    }
+    // Only screenshot_x and/or screenshot_y provided — ambiguous between the
+    // two screenshot variants. Default to the preferred one for the error.
+    Err(format_missing_fields_error(
+        ClickVariant::ScreenshotPixels,
+        SCREENSHOT_PIXELS_FIELDS,
+        &pixels_present,
+    ))
+}
+
+fn format_missing_fields_error(variant: ClickVariant, fields: &[&str], present: &[bool]) -> String {
+    debug_assert_eq!(fields.len(), present.len());
+    let missing: Vec<&str> = fields
+        .iter()
+        .zip(present.iter())
+        .filter_map(|(n, p)| if *p { None } else { Some(*n) })
+        .collect();
+    format!(
+        "click variant '{}' is missing required fields: {}. \
+         Send every field of exactly one variant, and no fields from other variants.",
+        variant.title(),
+        missing.join(", ")
+    )
+}
+
 /// Build a user-facing error message explaining why the provided click params
 /// don't match any supported coordinate variant. Names the fields that were
 /// provided and suggests the closest variant based on heuristic overlap.
@@ -211,75 +386,98 @@ pub async fn click(params: ClickParams) -> CallToolResult {
         _ => input::MouseButton::Left,
     };
 
-    // Resolve coordinates
-    let (x, y) = if let (Some(x), Some(y)) = (params.x, params.y) {
-        // Direct screen coordinates
-        (x, y)
-    } else if let (Some(wx), Some(wy), Some(window_id)) =
-        (params.window_x, params.window_y, params.window_id)
-    {
-        // Window-relative coordinates
-        let window = match crate::platform::find_window_by_id(window_id) {
-            Ok(Some(w)) => w,
-            Ok(None) => {
-                return CallToolResult::error(vec![Content::text(format!(
-                    "Window {} not found",
-                    window_id
-                ))])
-            }
-            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
-        };
+    // Enforce the oneOf contract: exactly one variant's fields may be
+    // present. Clients that don't validate schemas used to silently pick
+    // the first complete branch on a mixed payload — now we reject it.
+    let variant = match select_click_variant(&params) {
+        Ok(v) => v,
+        Err(msg) => return CallToolResult::error(vec![Content::text(msg)]),
+    };
 
-        let bounds = display::WindowBounds {
-            x: window.bounds.x,
-            y: window.bounds.y,
-        };
-        display::window_to_screen(&bounds, wx, wy)
-    } else if let (Some(px), Some(py), Some(origin_x), Some(origin_y), Some(scale)) = (
-        params.screenshot_x,
-        params.screenshot_y,
-        params.screenshot_origin_x,
-        params.screenshot_origin_y,
-        params.screenshot_scale,
-    ) {
-        // Screenshot pixel coordinates with captured origin + scale
-        let bounds = display::WindowBounds {
-            x: origin_x,
-            y: origin_y,
-        };
-        display::screenshot_to_screen(&bounds, scale, px, py)
-    } else if let (Some(px), Some(py), Some(window_id)) = (
-        params.screenshot_x,
-        params.screenshot_y,
-        params.screenshot_window_id,
-    ) {
-        // Screenshot pixel coordinates (legacy: lookup window at click time)
-        let window = match crate::platform::find_window_by_id(window_id) {
-            Ok(Some(w)) => w,
-            Ok(None) => {
-                return CallToolResult::error(vec![Content::text(format!(
-                    "Window {} not found",
-                    window_id
-                ))])
-            }
-            Err(e) => return CallToolResult::error(vec![Content::text(e)]),
-        };
-
-        let bounds = display::WindowBounds {
-            x: window.bounds.x,
-            y: window.bounds.y,
-        };
-
-        // macOS: screencapture captures in physical (Retina) pixels, need scale factor
-        // Windows: BitBlt captures in logical coordinates, scale is always 1.0
-        #[cfg(target_os = "macos")]
-        let scale = display::backing_scale_for_point(window.bounds.x, window.bounds.y);
-        #[cfg(target_os = "windows")]
-        let scale = 1.0;
-
-        display::screenshot_to_screen(&bounds, scale, px, py)
-    } else {
-        return CallToolResult::error(vec![Content::text(describe_click_coord_error(&params))]);
+    // Resolve coordinates based on the validated variant.
+    let (x, y) = match variant {
+        ClickVariant::Screen => (
+            params
+                .x
+                .expect("select_click_variant guarantees x is Some for Screen"),
+            params
+                .y
+                .expect("select_click_variant guarantees y is Some for Screen"),
+        ),
+        ClickVariant::WindowRelative => {
+            let wx = params.window_x.expect("window_x guaranteed present");
+            let wy = params.window_y.expect("window_y guaranteed present");
+            let window_id = params.window_id.expect("window_id guaranteed present");
+            let window = match crate::platform::find_window_by_id(window_id) {
+                Ok(Some(w)) => w,
+                Ok(None) => {
+                    return CallToolResult::error(vec![Content::text(format!(
+                        "Window {} not found",
+                        window_id
+                    ))])
+                }
+                Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+            };
+            let bounds = display::WindowBounds {
+                x: window.bounds.x,
+                y: window.bounds.y,
+            };
+            display::window_to_screen(&bounds, wx, wy)
+        }
+        ClickVariant::ScreenshotPixels => {
+            let px = params
+                .screenshot_x
+                .expect("screenshot_x guaranteed present");
+            let py = params
+                .screenshot_y
+                .expect("screenshot_y guaranteed present");
+            let origin_x = params
+                .screenshot_origin_x
+                .expect("screenshot_origin_x guaranteed present");
+            let origin_y = params
+                .screenshot_origin_y
+                .expect("screenshot_origin_y guaranteed present");
+            let scale = params
+                .screenshot_scale
+                .expect("screenshot_scale guaranteed present");
+            let bounds = display::WindowBounds {
+                x: origin_x,
+                y: origin_y,
+            };
+            display::screenshot_to_screen(&bounds, scale, px, py)
+        }
+        ClickVariant::ScreenshotPixelsLegacy => {
+            let px = params
+                .screenshot_x
+                .expect("screenshot_x guaranteed present");
+            let py = params
+                .screenshot_y
+                .expect("screenshot_y guaranteed present");
+            let window_id = params
+                .screenshot_window_id
+                .expect("screenshot_window_id guaranteed present");
+            let window = match crate::platform::find_window_by_id(window_id) {
+                Ok(Some(w)) => w,
+                Ok(None) => {
+                    return CallToolResult::error(vec![Content::text(format!(
+                        "Window {} not found",
+                        window_id
+                    ))])
+                }
+                Err(e) => return CallToolResult::error(vec![Content::text(e)]),
+            };
+            let bounds = display::WindowBounds {
+                x: window.bounds.x,
+                y: window.bounds.y,
+            };
+            // macOS: screencapture captures in physical (Retina) pixels, need scale factor.
+            // Windows: BitBlt captures in logical coordinates, scale is always 1.0.
+            #[cfg(target_os = "macos")]
+            let scale = display::backing_scale_for_point(window.bounds.x, window.bounds.y);
+            #[cfg(target_os = "windows")]
+            let scale = 1.0;
+            display::screenshot_to_screen(&bounds, scale, px, py)
+        }
     };
 
     let click_count = params.click_count;
@@ -1004,5 +1202,106 @@ mod tests {
         let p = empty_click_params();
         let msg = describe_click_coord_error(&p);
         assert!(msg.contains("(no coordinate fields)"), "msg: {msg}");
+    }
+
+    // MARK: - select_click_variant (oneOf runtime enforcement)
+
+    #[test]
+    fn test_select_variant_picks_screen_for_pure_x_y() {
+        let mut p = empty_click_params();
+        p.x = Some(100.0);
+        p.y = Some(200.0);
+        assert_eq!(select_click_variant(&p), Ok(ClickVariant::Screen));
+    }
+
+    #[test]
+    fn test_select_variant_picks_screenshot_pixels_for_full_payload() {
+        let mut p = empty_click_params();
+        p.screenshot_x = Some(10.0);
+        p.screenshot_y = Some(20.0);
+        p.screenshot_origin_x = Some(100.0);
+        p.screenshot_origin_y = Some(200.0);
+        p.screenshot_scale = Some(2.0);
+        assert_eq!(select_click_variant(&p), Ok(ClickVariant::ScreenshotPixels));
+    }
+
+    #[test]
+    fn test_select_variant_picks_window_relative() {
+        let mut p = empty_click_params();
+        p.window_x = Some(10.0);
+        p.window_y = Some(20.0);
+        p.window_id = Some(42);
+        assert_eq!(select_click_variant(&p), Ok(ClickVariant::WindowRelative));
+    }
+
+    #[test]
+    fn test_select_variant_picks_legacy_screenshot() {
+        let mut p = empty_click_params();
+        p.screenshot_x = Some(10.0);
+        p.screenshot_y = Some(20.0);
+        p.screenshot_window_id = Some(42);
+        assert_eq!(
+            select_click_variant(&p),
+            Ok(ClickVariant::ScreenshotPixelsLegacy)
+        );
+    }
+
+    #[test]
+    fn test_select_variant_rejects_mixed_screen_and_screenshot_pixels() {
+        // This was the silent-pick bug: the old flat resolver would pick
+        // `screen` as the first complete branch and click at (x,y) even
+        // though the caller also supplied full screenshot-pixels fields.
+        let mut p = empty_click_params();
+        p.x = Some(100.0);
+        p.y = Some(200.0);
+        p.screenshot_x = Some(10.0);
+        p.screenshot_y = Some(20.0);
+        p.screenshot_origin_x = Some(100.0);
+        p.screenshot_origin_y = Some(200.0);
+        p.screenshot_scale = Some(2.0);
+
+        let err = select_click_variant(&p).unwrap_err();
+        // Either naming screen or screenshot-pixels is fine; the key is
+        // that we refuse the mix and report the error.
+        assert!(
+            err.to_lowercase().contains("screen") || err.to_lowercase().contains("screenshot"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn test_select_variant_rejects_mixed_screenshot_pixels_and_legacy() {
+        // Supplying both the origin+scale set AND screenshot_window_id is
+        // ambiguous and must be rejected.
+        let mut p = empty_click_params();
+        p.screenshot_x = Some(10.0);
+        p.screenshot_y = Some(20.0);
+        p.screenshot_origin_x = Some(100.0);
+        p.screenshot_origin_y = Some(200.0);
+        p.screenshot_scale = Some(2.0);
+        p.screenshot_window_id = Some(7);
+
+        let err = select_click_variant(&p).unwrap_err();
+        assert!(err.contains("screenshot-pixels"), "err: {err}");
+    }
+
+    #[test]
+    fn test_select_variant_rejects_partial_screen() {
+        // `x` without `y` is invalid.
+        let mut p = empty_click_params();
+        p.x = Some(100.0);
+
+        let err = select_click_variant(&p).unwrap_err();
+        assert!(
+            err.contains("'screen'") || err.contains("screen"),
+            "err: {err}"
+        );
+        assert!(err.contains("y"), "err: {err}");
+    }
+
+    #[test]
+    fn test_select_variant_rejects_empty_params() {
+        let p = empty_click_params();
+        assert!(select_click_variant(&p).is_err());
     }
 }

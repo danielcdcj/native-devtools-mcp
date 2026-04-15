@@ -2475,8 +2475,10 @@ impl ServerHandler for MacOSDevToolsServer {
                         "Disconnected from Chrome/Electron. CDP tool calls will return a 'not connected' error until cdp_connect is called again.",
                     )]))
                 } else {
+                    // Use the canonical "not connected" message shared by every
+                    // CDP tool handler so clients see one stable error shape.
                     Ok(CallToolResult::error(vec![Content::text(
-                        "No CDP connection active.",
+                        "No CDP connection. Use cdp_connect first.",
                     )]))
                 }
             }
