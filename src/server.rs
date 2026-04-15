@@ -292,54 +292,16 @@ impl MacOSDevToolsServer {
             // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
-                "Click at screen coordinates. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission on macOS.",
+                "Click at screen coordinates. Choose exactly one of three coordinate variants: \
+                 (1) 'screenshot-pixels' — PREFERRED after take_screenshot: pass the screenshot image \
+                 pixel (screenshot_x, screenshot_y) together with screenshot_origin_x, screenshot_origin_y, \
+                 and screenshot_scale from the take_screenshot metadata; \
+                 (2) 'screen' — absolute screen coordinates (x, y), use with find_text results; \
+                 (3) 'window-relative' — (window_x, window_y, window_id). \
+                 Works with any app (egui, Electron, etc.). Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "x": {
-                            "type": "number",
-                            "description": "Screen X coordinate"
-                        },
-                        "y": {
-                            "type": "number",
-                            "description": "Screen Y coordinate"
-                        },
-                        "window_x": {
-                            "type": "number",
-                            "description": "X coordinate relative to window (use with window_id)"
-                        },
-                        "window_y": {
-                            "type": "number",
-                            "description": "Y coordinate relative to window (use with window_id)"
-                        },
-                        "window_id": {
-                            "type": "integer",
-                            "description": "Window ID for window-relative coordinates"
-                        },
-                        "screenshot_x": {
-                            "type": "number",
-                            "description": "X pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
-                        },
-                        "screenshot_y": {
-                            "type": "number",
-                            "description": "Y pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
-                        },
-                        "screenshot_origin_x": {
-                            "type": "number",
-                            "description": "Screenshot origin X (from take_screenshot metadata)"
-                        },
-                        "screenshot_origin_y": {
-                            "type": "number",
-                            "description": "Screenshot origin Y (from take_screenshot metadata)"
-                        },
-                        "screenshot_scale": {
-                            "type": "number",
-                            "description": "Screenshot scale factor (from take_screenshot metadata)"
-                        },
-                        "screenshot_window_id": {
-                            "type": "integer",
-                            "description": "Window ID the screenshot was taken from (legacy: lookup window at click time)"
-                        },
                         "button": {
                             "type": "string",
                             "enum": ["left", "right", "center"],
@@ -350,7 +312,127 @@ impl MacOSDevToolsServer {
                             "description": "Number of clicks (1=single, 2=double)",
                             "default": 1
                         }
-                    }
+                    },
+                    "oneOf": [
+                        {
+                            "title": "screenshot-pixels",
+                            "description": "PREFERRED after take_screenshot. Pixel coordinates inside the screenshot image plus the origin+scale metadata that take_screenshot returned. The tool converts them to screen coordinates for you.",
+                            "type": "object",
+                            "required": [
+                                "screenshot_x",
+                                "screenshot_y",
+                                "screenshot_origin_x",
+                                "screenshot_origin_y",
+                                "screenshot_scale"
+                            ],
+                            "properties": {
+                                "screenshot_x": {
+                                    "type": "number",
+                                    "description": "X pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_y": {
+                                    "type": "number",
+                                    "description": "Y pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_origin_x": {
+                                    "type": "number",
+                                    "description": "screenshot_origin_x from take_screenshot metadata"
+                                },
+                                "screenshot_origin_y": {
+                                    "type": "number",
+                                    "description": "screenshot_origin_y from take_screenshot metadata"
+                                },
+                                "screenshot_scale": {
+                                    "type": "number",
+                                    "description": "screenshot_scale from take_screenshot metadata"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "screen",
+                            "description": "Absolute screen coordinates. Use with find_text results (its x/y are already screen coordinates).",
+                            "type": "object",
+                            "required": ["x", "y"],
+                            "properties": {
+                                "x": {
+                                    "type": "number",
+                                    "description": "Absolute screen X coordinate"
+                                },
+                                "y": {
+                                    "type": "number",
+                                    "description": "Absolute screen Y coordinate"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "window-relative",
+                            "description": "Coordinates relative to a specific window's top-left corner. Requires window_id from list_windows.",
+                            "type": "object",
+                            "required": ["window_x", "window_y", "window_id"],
+                            "properties": {
+                                "window_x": {
+                                    "type": "number",
+                                    "description": "X coordinate relative to window's top-left"
+                                },
+                                "window_y": {
+                                    "type": "number",
+                                    "description": "Y coordinate relative to window's top-left"
+                                },
+                                "window_id": {
+                                    "type": "integer",
+                                    "description": "Target window ID (from list_windows)"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        },
+                        {
+                            "title": "screenshot-pixels-legacy",
+                            "description": "DEPRECATED — prefer the 'screenshot-pixels' variant. Retained for back-compat: pass screenshot_x/screenshot_y plus screenshot_window_id and the window is looked up at click time. Newer callers should pass screenshot_origin_x/y + screenshot_scale from take_screenshot metadata instead.",
+                            "type": "object",
+                            "required": [
+                                "screenshot_x",
+                                "screenshot_y",
+                                "screenshot_window_id"
+                            ],
+                            "properties": {
+                                "screenshot_x": {
+                                    "type": "number",
+                                    "description": "X pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_y": {
+                                    "type": "number",
+                                    "description": "Y pixel coordinate inside the screenshot image"
+                                },
+                                "screenshot_window_id": {
+                                    "type": "integer",
+                                    "description": "Window ID the screenshot was taken from (looked up at click time)"
+                                },
+                                "button": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "center"]
+                                },
+                                "click_count": { "type": "integer" }
+                            },
+                            "additionalProperties": false
+                        }
+                    ]
                 }))),
             ),
             Tool::new(

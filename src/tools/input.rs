@@ -85,6 +85,153 @@ fn default_click_count() -> u32 {
     1
 }
 
+/// Build a user-facing error message explaining why the provided click params
+/// don't match any supported coordinate variant. Names the fields that were
+/// provided and suggests the closest variant based on heuristic overlap.
+///
+/// Pure function — used by `click` when no variant validates successfully.
+fn describe_click_coord_error(params: &ClickParams) -> String {
+    let mut provided: Vec<&'static str> = Vec::new();
+    if params.x.is_some() {
+        provided.push("x");
+    }
+    if params.y.is_some() {
+        provided.push("y");
+    }
+    if params.window_x.is_some() {
+        provided.push("window_x");
+    }
+    if params.window_y.is_some() {
+        provided.push("window_y");
+    }
+    if params.window_id.is_some() {
+        provided.push("window_id");
+    }
+    if params.screenshot_x.is_some() {
+        provided.push("screenshot_x");
+    }
+    if params.screenshot_y.is_some() {
+        provided.push("screenshot_y");
+    }
+    if params.screenshot_origin_x.is_some() {
+        provided.push("screenshot_origin_x");
+    }
+    if params.screenshot_origin_y.is_some() {
+        provided.push("screenshot_origin_y");
+    }
+    if params.screenshot_scale.is_some() {
+        provided.push("screenshot_scale");
+    }
+    if params.screenshot_window_id.is_some() {
+        provided.push("screenshot_window_id");
+    }
+
+    // Score each variant by how many of its fields are set.
+    let screenshot_pixels_score = [
+        params.screenshot_x.is_some(),
+        params.screenshot_y.is_some(),
+        params.screenshot_origin_x.is_some(),
+        params.screenshot_origin_y.is_some(),
+        params.screenshot_scale.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+    let screen_score = [params.x.is_some(), params.y.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count();
+    let window_score = [
+        params.window_x.is_some(),
+        params.window_y.is_some(),
+        params.window_id.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+    let legacy_score = [
+        params.screenshot_x.is_some(),
+        params.screenshot_y.is_some(),
+        params.screenshot_window_id.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+
+    let (closest_variant, missing): (&str, Vec<&str>) = {
+        let mut best = ("screenshot-pixels", screenshot_pixels_score);
+        for (name, score) in [
+            ("screen", screen_score),
+            ("window-relative", window_score),
+            ("screenshot-pixels-legacy", legacy_score),
+        ] {
+            if score > best.1 {
+                best = (name, score);
+            }
+        }
+        let missing: Vec<&str> = match best.0 {
+            "screenshot-pixels" => [
+                ("screenshot_x", params.screenshot_x.is_some()),
+                ("screenshot_y", params.screenshot_y.is_some()),
+                ("screenshot_origin_x", params.screenshot_origin_x.is_some()),
+                ("screenshot_origin_y", params.screenshot_origin_y.is_some()),
+                ("screenshot_scale", params.screenshot_scale.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(n, present)| if present { None } else { Some(n) })
+            .collect(),
+            "screen" => [("x", params.x.is_some()), ("y", params.y.is_some())]
+                .into_iter()
+                .filter_map(|(n, present)| if present { None } else { Some(n) })
+                .collect(),
+            "window-relative" => [
+                ("window_x", params.window_x.is_some()),
+                ("window_y", params.window_y.is_some()),
+                ("window_id", params.window_id.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(n, present)| if present { None } else { Some(n) })
+            .collect(),
+            _ => [
+                ("screenshot_x", params.screenshot_x.is_some()),
+                ("screenshot_y", params.screenshot_y.is_some()),
+                (
+                    "screenshot_window_id",
+                    params.screenshot_window_id.is_some(),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(n, present)| if present { None } else { Some(n) })
+            .collect(),
+        };
+        (best.0, missing)
+    };
+
+    let provided_str = if provided.is_empty() {
+        "(no coordinate fields)".to_string()
+    } else {
+        provided.join(", ")
+    };
+    let missing_str = if missing.is_empty() {
+        "(none)".to_string()
+    } else {
+        missing.join(", ")
+    };
+
+    format!(
+        "click requires exactly one complete coordinate variant. \
+         Provided fields: {provided_str}. \
+         Closest variant: '{closest_variant}' — missing: {missing_str}.\n\
+         Supported variants:\n\
+         - screenshot-pixels (PREFERRED after take_screenshot): \
+           screenshot_x, screenshot_y, screenshot_origin_x, screenshot_origin_y, screenshot_scale\n\
+         - screen: x, y\n\
+         - window-relative: window_x, window_y, window_id\n\
+         - screenshot-pixels-legacy (deprecated): \
+           screenshot_x, screenshot_y, screenshot_window_id"
+    )
+}
+
 pub async fn click(params: ClickParams) -> CallToolResult {
     if let Some(err) = check_permission() {
         return err;
@@ -165,13 +312,7 @@ pub async fn click(params: ClickParams) -> CallToolResult {
 
         display::screenshot_to_screen(&bounds, scale, px, py)
     } else {
-        return CallToolResult::error(vec![Content::text(
-            "Provide coordinates in one of these formats:\n\
-             - Screen coordinates: x, y\n\
-             - Window-relative: window_x, window_y, window_id\n\
-             - Screenshot pixels: screenshot_x, screenshot_y, screenshot_origin_x, screenshot_origin_y, screenshot_scale\n\
-             - Screenshot pixels (legacy): screenshot_x, screenshot_y, screenshot_window_id",
-        )]);
+        return CallToolResult::error(vec![Content::text(describe_click_coord_error(&params))]);
     };
 
     let click_count = params.click_count;
@@ -803,5 +944,98 @@ mod tests {
         assert!(!is_interactive_role("Group"));
         assert!(!is_interactive_role("Image"));
         assert!(!is_interactive_role("Pane"));
+    }
+
+    // MARK: - click coordinate variant parsing & validator error tests
+
+    fn empty_click_params() -> ClickParams {
+        ClickParams {
+            x: None,
+            y: None,
+            window_x: None,
+            window_y: None,
+            window_id: None,
+            screenshot_x: None,
+            screenshot_y: None,
+            screenshot_origin_x: None,
+            screenshot_origin_y: None,
+            screenshot_scale: None,
+            screenshot_window_id: None,
+            button: None,
+            click_count: 1,
+        }
+    }
+
+    #[test]
+    fn test_click_params_accepts_valid_screenshot_pixels_variant() {
+        let params: ClickParams = serde_json::from_value(serde_json::json!({
+            "screenshot_x": 10.0,
+            "screenshot_y": 20.0,
+            "screenshot_origin_x": 100.0,
+            "screenshot_origin_y": 200.0,
+            "screenshot_scale": 2.0,
+        }))
+        .expect("valid screenshot-pixels payload should deserialize");
+        assert_eq!(params.screenshot_x, Some(10.0));
+        assert_eq!(params.screenshot_scale, Some(2.0));
+    }
+
+    #[test]
+    fn test_click_params_accepts_valid_screen_variant() {
+        let params: ClickParams = serde_json::from_value(serde_json::json!({
+            "x": 500.0,
+            "y": 400.0,
+        }))
+        .expect("valid screen payload should deserialize");
+        assert_eq!(params.x, Some(500.0));
+        assert_eq!(params.y, Some(400.0));
+    }
+
+    #[test]
+    fn test_click_error_reports_provided_fields_for_partial_screenshot_pixels() {
+        // Caller sent only screenshot_x/y — no origin/scale, no window_id.
+        // Closest variant should be screenshot-pixels (highest overlap).
+        let mut p = empty_click_params();
+        p.screenshot_x = Some(10.0);
+        p.screenshot_y = Some(20.0);
+
+        let msg = describe_click_coord_error(&p);
+        assert!(msg.contains("screenshot_x"), "msg: {msg}");
+        assert!(msg.contains("screenshot_y"), "msg: {msg}");
+        assert!(
+            msg.contains("'screenshot-pixels'"),
+            "closest variant should be screenshot-pixels: {msg}"
+        );
+        // Missing fields are named.
+        assert!(msg.contains("screenshot_origin_x"), "msg: {msg}");
+        assert!(msg.contains("screenshot_scale"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_click_error_reports_closest_screen_variant_when_only_x_set() {
+        let mut p = empty_click_params();
+        p.x = Some(100.0);
+
+        let msg = describe_click_coord_error(&p);
+        assert!(msg.contains("'screen'"), "msg: {msg}");
+        assert!(msg.contains("missing: y"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_click_error_reports_closest_window_relative_variant() {
+        let mut p = empty_click_params();
+        p.window_x = Some(10.0);
+        p.window_y = Some(20.0);
+
+        let msg = describe_click_coord_error(&p);
+        assert!(msg.contains("'window-relative'"), "msg: {msg}");
+        assert!(msg.contains("window_id"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_click_error_for_empty_params_names_no_provided_fields() {
+        let p = empty_click_params();
+        let msg = describe_click_coord_error(&p);
+        assert!(msg.contains("(no coordinate fields)"), "msg: {msg}");
     }
 }
