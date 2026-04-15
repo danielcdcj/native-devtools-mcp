@@ -10,6 +10,7 @@ use rmcp::{
     model::{
         CallToolRequestParam, CallToolResult, Implementation, ListToolsResult,
         PaginatedRequestParam, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
     Error as McpError,
@@ -50,6 +51,74 @@ fn json_to_object(value: Value) -> rmcp::model::JsonObject {
     match value {
         Value::Object(map) => map,
         _ => Default::default(),
+    }
+}
+
+// ============================================================================
+// Tool safety-hint annotations
+//
+// Each tool is tagged with the MCP `ToolAnnotations` hints
+// (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) so clients
+// can reason about safety before invoking. These are *hints* per the MCP spec.
+// ============================================================================
+
+/// Read-only, idempotent, closed-world (queries: screenshots, snapshots, finds).
+fn annotate_read_only() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(true)
+        .idempotent(true)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Non-destructive state change on a closed world (clicks, typing, scrolling,
+/// focusing, launching a local app, connecting to a local debug server).
+fn annotate_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Destructive tool on a closed world (quit app, close tab).
+fn annotate_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(false)
+}
+
+/// Non-destructive state change that reaches an open world (e.g. web
+/// navigation, arbitrary URL loads).
+fn annotate_open_world_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(true)
+}
+
+/// Arbitrary code evaluation in an open world (JS eval in a browser page).
+fn annotate_open_world_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(true)
+}
+
+/// Apply the given annotation to every tool in `tools` whose name appears in
+/// `names`. Panics if any listed name is not found so missing annotations
+/// surface immediately in tests.
+fn annotate_tools(tools: &mut [Tool], names: &[&str], annotation: ToolAnnotations) {
+    for name in names {
+        let tool = tools
+            .iter_mut()
+            .find(|t| t.name.as_ref() == *name)
+            .unwrap_or_else(|| panic!("annotate_tools: tool not found: {}", name));
+        tool.annotations = Some(annotation.clone());
     }
 }
 
@@ -155,7 +224,143 @@ impl MacOSDevToolsServer {
         }
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
+        Self::apply_tool_annotations(&mut tools);
         tools
+    }
+
+    /// Attach MCP safety-hint annotations (readOnlyHint, destructiveHint,
+    /// idempotentHint, openWorldHint) to every tool in the list.
+    ///
+    /// Classification keys off tool *name* (not description or schema) so it's
+    /// stable across schema edits. Tools are grouped by safety profile; see
+    /// the `annotate_*` helpers above for the exact hint combinations.
+    ///
+    /// A tool that is in `tools` but not in any group below is a correctness
+    /// bug — `annotate_tools` panics on missing names, so adding a new tool
+    /// without a classification will fail the annotation tests.
+    fn apply_tool_annotations(tools: &mut [Tool]) {
+        // --- Read-only queries (screenshots, snapshots, finds, metadata) ---
+        let read_only: &[&str] = &[
+            "take_screenshot",
+            "list_windows",
+            "list_apps",
+            "get_displays",
+            "find_text",
+            "element_at_point",
+            "find_image",
+            "take_ax_snapshot",
+            "probe_app",
+            "android_list_devices",
+        ];
+        annotate_tools(tools, read_only, annotate_read_only());
+
+        // Conditional read-only tools (only present when a connection is up).
+        let conditional_read_only: &[&str] = &[
+            "app_get_info",
+            "app_get_tree",
+            "app_query",
+            "app_get_element",
+            "app_list_windows",
+            "app_screenshot",
+            "android_screenshot",
+            "android_find_text",
+            "android_list_apps",
+            "android_get_display_info",
+            "android_get_current_activity",
+        ];
+        for name in conditional_read_only {
+            if let Some(tool) = tools.iter_mut().find(|t| t.name.as_ref() == *name) {
+                tool.annotations = Some(annotate_read_only());
+            }
+        }
+
+        // --- Non-destructive state-changing tools (clicks, typing, launches) ---
+        let state_change: &[&str] = &[
+            "focus_window",
+            "launch_app",
+            "click",
+            "move_mouse",
+            "drag",
+            "scroll",
+            "type_text",
+            "press_key",
+            "load_image",
+            "app_connect",
+            "android_connect",
+            "start_hover_tracking",
+            "start_recording",
+        ];
+        annotate_tools(tools, state_change, annotate_state_change());
+
+        let conditional_state_change: &[&str] = &[
+            "app_disconnect",
+            "app_click",
+            "app_type",
+            "app_press_key",
+            "app_focus",
+            "app_focus_window",
+            "android_disconnect",
+            "android_click",
+            "android_swipe",
+            "android_type_text",
+            "android_press_key",
+            "android_launch_app",
+            "get_hover_events",
+            "stop_hover_tracking",
+            "stop_recording",
+        ];
+        for name in conditional_state_change {
+            if let Some(tool) = tools.iter_mut().find(|t| t.name.as_ref() == *name) {
+                tool.annotations = Some(annotate_state_change());
+            }
+        }
+
+        // --- Destructive tools (quit app, close tab) ---
+        let destructive: &[&str] = &["quit_app"];
+        annotate_tools(tools, destructive, annotate_destructive());
+
+        // --- CDP tools (always listed when the cdp feature is on) ---
+        #[cfg(feature = "cdp")]
+        {
+            // CDP read-only queries.
+            let cdp_read_only: &[&str] = &[
+                "cdp_take_ax_snapshot",
+                "cdp_take_dom_snapshot",
+                "cdp_find_elements",
+                "cdp_list_pages",
+                "cdp_element_at_point",
+                "cdp_wait_for",
+            ];
+            annotate_tools(tools, cdp_read_only, annotate_read_only());
+
+            // CDP non-destructive state changes in a closed world.
+            let cdp_state_change: &[&str] = &[
+                "cdp_connect",
+                "cdp_disconnect",
+                "cdp_click",
+                "cdp_hover",
+                "cdp_fill",
+                "cdp_press_key",
+                "cdp_handle_dialog",
+                "cdp_type_text",
+                "cdp_select_page",
+            ];
+            annotate_tools(tools, cdp_state_change, annotate_state_change());
+
+            // CDP navigation reaches the open web.
+            let cdp_open_world: &[&str] = &["cdp_navigate", "cdp_new_page"];
+            annotate_tools(tools, cdp_open_world, annotate_open_world_state_change());
+
+            // Arbitrary code + closing a tab — destructive.
+            let cdp_open_world_destructive: &[&str] = &["cdp_evaluate_script"];
+            annotate_tools(
+                tools,
+                cdp_open_world_destructive,
+                annotate_open_world_destructive(),
+            );
+            let cdp_destructive: &[&str] = &["cdp_close_page"];
+            annotate_tools(tools, cdp_destructive, annotate_destructive());
+        }
     }
 
     /// Tools that are always available (system tools, CGEvent tools, etc.)

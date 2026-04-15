@@ -325,6 +325,140 @@ mod server_capabilities {
 }
 
 #[cfg(test)]
+mod tool_annotations {
+    //! Every tool the server exposes must carry MCP safety-hint
+    //! annotations (readOnlyHint, destructiveHint, idempotentHint,
+    //! openWorldHint) so clients can reason about the tool before calling.
+
+    use super::*;
+
+    /// Build the full set of tools across every connection permutation so
+    /// conditional tools (app_*, android_*, cdp_*, hover, recording) are all
+    /// visible.
+    fn all_tools() -> Vec<rmcp::model::Tool> {
+        MacOSDevToolsServer::get_tools(true, true, true, true, true)
+    }
+
+    #[test]
+    fn test_every_tool_has_annotations() {
+        let tools = all_tools();
+        let missing: Vec<String> = tools
+            .iter()
+            .filter(|t| t.annotations.is_none())
+            .map(|t| t.name.to_string())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "These tools are missing MCP annotations: {:?}",
+            missing
+        );
+    }
+
+    fn find_tool<'a>(tools: &'a [rmcp::model::Tool], name: &str) -> &'a rmcp::model::Tool {
+        tools
+            .iter()
+            .find(|t| t.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("tool {name} not found"))
+    }
+
+    fn find_annotation(tools: &[rmcp::model::Tool], name: &str) -> rmcp::model::ToolAnnotations {
+        find_tool(tools, name)
+            .annotations
+            .clone()
+            .unwrap_or_else(|| panic!("{name} should have annotations"))
+    }
+
+    #[test]
+    fn test_quit_app_flagged_destructive() {
+        let tools = all_tools();
+        let ann = find_annotation(&tools, "quit_app");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.read_only_hint, Some(false));
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_close_page_flagged_destructive() {
+        let tools = all_tools();
+        let ann = find_annotation(&tools, "cdp_close_page");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.read_only_hint, Some(false));
+    }
+
+    #[test]
+    fn test_read_only_queries_flagged_read_only_and_idempotent() {
+        let tools = all_tools();
+        for name in [
+            "take_screenshot",
+            "list_windows",
+            "list_apps",
+            "find_text",
+            "element_at_point",
+            "take_ax_snapshot",
+            "probe_app",
+        ] {
+            let ann = find_annotation(&tools, name);
+            assert_eq!(
+                ann.read_only_hint,
+                Some(true),
+                "{name} should be readOnlyHint=true"
+            );
+            assert_eq!(
+                ann.idempotent_hint,
+                Some(true),
+                "{name} should be idempotentHint=true"
+            );
+            assert_eq!(ann.destructive_hint, Some(false));
+        }
+    }
+
+    #[test]
+    fn test_state_change_tools_flagged_not_read_only_not_destructive() {
+        let tools = all_tools();
+        for name in ["click", "type_text", "press_key", "scroll", "drag"] {
+            let ann = find_annotation(&tools, name);
+            assert_eq!(ann.read_only_hint, Some(false), "{name}");
+            assert_eq!(ann.destructive_hint, Some(false), "{name}");
+        }
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_navigate_open_world() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "cdp_navigate")
+            .expect("cdp_navigate not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("cdp_navigate should have annotations");
+        assert_eq!(
+            ann.open_world_hint,
+            Some(true),
+            "cdp_navigate reaches the open web"
+        );
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_evaluate_script_flagged_destructive_and_open_world() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "cdp_evaluate_script")
+            .expect("cdp_evaluate_script not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("cdp_evaluate_script should have annotations");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.open_world_hint, Some(true));
+    }
+}
+
+#[cfg(test)]
 mod identity_validation {
     //! Tests for expected_bundle_id and expected_app_name validation logic
     //!
