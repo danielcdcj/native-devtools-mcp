@@ -2053,11 +2053,10 @@ impl ServerHandler for MacOSDevToolsServer {
                     // bump), format with the assigned generation so uids are
                     // stamped `a<N>g<gen>`.
                     let (nodes, refs) =
-                        match crate::macos::ax::collect_ax_tree_indexed(params.app_name.as_deref()) {
+                        match crate::macos::ax::collect_ax_tree_indexed(params.app_name.as_deref())
+                        {
                             Ok(v) => v,
-                            Err(e) => {
-                                return Ok(CallToolResult::error(vec![Content::text(e)]))
-                            }
+                            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                         };
                     let generation = self.ax_session.create_snapshot(refs).await;
                     let snapshot =
@@ -2068,18 +2067,15 @@ impl ServerHandler for MacOSDevToolsServer {
                 {
                     // Windows UIA path: unchanged — no session, uids stay bare `a<N>`.
                     match crate::tools::ax_snapshot::take_ax_snapshot(params) {
-                        Ok(snapshot) => {
-                            Ok(CallToolResult::success(vec![Content::text(snapshot)]))
-                        }
+                        Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
                         Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
                     }
                 }
             }
             #[cfg(target_os = "macos")]
             "ax_click" => {
-                let params: crate::tools::ax_click::AxClickParams =
-                    serde_json::from_value(args)
-                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                let params: crate::tools::ax_click::AxClickParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(crate::tools::ax_click::ax_click(params, self.ax_session.clone()).await)
             }
             #[cfg(target_os = "macos")]

@@ -827,7 +827,10 @@ mod ax_dispatch_tool_gating {
         let server = MacOSDevToolsServer::new();
         let info = server.get_info();
         let instr = info.instructions.expect("instructions should be set");
-        assert!(instr.contains("ax_click"), "instructions should mention ax_click");
+        assert!(
+            instr.contains("ax_click"),
+            "instructions should mention ax_click"
+        );
         assert!(
             instr.contains("ax_set_value"),
             "instructions should mention ax_set_value"
@@ -851,9 +854,8 @@ mod ax_dispatch_tool_gating {
         use native_devtools_mcp::tools::ax_click::AxClickParams;
         use native_devtools_mcp::tools::ax_set_value::AxSetValueParams;
 
-        let p: AxClickParams =
-            serde_json::from_value(serde_json::json!({ "uid": "a1g1" }))
-                .expect("ax_click params must accept { uid }");
+        let p: AxClickParams = serde_json::from_value(serde_json::json!({ "uid": "a1g1" }))
+            .expect("ax_click params must accept { uid }");
         assert_eq!(p.uid, "a1g1");
 
         let q: AxSetValueParams =

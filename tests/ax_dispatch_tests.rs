@@ -93,7 +93,10 @@ fn extract_uid_for_named_button(snapshot: &str, button_name: &str) -> String {
             }
         }
     }
-    panic!("no uid for button {} in snapshot:\n{}", button_name, snapshot);
+    panic!(
+        "no uid for button {} in snapshot:\n{}",
+        button_name, snapshot
+    );
 }
 
 /// Find the line in a snapshot corresponding to the Calculator display
@@ -221,9 +224,7 @@ async fn ax_click_on_decorative_label_returns_not_dispatchable_with_fallback() {
     // Find a static-text / generic node with a bbox.
     let decorative_line = snap_text
         .lines()
-        .find(|l| {
-            (l.contains(" text ") || l.contains(" generic ")) && l.contains("bbox=(")
-        })
+        .find(|l| (l.contains(" text ") || l.contains(" generic ")) && l.contains("bbox=("))
         .expect("calculator should contain at least one non-pressable node with a bbox");
     let decorative_uid = decorative_line
         .split_whitespace()

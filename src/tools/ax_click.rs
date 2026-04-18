@@ -66,10 +66,7 @@ pub async fn ax_click(params: AxClickParams, session: Arc<AxSession>) -> CallToo
         Err(LookupError::UidNotFound) => {
             return error_result(
                 "uid_not_found",
-                &format!(
-                    "uid {} is not present in the current snapshot",
-                    params.uid
-                ),
+                &format!("uid {} is not present in the current snapshot", params.uid),
                 None,
             );
         }

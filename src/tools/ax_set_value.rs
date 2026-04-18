@@ -57,10 +57,7 @@ pub async fn ax_set_value(params: AxSetValueParams, session: Arc<AxSession>) -> 
         Err(LookupError::UidNotFound) => {
             return error_result(
                 "uid_not_found",
-                &format!(
-                    "uid {} is not present in the current snapshot",
-                    params.uid
-                ),
+                &format!("uid {} is not present in the current snapshot", params.uid),
                 None,
             );
         }
@@ -84,10 +81,7 @@ pub async fn ax_set_value(params: AxSetValueParams, session: Arc<AxSession>) -> 
         ),
         Err(AXDispatchError::AxError(code)) => error_result(
             "ax_error",
-            &format!(
-                "AXUIElementSetAttributeValue failed with AX error {}",
-                code
-            ),
+            &format!("AXUIElementSetAttributeValue failed with AX error {}", code),
             pre_bbox,
         ),
     }

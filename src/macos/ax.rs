@@ -99,7 +99,7 @@ impl Drop for AXRefInner {
 
 impl std::fmt::Debug for AXRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AXRef({:p})", self.0.0)
+        write!(f, "AXRef({:p})", self.0 .0)
     }
 }
 
@@ -108,6 +108,11 @@ impl AXRef {
     /// holds a +1 refcount and transfers ownership to the `AXRef`. Drop will
     /// balance with a single `CFRelease`. Do not call `CFRelease` on the raw
     /// pointer after calling this.
+    ///
+    /// Currently only exercised by tests and by synthetic `AXRef` construction
+    /// in the session tests; the production tree-walk uses `from_get`. Kept
+    /// as part of the symmetric create/get API contract.
+    #[allow(dead_code)]
     pub(crate) unsafe fn from_create(raw: AXUIElementRef) -> Self {
         AXRef(Arc::new(AXRefInner(raw)))
     }
@@ -125,7 +130,7 @@ impl AXRef {
     /// Access the raw `AXUIElementRef` for FFI. The `AXRef` must outlive the
     /// borrow — the lifetime is bound to `&self`.
     pub(crate) fn as_raw(&self) -> AXUIElementRef {
-        self.0.0
+        self.0 .0
     }
 }
 
@@ -287,7 +292,9 @@ unsafe fn get_position_and_size(element: AXUIElementRef) -> Option<(CGPoint, CGS
 /// Read position + size from an AX element and return a `Rect`. Returns
 /// `None` when either attribute is unreadable. The raw pointer must refer to
 /// a live, retained `AXUIElement`.
-pub(crate) unsafe fn element_bbox(element: AXUIElementRef) -> Option<crate::tools::ax_snapshot::Rect> {
+pub(crate) unsafe fn element_bbox(
+    element: AXUIElementRef,
+) -> Option<crate::tools::ax_snapshot::Rect> {
     let (pos, size) = get_position_and_size(element)?;
     Some(crate::tools::ax_snapshot::Rect {
         x: pos.x,
@@ -336,8 +343,7 @@ impl AXDispatchError {
 /// Perform `kAXPressAction` on an element. Returns `Ok(())` on success.
 pub fn press_element(element: &AXRef) -> Result<(), AXDispatchError> {
     let action = CFString::new("AXPress");
-    let code =
-        unsafe { AXUIElementPerformAction(element.as_raw(), action.as_concrete_TypeRef()) };
+    let code = unsafe { AXUIElementPerformAction(element.as_raw(), action.as_concrete_TypeRef()) };
     match AXDispatchError::from_press_code(code) {
         None => Ok(()),
         Some(e) => Err(e),
@@ -848,14 +854,7 @@ unsafe fn collect_ax_tree_recursive(
         for i in 0..children.len() {
             let child = *children.get_unchecked(i) as AXUIElementRef;
             core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
-            collect_ax_tree_recursive(
-                child,
-                element_count,
-                depth + 1,
-                next_uid,
-                nodes,
-                refs,
-            );
+            collect_ax_tree_recursive(child, element_count, depth + 1, next_uid, nodes, refs);
             core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
         }
     }
@@ -1013,7 +1012,7 @@ mod tests {
     #[test]
     fn ax_dispatch_error_from_press_code() {
         // kAXErrorSuccess
-        assert!(matches!(AXDispatchError::from_press_code(0), None));
+        assert!(AXDispatchError::from_press_code(0).is_none());
         // kAXErrorActionUnsupported = -25206
         assert!(matches!(
             AXDispatchError::from_press_code(-25206),
@@ -1029,7 +1028,7 @@ mod tests {
     #[test]
     fn ax_dispatch_error_from_set_value_code() {
         // Success
-        assert!(matches!(AXDispatchError::from_set_value_code(0), None));
+        assert!(AXDispatchError::from_set_value_code(0).is_none());
         // kAXErrorAttributeUnsupported = -25205
         assert!(matches!(
             AXDispatchError::from_set_value_code(-25205),
@@ -1064,7 +1063,9 @@ mod tests {
             .find(|n| n.name.as_deref() == Some("5"))
             .expect("Calculator should expose a '5' button");
 
-        let r = refs.get(&five.uid).expect("refs map must contain every uid");
+        let r = refs
+            .get(&five.uid)
+            .expect("refs map must contain every uid");
         let bbox =
             unsafe { element_bbox(r.as_raw()) }.expect("5 button should expose position + size");
         assert!(bbox.w > 0.0);
@@ -1101,7 +1102,7 @@ mod tests {
         }
         let before = unsafe { CFGetRetainCount(raw) };
         assert!(
-            before >= 2 && before < isize::MAX,
+            (2..isize::MAX).contains(&before),
             "expected a finite retain count >= 2, got {before} — CFData should be heap-allocated"
         );
 
@@ -1137,11 +1138,7 @@ mod tests {
         let before_get = unsafe { CFGetRetainCount(raw) };
         let aref2 = unsafe { super::AXRef::from_get(raw as *mut _) };
         let during_get = unsafe { CFGetRetainCount(raw) };
-        assert_eq!(
-            during_get,
-            before_get + 1,
-            "from_get must CFRetain once"
-        );
+        assert_eq!(during_get, before_get + 1, "from_get must CFRetain once");
         drop(aref2);
         let after_get_drop = unsafe { CFGetRetainCount(raw) };
         assert_eq!(

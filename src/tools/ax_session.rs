@@ -58,6 +58,10 @@ impl AxSession {
         }
     }
 
+    /// Peek the current generation without taking a read lock on the snapshot.
+    /// Returns `None` until the first snapshot has been created. Currently
+    /// exercised only by tests; kept public for observability/debugging.
+    #[allow(dead_code)]
     pub async fn current_generation(&self) -> Option<u64> {
         self.current.read().await.as_ref().map(|s| s.generation)
     }
