@@ -86,8 +86,11 @@ fn default_click_count() -> u32 {
 }
 
 /// Identifier for the one concrete coordinate variant resolved for a click.
-/// Each variant corresponds to a branch of the `click` tool's `oneOf`
-/// JSON schema.
+///
+/// The schema exposes all variant fields as optional top-level properties
+/// (required because Anthropic's tool-use API rejects top-level `oneOf`).
+/// [`select_click_variant`] enforces the "exactly one variant" contract at
+/// runtime from the submitted params.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClickVariant {
     /// Screen-space (x, y).
@@ -111,15 +114,14 @@ impl ClickVariant {
     }
 }
 
-/// Select exactly one coordinate variant from the submitted params, enforcing
-/// the `oneOf` contract the MCP schema advertises. Returns the matched
-/// variant or a descriptive error message naming what went wrong.
+/// Select exactly one coordinate variant from the submitted params. Returns
+/// the matched variant or a descriptive error message naming what went wrong.
 ///
 /// A valid call has every required field of exactly one variant set and no
-/// field from any other variant set. This protects us from clients that
-/// don't validate schemas: a payload mixing `x`/`y` with screenshot fields
-/// used to silently pick the first fully-populated branch; it now fails
-/// fast with a clear message.
+/// field from any other variant set. The schema cannot enforce this (top-level
+/// `oneOf` is rejected by Anthropic's tool-use API), so this runtime check is
+/// the single source of truth: a payload mixing `x`/`y` with screenshot fields
+/// fails fast with a clear message instead of silently picking a branch.
 ///
 /// Pure function — no I/O.
 fn select_click_variant(params: &ClickParams) -> Result<ClickVariant, String> {
