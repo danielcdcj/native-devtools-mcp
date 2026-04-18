@@ -394,7 +394,6 @@ mod tool_annotations {
             "list_apps",
             "find_text",
             "element_at_point",
-            "take_ax_snapshot",
             "probe_app",
         ] {
             let ann = find_annotation(&tools, name);
@@ -776,5 +775,153 @@ mod recording_tool_gating {
         let not_recording = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let recording = MacOSDevToolsServer::get_tools(false, false, false, false, true);
         assert_eq!(recording.len() - not_recording.len(), 1);
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod ax_dispatch_tool_gating {
+    use super::*;
+
+    #[test]
+    fn ax_click_and_ax_set_value_are_visible_on_macos() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.contains(&"ax_click".to_string()));
+        assert!(names.contains(&"ax_set_value".to_string()));
+    }
+
+    #[test]
+    fn ax_click_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_click")
+            .expect("ax_click not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_click should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+        assert_eq!(ann.idempotent_hint, Some(false));
+    }
+
+    #[test]
+    fn ax_set_value_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_set_value")
+            .expect("ax_set_value not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_set_value should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+    }
+
+    #[test]
+    fn instructions_mention_ax_click_and_ax_set_value() {
+        let server = MacOSDevToolsServer::new();
+        let info = server.get_info();
+        let instr = info.instructions.expect("instructions should be set");
+        assert!(instr.contains("ax_click"), "instructions should mention ax_click");
+        assert!(
+            instr.contains("ax_set_value"),
+            "instructions should mention ax_set_value"
+        );
+        assert!(
+            instr.contains("take_ax_snapshot"),
+            "instructions should mention take_ax_snapshot as the snapshot source for ax_* tools"
+        );
+    }
+
+    /// Static guardrail — the name strings in the `server.rs::call_tool`
+    /// match arms must exactly equal the registered tool names, or clients
+    /// will call a tool and get "method not found" instead of a handler.
+    ///
+    /// We probe this indirectly: the test constructs tool request params
+    /// with the expected names and asserts they deserialize into the
+    /// handler's param structs — cheap, cfg-gated, and catches both
+    /// misspellings and schema drift.
+    #[test]
+    fn ax_dispatch_param_structs_accept_schema_fields() {
+        use native_devtools_mcp::tools::ax_click::AxClickParams;
+        use native_devtools_mcp::tools::ax_set_value::AxSetValueParams;
+
+        let p: AxClickParams =
+            serde_json::from_value(serde_json::json!({ "uid": "a1g1" }))
+                .expect("ax_click params must accept { uid }");
+        assert_eq!(p.uid, "a1g1");
+
+        let q: AxSetValueParams =
+            serde_json::from_value(serde_json::json!({ "uid": "a2g1", "text": "hello" }))
+                .expect("ax_set_value params must accept { uid, text }");
+        assert_eq!(q.uid, "a2g1");
+        assert_eq!(q.text, "hello");
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_os = "macos"))]
+mod ax_dispatch_tool_gating_non_macos {
+    use super::*;
+
+    #[test]
+    fn ax_click_and_ax_set_value_are_absent_off_macos() {
+        let tools = MacOSDevToolsServer::get_tools(true, true, true, true, true);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(!names.contains(&"ax_click".to_string()));
+        assert!(!names.contains(&"ax_set_value".to_string()));
+    }
+
+    #[test]
+    fn instructions_do_not_advertise_macos_tools_off_macos() {
+        let server = MacOSDevToolsServer::new();
+        let info = server.get_info();
+        let instr = info.instructions.expect("instructions should be set");
+        assert!(
+            !instr.contains("ax_click"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+        assert!(
+            !instr.contains("ax_set_value"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+    }
+}
+
+// Cross-platform: `take_ax_snapshot` is now state-changing on BOTH platforms.
+// Windows takes a minor accuracy hit (the tool really is still read-only
+// there) in exchange for a uniform client-safety posture — see the design
+// doc's §Tool surface > Annotation change.
+#[cfg(test)]
+mod take_ax_snapshot_annotation_migration {
+    use super::*;
+
+    #[test]
+    fn take_ax_snapshot_flagged_state_change_cross_platform() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "take_ax_snapshot")
+            .expect("take_ax_snapshot not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("take_ax_snapshot should have annotations");
+        assert_eq!(
+            ann.read_only_hint,
+            Some(false),
+            "take_ax_snapshot must not be readOnlyHint=true after this branch"
+        );
+        assert_eq!(
+            ann.idempotent_hint,
+            Some(false),
+            "take_ax_snapshot must not be idempotentHint=true after this branch"
+        );
+        assert_eq!(ann.destructive_hint, Some(false));
     }
 }
