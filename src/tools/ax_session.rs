@@ -68,9 +68,18 @@ impl AxSession {
 
     /// Install a fresh snapshot with the given refs map. Returns the assigned
     /// generation. Drops the prior snapshot (releasing every AXRef in it).
+    ///
+    /// Generation assignment happens **inside** the write lock so concurrent
+    /// callers cannot interleave a fetched-but-unpublished generation with a
+    /// write from a later-started call. Without this, two concurrent snapshots
+    /// could fetch `g=N` and `g=N+1` before either acquires the lock, and the
+    /// one that acquires the lock second (regardless of which fetched which)
+    /// would overwrite the newer snapshot — making `current.generation` appear
+    /// to move backward and silently invalidating the uids just returned to
+    /// the later caller.
     pub async fn create_snapshot(&self, refs: HashMap<u32, AXRef>) -> u64 {
-        let generation = self.next_generation.fetch_add(1, Ordering::SeqCst);
         let mut guard = self.current.write().await;
+        let generation = self.next_generation.fetch_add(1, Ordering::SeqCst);
         *guard = Some(AxSnapshot { generation, refs });
         generation
     }
@@ -82,6 +91,13 @@ impl AxSession {
     /// * Generation mismatch → `SnapshotExpired`.
     /// * Index missing from current refs → `UidNotFound`.
     /// * Otherwise → `Ok(AXRef)` (Arc-cloned handle; cheap).
+    ///
+    /// Use `dispatch` for the hot path — it holds the read lock across the
+    /// dispatch closure so a concurrent `create_snapshot` cannot publish a
+    /// fresh generation mid-dispatch. `lookup` is retained for tests and
+    /// non-dispatch callers (e.g. diagnostic tools that only want to check
+    /// whether a uid resolves).
+    #[allow(dead_code)]
     pub async fn lookup(&self, uid: &str) -> Result<AXRef, LookupError> {
         let Some((n, gen)) = parse_uid(uid) else {
             return Err(LookupError::SnapshotExpired {
@@ -107,6 +123,45 @@ impl AxSession {
             .get(&n)
             .cloned()
             .ok_or(LookupError::UidNotFound)
+    }
+
+    /// Resolve `uid` and invoke `f` against the matching `AXRef` while holding
+    /// the read lock. This pins the session generation for the duration of `f`
+    /// — a concurrent `create_snapshot` cannot publish a fresh generation until
+    /// every in-flight dispatch has returned.
+    ///
+    /// The closure runs under a read lock, so multiple dispatches can proceed
+    /// in parallel; only a pending write (snapshot install) is blocked. The
+    /// write is blocked only for the duration of the longest in-flight FFI
+    /// call, which is the invariant we want — any dispatch that has already
+    /// passed the generation check must complete before the generation rolls
+    /// forward, otherwise the `"fresh snapshot invalidates prior uids"`
+    /// contract is not actually atomic.
+    pub async fn dispatch<F, R>(&self, uid: &str, f: F) -> Result<R, LookupError>
+    where
+        F: FnOnce(&AXRef) -> R,
+    {
+        let Some((n, gen)) = parse_uid(uid) else {
+            return Err(LookupError::SnapshotExpired {
+                reason: format!("uid must match a<N>g<gen>; got: {}", uid),
+            });
+        };
+        let guard = self.current.read().await;
+        let Some(snapshot) = guard.as_ref() else {
+            return Err(LookupError::SnapshotExpired {
+                reason: "no take_ax_snapshot has been called on this server".to_string(),
+            });
+        };
+        if snapshot.generation != gen {
+            return Err(LookupError::SnapshotExpired {
+                reason: format!(
+                    "uid generation g{} does not match current g{}",
+                    gen, snapshot.generation
+                ),
+            });
+        }
+        let ax_ref = snapshot.refs.get(&n).ok_or(LookupError::UidNotFound)?;
+        Ok(f(ax_ref))
     }
 }
 
@@ -264,6 +319,131 @@ mod tests {
             looked_up.is_ok(),
             "populated uid should resolve (got {:?})",
             looked_up
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_snapshot_creates_produce_monotonic_generations() {
+        use std::sync::Arc;
+
+        let session = Arc::new(AxSession::new());
+
+        // Spawn N concurrent create_snapshot calls. Each returns the generation
+        // it was assigned; the final `current_generation()` must equal the
+        // maximum of those returned generations — i.e. the "last writer" also
+        // had the highest generation. Without the fetch_add-inside-lock fix in
+        // create_snapshot, a later-started call could publish a lower gen and
+        // this invariant would fail intermittently.
+        let n = 32;
+        let mut handles = Vec::with_capacity(n);
+        for _ in 0..n {
+            let s = session.clone();
+            handles.push(tokio::spawn(async move {
+                s.create_snapshot(HashMap::new()).await
+            }));
+        }
+
+        let mut generations = Vec::with_capacity(n);
+        for h in handles {
+            generations.push(h.await.expect("task should not panic"));
+        }
+
+        let max_returned = *generations.iter().max().expect("at least one");
+        let current = session
+            .current_generation()
+            .await
+            .expect("session has a snapshot");
+        assert_eq!(
+            current, max_returned,
+            "final current_generation must match the highest returned generation; \
+             otherwise a late create_snapshot overwrote with a lower gen. \
+             returned={:?} current={}",
+            generations, current
+        );
+
+        // Also verify generations form a contiguous range starting at 1 — this
+        // is the monotonicity + no-gaps property the session promises.
+        let mut sorted = generations.clone();
+        sorted.sort_unstable();
+        let expected: Vec<u64> = (1..=(n as u64)).collect();
+        assert_eq!(sorted, expected, "generations should be 1..=N without gaps");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dispatch_blocks_concurrent_snapshot_from_invalidating_mid_call() {
+        use core_foundation::base::{CFRetain, CFTypeRef, TCFType};
+        use core_foundation::data::CFData;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        let d = CFData::from_buffer(&[1u8, 1, 2, 3, 5, 8, 13, 21]);
+        let raw: CFTypeRef = d.as_concrete_TypeRef() as CFTypeRef;
+        unsafe {
+            CFRetain(raw);
+        }
+        let aref = unsafe { AXRef::from_create(raw as *mut _) };
+
+        let mut refs = HashMap::new();
+        refs.insert(7u32, aref);
+
+        let session = Arc::new(AxSession::new());
+        let gen = session.create_snapshot(refs).await;
+        let uid = format!("a7g{}", gen);
+
+        // Spawn a dispatch that deliberately holds the closure for 50ms. The
+        // generation the closure observes via the captured AXRef must remain
+        // valid for the full duration — a concurrent create_snapshot cannot
+        // advance generation until dispatch returns.
+        let s1 = session.clone();
+        let u1 = uid.clone();
+        let dispatch_handle = tokio::spawn(async move {
+            s1.dispatch(&u1, |_ax_ref| {
+                // Simulate FFI work under the read lock. The write-lock
+                // acquirer (create_snapshot below) must wait for this closure
+                // to return before it can install a new generation.
+                std::thread::sleep(Duration::from_millis(50));
+                "dispatched"
+            })
+            .await
+        });
+
+        // Give dispatch a moment to acquire the read lock.
+        sleep(Duration::from_millis(10)).await;
+
+        // Now race a fresh snapshot. It must be observably blocked by the
+        // in-flight dispatch — we measure its start-to-finish time and
+        // assert it took at least most of the dispatch's sleep duration.
+        let s2 = session.clone();
+        let snap_start = std::time::Instant::now();
+        let new_gen = s2.create_snapshot(HashMap::new()).await;
+        let snap_elapsed = snap_start.elapsed();
+
+        // Dispatch should still have completed successfully — the read lock
+        // was held long enough for the dispatch closure to run to completion.
+        let dispatch_result = dispatch_handle
+            .await
+            .expect("dispatch task should not panic");
+        assert_eq!(dispatch_result, Ok("dispatched"));
+
+        // The snapshot was issued ~10ms after dispatch acquired its read lock
+        // and dispatch sleeps for 50ms, so the snapshot must have waited at
+        // least ~30ms before acquiring the write lock. A generous floor
+        // avoids flakiness while still proving the write was serialised
+        // behind the read.
+        assert!(
+            snap_elapsed >= Duration::from_millis(25),
+            "concurrent create_snapshot should have blocked on the in-flight dispatch's read lock; \
+             observed elapsed = {:?}",
+            snap_elapsed
+        );
+
+        // New generation is strictly greater than the one dispatch observed.
+        assert!(
+            new_gen > gen,
+            "post-dispatch snapshot should have advanced generation ({} > {})",
+            new_gen,
+            gen
         );
     }
 
