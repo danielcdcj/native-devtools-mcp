@@ -135,6 +135,7 @@ pub fn convert_cdp_ax_tree(
             expanded,
             selected,
             depth,
+            bbox: None,
         });
 
         // Push children in reverse order so the first child is processed first.

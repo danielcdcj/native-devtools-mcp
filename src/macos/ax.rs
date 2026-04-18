@@ -682,6 +682,7 @@ unsafe fn collect_ax_tree_recursive(
         expanded,
         selected,
         depth,
+        bbox: None,
     });
 
     if let Some(children) = get_ax_children(element) {
