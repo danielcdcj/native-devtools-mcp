@@ -17,6 +17,8 @@ For robust automation, follow this "Visual Feedback Loop":
 3.  **ACT:** Call `click()`, `type_text()`, or `scroll()` using those coordinates.
 4.  **VERIFY:** Call `take_screenshot` again to confirm the action had the intended effect.
 
+**macOS-preferred branch (native apps):** substitute OBSERVE with `take_ax_snapshot(app_name='...')`; LOCATE reads uid + bbox from the emitted tree; ACT calls `ax_click(uid)` or `ax_set_value(uid, text)`; VERIFY re-snapshots and reads the new state. This branch does not move the cursor or steal focus, so it composes with background work.
+
 ---
 
 ## 🗺️ Capabilities Matrix (Strategy Guide)
@@ -35,6 +37,9 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Record what the user does" | `start_recording(output_dir="/tmp/rec")` → user interacts → `stop_recording()` | Captures frontmost app at ~5fps as JPEG frames. |
 | "Launch Safari with debug port" | `launch_app(app_name="Safari", args=["--remote-debugging-port=9222"])` | Pass CLI args on fresh launch. |
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
+| "Click a named button in a native app (macOS)" | `take_ax_snapshot` → `ax_click(uid)` | Focus-preserving. Generation-tagged uids; fresh snapshot invalidates prior uids. |
+| "Enter text into a text field via value assignment (macOS)" | `take_ax_snapshot` → `ax_set_value(uid, text)` | No key events, no IME, no undo-stack entry. Fall back to `click` + `type_text` on `not_dispatchable`. |
+| "AX snapshot invalidation rule (macOS)" | — | Every `take_ax_snapshot` call bumps the generation. All prior uids become stale; `ax_*` tools return `snapshot_expired`. |
 | "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_ax_snapshot()` → `cdp_click(uid="a42")` | CDP is more reliable than coordinates for web content. |
 | "Type in a web input" | `cdp_take_ax_snapshot()` → `cdp_fill(uid="a42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
 | "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
@@ -49,6 +54,17 @@ Use this table to choose the right tool sequence for the user's goal.
 ## 🛠️ Tool Definitions & Schemas
 
 ### 1. Vision & Perception (The "Eyes")
+
+#### `take_ax_snapshot` (cross-platform with macOS session semantics)
+
+**Purpose:** Return a structured text snapshot of an app's accessibility tree with per-element uids, roles, names, state attributes, and (on macOS) bounding boxes.
+
+**Schema:**
+- `app_name: string` (optional) — target app; defaults to frontmost.
+
+**macOS session state:** on macOS this tool is no longer a pure read — it writes session state. Every call bumps a monotonic generation and replaces the server's cached map of `AXUIElement` handles. Uids are emitted as `a<N>g<gen>` (e.g. `a42g3`). All uids from prior snapshots become stale for `ax_click` / `ax_set_value` consumption (return `snapshot_expired`). Windows behavior is unchanged — no session, uids stay bare `a<N>`.
+
+**Usage pattern (macOS):** snapshot immediately before each `ax_click` / `ax_set_value` call to avoid `snapshot_expired`. Every branch or retry starts with a fresh snapshot.
 
 #### `take_screenshot`
 Captures pixel data and layout.
@@ -121,6 +137,39 @@ Simulates a mouse click.
 Types text at the *current* cursor position.
 *   **Inputs:** `text` (string).
 *   **Warning:** Always `click()` the input field first to ensure focus!
+
+#### `ax_click` (macOS only)
+
+**Purpose:** Press a button identified by its AX uid, without stealing cursor focus.
+
+**Schema:**
+- `uid: string` — generation-tagged uid from the most recent `take_ax_snapshot`, e.g. `"a42g3"`.
+
+**Response:**
+- Success: `{ "ok": true, "dispatched_via": "AXPress", "bbox": { "x", "y", "w", "h" } }`.
+- Error: `CallToolResult::error` with JSON body `{ "error": { "code", "message", "fallback": { "x", "y" } | null } }`. Codes: `snapshot_expired`, `uid_not_found`, `not_dispatchable`, `ax_error`.
+
+**Gotchas:**
+- Any fresh `take_ax_snapshot` invalidates every prior uid — snapshot immediately before calling.
+- When `fallback` is populated on `not_dispatchable`, retry via `click(fallback.x, fallback.y)`.
+
+#### `ax_set_value` (macOS only)
+
+**Purpose:** Write to an element's `kAXValueAttribute`. Value assignment, **not** keystroke typing.
+
+**Schema:**
+- `uid: string` — generation-tagged uid.
+- `text: string` — value to assign.
+
+**Response:** same shape as `ax_click`, with `"dispatched_via": "AXSetAttributeValue"`.
+
+**Limits:**
+- Bypasses key events (no `keydown`/`keyup` observed by apps).
+- Does not participate in IME / composition.
+- Does not populate the app's undo stack.
+- Only works on elements that expose a writable `kAXValueAttribute` (e.g. `AXTextField`, `AXTextArea`, `AXSearchField`).
+
+**Fallback on `not_dispatchable`:** perform `click(fallback.x, fallback.y)` to focus, then `type_text(text)` for true key-event input.
 
 #### `scroll`
 Scrolls at a specific screen position.
