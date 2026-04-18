@@ -94,11 +94,13 @@ impl AxSession {
     ///
     /// Use `dispatch` for the hot path — it holds the read lock across the
     /// dispatch closure so a concurrent `create_snapshot` cannot publish a
-    /// fresh generation mid-dispatch. `lookup` is retained for tests and
-    /// non-dispatch callers (e.g. diagnostic tools that only want to check
-    /// whether a uid resolves).
+    /// fresh generation mid-dispatch. `lookup` is narrowed to crate-internal
+    /// visibility so external Rust consumers cannot recreate the
+    /// lookup-then-dispatch race that `dispatch` was introduced to close;
+    /// intra-crate callers keep access for tests and diagnostic paths that
+    /// only want to check whether a uid resolves.
     #[allow(dead_code)]
-    pub async fn lookup(&self, uid: &str) -> Result<AXRef, LookupError> {
+    pub(crate) async fn lookup(&self, uid: &str) -> Result<AXRef, LookupError> {
         let Some((n, gen)) = parse_uid(uid) else {
             return Err(LookupError::SnapshotExpired {
                 reason: format!("uid must match a<N>g<gen>; got: {}", uid),

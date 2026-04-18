@@ -341,7 +341,12 @@ impl AXDispatchError {
 }
 
 /// Perform `kAXPressAction` on an element. Returns `Ok(())` on success.
-pub fn press_element(element: &AXRef) -> Result<(), AXDispatchError> {
+///
+/// Narrowed to `pub(crate)` so external Rust consumers cannot combine it
+/// with `AxSession::lookup` to recreate the lookup-then-dispatch race that
+/// `AxSession::dispatch` exists to close. The blessed entry point for
+/// dispatch is the session-pinned `dispatch` method.
+pub(crate) fn press_element(element: &AXRef) -> Result<(), AXDispatchError> {
     let action = CFString::new("AXPress");
     let code = unsafe { AXUIElementPerformAction(element.as_raw(), action.as_concrete_TypeRef()) };
     match AXDispatchError::from_press_code(code) {
@@ -357,7 +362,11 @@ pub fn press_element(element: &AXRef) -> Result<(), AXDispatchError> {
 /// observe keydown/keyup, does not see IME composition events, and does not
 /// record the change on its undo stack. Elements whose role does not expose
 /// a writable `kAXValueAttribute` return `NotDispatchable`.
-pub fn set_value_attribute(element: &AXRef, text: &str) -> Result<(), AXDispatchError> {
+///
+/// Narrowed to `pub(crate)` so external Rust consumers cannot combine it
+/// with `AxSession::lookup` to recreate the lookup-then-dispatch race that
+/// `AxSession::dispatch` exists to close.
+pub(crate) fn set_value_attribute(element: &AXRef, text: &str) -> Result<(), AXDispatchError> {
     let attr = CFString::new("AXValue");
     let value = CFString::new(text);
     let code = unsafe {
