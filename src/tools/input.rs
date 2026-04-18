@@ -7,8 +7,13 @@ use crate::platform::{display, input, ocr};
 use rmcp::model::{CallToolResult, Content};
 use serde::Deserialize;
 
-/// Check accessibility permission and return appropriate error if not granted.
-fn check_permission() -> Option<CallToolResult> {
+/// Check accessibility permission and return a standardized plain-text error
+/// result if not granted. Returns `None` when permission is available.
+///
+/// Shared between the coord-based input tools (`click`, `type_text`, …) and
+/// the macOS AX dispatch tools (`ax_click`, `ax_set_value`) so all user-facing
+/// permission messages are identical.
+pub(crate) fn check_permission() -> Option<CallToolResult> {
     if !input::check_accessibility_permission() {
         #[cfg(target_os = "macos")]
         let msg = "Accessibility permission required.\n\n\
