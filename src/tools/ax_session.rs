@@ -1,7 +1,17 @@
-//! macOS AX element session cache. See task comment — `AXRef` binding lands in Task 3.
+//! macOS AX element session cache.
+//!
+//! Owns the most recent `take_ax_snapshot` result on macOS. Each snapshot
+//! carries a monotonic generation number and a map of retained `AXUIElement`
+//! handles keyed by the numeric uid index. Uids are strings of the form
+//! `"a<N>g<gen>"` — `ax_click` and `ax_set_value` parse them, check the
+//! generation against the current snapshot, and reject stale uids by
+//! construction.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::RwLock;
+
+use crate::macos::ax::AXRef;
 
 /// Reason a uid could not be resolved to a live element.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +36,7 @@ pub fn parse_uid(s: &str) -> Option<(u32, u64)> {
 
 pub struct AxSnapshot {
     pub generation: u64,
-    // refs: HashMap<u32, AXRef> — added in Task 3 after AXRef lands in macos::ax
+    pub refs: HashMap<u32, AXRef>,
 }
 
 pub struct AxSession {

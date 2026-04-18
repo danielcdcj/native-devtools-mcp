@@ -15,6 +15,7 @@ use objc::runtime::{Class, Object};
 use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Arc;
 
 // AXUIElement opaque type
 type AXUIElementRef = *mut c_void;
@@ -57,6 +58,65 @@ extern "C" {
         element: *mut AXUIElementRef,
     ) -> i32;
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
+}
+
+/// Retained, thread-safe handle to an `AXUIElement`.
+///
+/// The raw `AXUIElementRef` (`*mut c_void`) is not `Send`/`Sync` by default,
+/// but Apple documents the Accessibility API as safe to invoke from any
+/// thread, and `CFRetain` / `CFRelease` are atomic. Cross-thread sharing is
+/// real under the post-round-1 ownership model: `AXRef`s live inside
+/// `AxSession.current: RwLock<Option<AxSnapshot>>`, held on
+/// `MacOSDevToolsServer` as `ax_session: Arc<AxSession>`, and
+/// `ServerHandler::call_tool` runs on the tokio multi-threaded runtime with
+/// `&self`. Any tool call can read the session concurrently; `take_ax_snapshot`
+/// writes it under the write half of the lock. The outer `Arc` makes clones
+/// free (no `CFRetain` per handoff); the inner `Drop` preserves single-
+/// `CFRelease` per retained element.
+#[derive(Clone)]
+pub struct AXRef(Arc<AXRefInner>);
+
+struct AXRefInner(AXUIElementRef);
+
+// SAFETY: see docs on `AXRef`. Apple's AX API is documented thread-safe;
+// CFRetain/CFRelease are atomic.
+unsafe impl Send for AXRefInner {}
+unsafe impl Sync for AXRefInner {}
+
+impl Drop for AXRefInner {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                core_foundation::base::CFRelease(self.0 as core_foundation::base::CFTypeRef);
+            }
+        }
+    }
+}
+
+impl AXRef {
+    /// Wrap a raw `AXUIElementRef` under the **create rule**: caller already
+    /// holds a +1 refcount and transfers ownership to the `AXRef`. Drop will
+    /// balance with a single `CFRelease`. Do not call `CFRelease` on the raw
+    /// pointer after calling this.
+    pub(crate) unsafe fn from_create(raw: AXUIElementRef) -> Self {
+        AXRef(Arc::new(AXRefInner(raw)))
+    }
+
+    /// Wrap a raw `AXUIElementRef` under the **get rule**: the caller holds a
+    /// borrowed reference. This function calls `CFRetain` to take ownership,
+    /// and Drop will balance with `CFRelease`.
+    pub(crate) unsafe fn from_get(raw: AXUIElementRef) -> Self {
+        if !raw.is_null() {
+            core_foundation::base::CFRetain(raw as core_foundation::base::CFTypeRef);
+        }
+        AXRef(Arc::new(AXRefInner(raw)))
+    }
+
+    /// Access the raw `AXUIElementRef` for FFI. The `AXRef` must outlive the
+    /// borrow — the lifetime is bound to `&self`.
+    pub(crate) fn as_raw(&self) -> AXUIElementRef {
+        self.0.0
+    }
 }
 
 /// Find text in UI elements of an app's accessibility tree.
@@ -839,5 +899,77 @@ mod tests {
         );
 
         assert!(result.get("role").is_some(), "Should have a role");
+    }
+
+    /// `AXRef::from_create` must NOT CFRetain (caller already owns a +1); Drop
+    /// must CFRelease exactly once. `AXRef::from_get` must CFRetain (caller
+    /// holds a borrowed reference); Drop must CFRelease exactly once. Cloning
+    /// does not touch CFRetain/CFRelease (the inner Arc does the work).
+    ///
+    /// We verify by wrapping a `CFData` (heap-allocated — short `CFString`s
+    /// can be optimized as tagged pointers with `retain_count = i64::MAX`,
+    /// which makes the observable arithmetic meaningless). Retain/release
+    /// are defined at the CFType layer so any heap-allocated CF type works.
+    #[test]
+    fn test_ax_ref_retain_release_balance_against_cfdata() {
+        use core_foundation::base::{CFGetRetainCount, CFRetain, CFTypeRef, TCFType};
+        use core_foundation::data::CFData;
+
+        let d = CFData::from_buffer(&[1u8, 2, 3, 4, 5, 6, 7, 8]);
+        let raw: CFTypeRef = d.as_concrete_TypeRef() as CFTypeRef;
+        // Bump to +2 so we can observe `from_create` NOT adding another retain
+        // and the final Drop balancing it cleanly.
+        unsafe {
+            CFRetain(raw);
+        }
+        let before = unsafe { CFGetRetainCount(raw) };
+        assert!(
+            before >= 2 && before < isize::MAX,
+            "expected a finite retain count >= 2, got {before} — CFData should be heap-allocated"
+        );
+
+        // `from_create` transfers the +1 we just added — no extra retain.
+        let aref = unsafe { super::AXRef::from_create(raw as *mut _) };
+        let during = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(
+            during, before,
+            "from_create must not CFRetain — transfer ownership of existing +1"
+        );
+
+        // Clone is Arc-level — no extra CFRetain.
+        let clone = aref.clone();
+        let during2 = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(during2, before, "Arc clone must not touch CFRetain");
+
+        drop(clone);
+        let after_clone_drop = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(
+            after_clone_drop, before,
+            "dropping a clone while other Arcs live must not CFRelease"
+        );
+
+        drop(aref);
+        let after_last_drop = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(
+            after_last_drop,
+            before - 1,
+            "final Drop must CFRelease exactly once (count {before} -> {after_last_drop})"
+        );
+
+        // And `from_get` must CFRetain on construction.
+        let before_get = unsafe { CFGetRetainCount(raw) };
+        let aref2 = unsafe { super::AXRef::from_get(raw as *mut _) };
+        let during_get = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(
+            during_get,
+            before_get + 1,
+            "from_get must CFRetain once"
+        );
+        drop(aref2);
+        let after_get_drop = unsafe { CFGetRetainCount(raw) };
+        assert_eq!(
+            after_get_drop, before_get,
+            "from_get + drop must be net-zero"
+        );
     }
 }
