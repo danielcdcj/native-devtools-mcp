@@ -274,6 +274,19 @@ unsafe fn get_position_and_size(element: AXUIElementRef) -> Option<(CGPoint, CGS
     Some((position, size))
 }
 
+/// Read position + size from an AX element and return a `Rect`. Returns
+/// `None` when either attribute is unreadable. The raw pointer must refer to
+/// a live, retained `AXUIElement`.
+pub(crate) unsafe fn element_bbox(element: AXUIElementRef) -> Option<crate::tools::ax_snapshot::Rect> {
+    let (pos, size) = get_position_and_size(element)?;
+    Some(crate::tools::ax_snapshot::Rect {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+    })
+}
+
 /// Extract a typed value (CGPoint or CGSize) from an AXValue attribute.
 unsafe fn get_ax_value<T: Default>(
     element: AXUIElementRef,
@@ -698,7 +711,8 @@ pub fn raise_windows(pid: i32) -> bool {
     }
 }
 
-/// Recursively walk the AX element tree and collect [`AXSnapshotNode`] entries.
+/// Recursively walk the AX element tree and collect [`AXSnapshotNode`] entries
+/// plus a `HashMap<uid, AXRef>` of retained handles.
 ///
 /// UIDs are assigned sequentially via `next_uid` (starts at 1).
 /// Traversal order is depth-first, matching `walk_ax_tree`.
@@ -708,6 +722,7 @@ unsafe fn collect_ax_tree_recursive(
     depth: u32,
     next_uid: &mut u32,
     nodes: &mut Vec<AXSnapshotNode>,
+    refs: &mut std::collections::HashMap<u32, AXRef>,
 ) {
     if depth > MAX_DEPTH || *element_count >= MAX_ELEMENTS {
         return;
@@ -731,6 +746,7 @@ unsafe fn collect_ax_tree_recursive(
         .unwrap_or(false);
     let expanded = get_bool_attribute(element, "AXExpanded");
     let selected = get_bool_attribute(element, "AXSelected");
+    let bbox = element_bbox(element);
 
     nodes.push(AXSnapshotNode {
         uid,
@@ -742,25 +758,40 @@ unsafe fn collect_ax_tree_recursive(
         expanded,
         selected,
         depth,
-        bbox: None,
+        bbox,
     });
+
+    // Retain under get-rule: the current `element` was obtained either from
+    // `AXUIElementCreateApplication` (owned, passed to us) or from the
+    // CFArray iteration below (which retains around recursion). Either way,
+    // `from_get` is the correct rule here since the caller still holds the
+    // owning reference for the duration of this visitor.
+    refs.insert(uid, AXRef::from_get(element));
 
     if let Some(children) = get_ax_children(element) {
         for i in 0..children.len() {
             let child = *children.get_unchecked(i) as AXUIElementRef;
             core_foundation::base::CFRetain(child as core_foundation::base::CFTypeRef);
-            collect_ax_tree_recursive(child, element_count, depth + 1, next_uid, nodes);
+            collect_ax_tree_recursive(
+                child,
+                element_count,
+                depth + 1,
+                next_uid,
+                nodes,
+                refs,
+            );
             core_foundation::base::CFRelease(child as core_foundation::base::CFTypeRef);
         }
     }
 }
 
-/// Walk the accessibility tree of an application and return a flat, depth-first
-/// snapshot of all elements as [`AXSnapshotNode`] values.
+/// Walk an application's AX tree and return flat nodes + a `HashMap<uid, AXRef>`.
 ///
-/// If `app_name` is `Some`, the tree is rooted at that application; otherwise
-/// the frontmost application is used.
-pub fn collect_ax_tree(app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, String> {
+/// The `AXRef` map is the source of truth for `AxSession` — each entry is a
+/// retained handle that stays live until the session swaps in a new snapshot.
+pub fn collect_ax_tree_indexed(
+    app_name: Option<&str>,
+) -> Result<(Vec<AXSnapshotNode>, std::collections::HashMap<u32, AXRef>), String> {
     let pid = match app_name {
         Some(name) => pid_for_app_name(name)?,
         None => frontmost_pid()?,
@@ -774,6 +805,7 @@ pub fn collect_ax_tree(app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, St
     let mut nodes = Vec::new();
     let mut element_count: usize = 0;
     let mut next_uid: u32 = 1;
+    let mut refs = std::collections::HashMap::new();
 
     unsafe {
         collect_ax_tree_recursive(
@@ -782,11 +814,12 @@ pub fn collect_ax_tree(app_name: Option<&str>) -> Result<Vec<AXSnapshotNode>, St
             0,
             &mut next_uid,
             &mut nodes,
+            &mut refs,
         );
         core_foundation::base::CFRelease(app_element as core_foundation::base::CFTypeRef);
     }
 
-    Ok(nodes)
+    Ok((nodes, refs))
 }
 
 #[cfg(test)]
@@ -899,6 +932,37 @@ mod tests {
         );
 
         assert!(result.get("role").is_some(), "Should have a role");
+    }
+
+    /// Calculator has well-known bbox attributes on its buttons. Smoke test that
+    /// `element_bbox` returns `Some` for the "5" button's AXRef and that the
+    /// dimensions look plausible (positive width/height).
+    #[test]
+    #[ignore]
+    fn test_element_bbox_calculator_five_button() {
+        // This test runs under `cargo test -- --ignored` and requires
+        // Calculator to be running.
+        let (nodes, refs) = collect_ax_tree_indexed(Some("Calculator"))
+            .expect("collect_ax_tree_indexed should succeed");
+
+        // Find the "5" button node.
+        let five = nodes
+            .iter()
+            .find(|n| n.name.as_deref() == Some("5"))
+            .expect("Calculator should expose a '5' button");
+
+        let r = refs.get(&five.uid).expect("refs map must contain every uid");
+        let bbox =
+            unsafe { element_bbox(r.as_raw()) }.expect("5 button should expose position + size");
+        assert!(bbox.w > 0.0);
+        assert!(bbox.h > 0.0);
+
+        // Node-level bbox should also be populated and match.
+        let node_bbox = five
+            .bbox
+            .expect("node bbox should be populated during walk");
+        assert!((node_bbox.x - bbox.x).abs() < 0.5);
+        assert!((node_bbox.y - bbox.y).abs() < 0.5);
     }
 
     /// `AXRef::from_create` must NOT CFRetain (caller already owns a +1); Drop

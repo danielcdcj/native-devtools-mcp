@@ -26,7 +26,9 @@ pub fn take_ax_snapshot(params: TakeAxSnapshotParams) -> Result<String, String> 
     let nodes = {
         #[cfg(target_os = "macos")]
         {
-            crate::macos::ax::collect_ax_tree(params.app_name.as_deref())?
+            let (nodes, _refs) =
+                crate::macos::ax::collect_ax_tree_indexed(params.app_name.as_deref())?;
+            nodes
         }
         #[cfg(target_os = "windows")]
         {
