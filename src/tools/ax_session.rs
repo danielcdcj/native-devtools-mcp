@@ -69,12 +69,6 @@ impl AxSession {
     /// Install a fresh snapshot with the given refs map. Returns the assigned
     /// generation. Drops the prior snapshot (releasing every AXRef in it).
     pub async fn create_snapshot(&self, refs: HashMap<u32, AXRef>) -> u64 {
-        self.create_snapshot_with_refs(refs).await
-    }
-
-    /// Test-friendly alias — same as `create_snapshot` but named to make
-    /// intent clear in tests that pass a pre-built map (possibly empty).
-    pub async fn create_snapshot_with_refs(&self, refs: HashMap<u32, AXRef>) -> u64 {
         let generation = self.next_generation.fetch_add(1, Ordering::SeqCst);
         let mut guard = self.current.write().await;
         *guard = Some(AxSnapshot { generation, refs });
@@ -211,11 +205,11 @@ mod tests {
     #[tokio::test]
     async fn create_snapshot_increments_generation_starting_at_one() {
         let s = AxSession::new();
-        let g1 = s.create_snapshot_with_refs(HashMap::new()).await;
+        let g1 = s.create_snapshot(HashMap::new()).await;
         assert_eq!(g1, 1);
         assert_eq!(s.current_generation().await, Some(1));
 
-        let g2 = s.create_snapshot_with_refs(HashMap::new()).await;
+        let g2 = s.create_snapshot(HashMap::new()).await;
         assert_eq!(g2, 2);
         assert_eq!(s.current_generation().await, Some(2));
     }
@@ -223,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn lookup_returns_uid_not_found_when_gen_matches_but_index_missing() {
         let s = AxSession::new();
-        let g = s.create_snapshot_with_refs(HashMap::new()).await;
+        let g = s.create_snapshot(HashMap::new()).await;
         assert_eq!(g, 1);
 
         let r = s.lookup("a99g1").await;
@@ -233,8 +227,8 @@ mod tests {
     #[tokio::test]
     async fn lookup_stale_gen_returns_snapshot_expired_not_uid_not_found() {
         let s = AxSession::new();
-        s.create_snapshot_with_refs(HashMap::new()).await; // gen 1
-        s.create_snapshot_with_refs(HashMap::new()).await; // gen 2
+        s.create_snapshot(HashMap::new()).await; // gen 1
+        s.create_snapshot(HashMap::new()).await; // gen 2
 
         let r = s.lookup("a1g1").await;
         match r {
@@ -262,7 +256,7 @@ mod tests {
         refs.insert(42u32, aref);
 
         let session = AxSession::new();
-        let gen = session.create_snapshot_with_refs(refs).await;
+        let gen = session.create_snapshot(refs).await;
 
         let uid = format!("a42g{}", gen);
         let looked_up = session.lookup(&uid).await;
@@ -290,7 +284,7 @@ mod tests {
         refs.insert(1u32, aref);
 
         let session = Arc::new(AxSession::new());
-        let gen = session.create_snapshot_with_refs(refs).await;
+        let gen = session.create_snapshot(refs).await;
         let uid = format!("a1g{}", gen);
 
         let mut handles = Vec::new();
