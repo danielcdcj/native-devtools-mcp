@@ -93,6 +93,12 @@ impl Drop for AXRefInner {
     }
 }
 
+impl std::fmt::Debug for AXRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AXRef({:p})", self.0.0)
+    }
+}
+
 impl AXRef {
     /// Wrap a raw `AXUIElementRef` under the **create rule**: caller already
     /// holds a +1 refcount and transfers ownership to the `AXRef`. Drop will
