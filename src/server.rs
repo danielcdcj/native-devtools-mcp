@@ -132,6 +132,8 @@ pub struct MacOSDevToolsServer {
     screen_recorder: Arc<RwLock<Option<crate::tools::screen_recorder::ScreenRecorder>>>,
     #[cfg(feature = "cdp")]
     cdp_client: Arc<RwLock<Option<crate::cdp::CdpClient>>>,
+    #[cfg(target_os = "macos")]
+    ax_session: Arc<crate::tools::ax_session::AxSession>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -151,6 +153,8 @@ impl MacOSDevToolsServer {
             screen_recorder: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cdp")]
             cdp_client: Arc::new(RwLock::new(None)),
+            #[cfg(target_os = "macos")]
+            ax_session: Arc::new(crate::tools::ax_session::AxSession::new()),
         }
     }
 
@@ -247,7 +251,6 @@ impl MacOSDevToolsServer {
                 "find_text",
                 "element_at_point",
                 "find_image",
-                "take_ax_snapshot",
                 "probe_app",
                 "android_list_devices",
                 "app_get_info",
@@ -301,6 +304,21 @@ impl MacOSDevToolsServer {
             annotate_state_change(),
         );
 
+        // take_ax_snapshot is now state-changing on both platforms (macOS bumps
+        // the session generation; Windows takes a small accuracy hit for
+        // uniform cross-platform posture — see design doc §Tool surface >
+        // Annotation change).
+        annotate_tools(tools, &["take_ax_snapshot"], annotate_state_change());
+
+        #[cfg(target_os = "macos")]
+        {
+            annotate_tools(
+                tools,
+                &["ax_click", "ax_set_value"],
+                annotate_state_change(),
+            );
+        }
+
         annotate_tools(tools, &["quit_app"], annotate_destructive());
 
         #[cfg(feature = "cdp")]
@@ -348,7 +366,8 @@ impl MacOSDevToolsServer {
 
     /// Tools that are always available (system tools, CGEvent tools, etc.)
     fn get_base_tools() -> Vec<Tool> {
-        vec![
+        #[allow(unused_mut)]
+        let mut tools = vec![
             Tool::new(
                 "take_screenshot",
                 "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded image, JSON metadata for coordinate conversion, and OCR text annotations including clickable coordinates.",
@@ -842,7 +861,15 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "take_ax_snapshot",
-                "Take an accessibility tree snapshot of an application. Returns a structured text representation with unique element IDs, roles, names, and state attributes. Works for any app without requiring a debug port.",
+                "Take an accessibility tree snapshot of an application. Returns a \
+                 structured text representation with unique element IDs, roles, names, \
+                 state attributes, and (on macOS) per-element bounding boxes. Works for \
+                 any app without requiring a debug port. \
+                 macOS note: this tool mutates server state — each call bumps a \
+                 monotonic generation and invalidates every prior uid for ax_click / \
+                 ax_set_value consumption. Snapshot IDs on macOS look like 'a42g3' \
+                 (generation-tagged); Windows IDs remain bare 'a42'. Re-snapshot \
+                 immediately before any ax_click / ax_set_value call.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -867,7 +894,66 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-        ]
+        ];
+        #[cfg(target_os = "macos")]
+        {
+            tools.push(Self::get_ax_click_tool());
+            tools.push(Self::get_ax_set_value_tool());
+        }
+        tools
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_click_tool() -> Tool {
+        Tool::new(
+            "ax_click",
+            "macOS only. Dispatch AXPress against a UI element identified by its uid \
+             from the most recent take_ax_snapshot (e.g. \"a42g3\"). The 'g<gen>' \
+             suffix is a generation tag — any fresh take_ax_snapshot invalidates all \
+             prior uids, so always snapshot immediately before the uid is used. Does \
+             not move the mouse cursor and does not steal focus from the frontmost \
+             app. On failure the tool returns an error whose JSON body includes \
+             { error: { code, message, fallback: { x, y } | null } }; when fallback is \
+             populated you can retry via click(x, y).",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot, e.g. \"a42g3\". Must match the current snapshot generation."
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_set_value_tool() -> Tool {
+        Tool::new(
+            "ax_set_value",
+            "macOS only. Write to an element's kAXValueAttribute — value assignment, \
+             not key-event typing. Use for AXTextField / AXTextArea / AXSearchField and \
+             similar text widgets. Does NOT fire keydown/keyup, does NOT participate in \
+             IME/composition, does NOT populate the app's undo stack, and will not work \
+             on rich editors that refuse AXValue writes. On not_dispatchable, the caller \
+             should fall back to a two-step sequence: click(fallback.x, fallback.y) to \
+             focus, then type_text(text) for key-event input.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid", "text"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot, e.g. \"a42g3\"."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to assign via kAXValueAttribute."
+                    }
+                }
+            }))),
+        )
     }
 
     /// The app_connect tool - always available to initiate connections
@@ -1695,6 +1781,70 @@ impl MacOSDevToolsServer {
 
 impl ServerHandler for MacOSDevToolsServer {
     fn get_info(&self) -> ServerInfo {
+        let mut instructions = String::from(
+            "Native DevTools MCP server for automating desktop apps (macOS/Windows) and Android devices.\n\n\
+             WHICH TOOLS TO USE:\n\
+             - Desktop apps (coordinate-based, cross-platform): no prefix (click, find_text, take_screenshot, type_text, etc.). Moves the cursor; steals focus.\n",
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            instructions.push_str(
+                "- Desktop apps (element-precise, macOS only): ax_* (ax_click, ax_set_value) — focus-preserving dispatch against uids from take_ax_snapshot.\n",
+            );
+        }
+
+        instructions.push_str(
+            "- Android devices: android_* (android_click, android_find_text, etc.)\n\
+             - App debug protocol: app_* — only when given a WebSocket URL to connect to.\n\
+             NEVER mix these — desktop tools do not work on Android and vice versa.\n\n\
+             == DESKTOP (macOS/Windows) ==\n\n\
+             CLICKING BY TEXT (PREFERRED): Use find_text to locate UI elements by name, \
+             then click at the returned coordinates.\n\
+             Example: find_text(text='Submit') → click(x=..., y=...).\n\n\
+             CLICKING BY VISUAL POSITION: Use take_screenshot with include_ocr=true. \
+             The OCR results include screen coordinates you can click directly. \
+             For positions not covered by OCR, use the screenshot metadata \
+             (origin_x, origin_y, scale) to convert pixel positions.\n\n\
+             Always call focus_window before clicking to ensure the target window receives input.\n\n\
+             Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code') \
+             to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n",
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            instructions.push_str(
+                "ELEMENT-PRECISE AUTOMATION (macOS, PREFERRED for native apps): \
+                 Call take_ax_snapshot(app_name='...') to get a tree of elements tagged \
+                 with generation-stamped uids like 'a42g3'. Then use ax_click(uid='a42g3') \
+                 to press a button without stealing focus, or ax_set_value(uid='a5g3', \
+                 text='...') to write to a text field via kAXValueAttribute. IMPORTANT: \
+                 any fresh take_ax_snapshot invalidates all prior uids — snapshot \
+                 immediately before each ax_click / ax_set_value call. ax_set_value is \
+                 value assignment, not keystrokes: no IME, no undo-stack entry. If a call \
+                 fails with not_dispatchable and returns a fallback {x, y}, retry via \
+                 click(x, y) (plus type_text(text) for ax_set_value).\n\n",
+            );
+        }
+
+        instructions.push_str(
+            "App debug protocol (app_* tools): For element-level precision in apps with an embedded \
+             debug server. Use app_connect with a WebSocket URL first, then app_click, app_type, etc.\n\n\
+             == ANDROID ==\n\n\
+             All Android tools require connecting to a device first:\n\
+             1. android_list_devices — find available devices and their serial numbers\n\
+             2. android_connect(serial='...') — connect (this unlocks all other android_* tools)\n\
+             To switch devices, call android_disconnect first, then android_connect to the new device.\n\n\
+             CLICKING BY TEXT (PREFERRED): Use android_find_text to search the accessibility tree, \
+             then android_click at the returned coordinates.\n\
+             Example: android_find_text(text='Settings') → android_click(x=..., y=...).\n\n\
+             CLICKING BY VISUAL POSITION: Use android_screenshot to see the screen, \
+             then android_click at the desired coordinates.\n\
+             Note: android_screenshot has no OCR — always prefer android_find_text for text elements.\n\n\
+             Android coordinates are absolute screen pixels — no scale conversion needed.\n\
+             Use android_press_key with Android keycodes (e.g., 'KEYCODE_BACK', 'KEYCODE_HOME').",
+        );
+
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
@@ -1705,41 +1855,7 @@ impl ServerHandler for MacOSDevToolsServer {
                 name: "native-devtools-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            instructions: Some(
-                "Native DevTools MCP server for automating desktop apps (macOS/Windows) and Android devices.\n\n\
-                 WHICH TOOLS TO USE:\n\
-                 - Desktop apps: use tools WITHOUT a prefix (click, find_text, take_screenshot, type_text, etc.)\n\
-                 - Android devices: use tools WITH the android_ prefix (android_click, android_find_text, etc.)\n\
-                 - App debug protocol: use app_* tools only when given a WebSocket URL to connect to\n\
-                 NEVER mix these — desktop tools do not work on Android and vice versa.\n\n\
-                 == DESKTOP (macOS/Windows) ==\n\n\
-                 CLICKING BY TEXT (PREFERRED): Use find_text to locate UI elements by name, \
-                 then click at the returned coordinates.\n\
-                 Example: find_text(text='Submit') → click(x=..., y=...).\n\n\
-                 CLICKING BY VISUAL POSITION: Use take_screenshot with include_ocr=true. \
-                 The OCR results include screen coordinates you can click directly. \
-                 For positions not covered by OCR, use the screenshot metadata \
-                 (origin_x, origin_y, scale) to convert pixel positions.\n\n\
-                 Always call focus_window before clicking to ensure the target window receives input.\n\n\
-                 Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code') \
-                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n\
-                 App debug protocol (app_* tools): For element-level precision in apps with an embedded \
-                 debug server. Use app_connect with a WebSocket URL first, then app_click, app_type, etc.\n\n\
-                 == ANDROID ==\n\n\
-                 All Android tools require connecting to a device first:\n\
-                 1. android_list_devices — find available devices and their serial numbers\n\
-                 2. android_connect(serial='...') — connect (this unlocks all other android_* tools)\n\
-                 To switch devices, call android_disconnect first, then android_connect to the new device.\n\n\
-                 CLICKING BY TEXT (PREFERRED): Use android_find_text to search the accessibility tree, \
-                 then android_click at the returned coordinates.\n\
-                 Example: android_find_text(text='Settings') → android_click(x=..., y=...).\n\n\
-                 CLICKING BY VISUAL POSITION: Use android_screenshot to see the screen, \
-                 then android_click at the desired coordinates.\n\
-                 Note: android_screenshot has no OCR — always prefer android_find_text for text elements.\n\n\
-                 Android coordinates are absolute screen pixels — no scale conversion needed.\n\
-                 Use android_press_key with Android keycodes (e.g., 'KEYCODE_BACK', 'KEYCODE_HOME')."
-                    .to_string(),
-            ),
+            instructions: Some(instructions),
         }
     }
 
@@ -1930,10 +2046,48 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: crate::tools::ax_snapshot::TakeAxSnapshotParams =
                     serde_json::from_value(args)
                         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                match crate::tools::ax_snapshot::take_ax_snapshot(params) {
-                    Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                #[cfg(target_os = "macos")]
+                {
+                    // Native macOS path: walk the AX tree, capture retained
+                    // AXRef handles, swap them into the session (generation
+                    // bump), format with the assigned generation so uids are
+                    // stamped `a<N>g<gen>`.
+                    let (nodes, refs) =
+                        match crate::macos::ax::collect_ax_tree_indexed(params.app_name.as_deref()) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return Ok(CallToolResult::error(vec![Content::text(e)]))
+                            }
+                        };
+                    let generation = self.ax_session.create_snapshot(refs).await;
+                    let snapshot =
+                        crate::tools::ax_snapshot::format_snapshot(&nodes, Some(generation));
+                    Ok(CallToolResult::success(vec![Content::text(snapshot)]))
                 }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Windows UIA path: unchanged — no session, uids stay bare `a<N>`.
+                    match crate::tools::ax_snapshot::take_ax_snapshot(params) {
+                        Ok(snapshot) => {
+                            Ok(CallToolResult::success(vec![Content::text(snapshot)]))
+                        }
+                        Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            "ax_click" => {
+                let params: crate::tools::ax_click::AxClickParams =
+                    serde_json::from_value(args)
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_click::ax_click(params, self.ax_session.clone()).await)
+            }
+            #[cfg(target_os = "macos")]
+            "ax_set_value" => {
+                let params: crate::tools::ax_set_value::AxSetValueParams =
+                    serde_json::from_value(args)
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_set_value::ax_set_value(params, self.ax_session.clone()).await)
             }
             "probe_app" => {
                 let params: crate::tools::probe_app::ProbeAppParams = serde_json::from_value(args)
