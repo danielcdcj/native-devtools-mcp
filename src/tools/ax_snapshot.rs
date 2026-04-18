@@ -15,14 +15,14 @@ pub struct Rect {
     pub h: f64,
 }
 
-/// Collect the accessibility tree and format as snapshot text.
+/// Collect the accessibility tree and format as snapshot text (Windows).
 ///
-/// **Windows-only.** On macOS the server handler in `server.rs` bypasses this
-/// function entirely: it drives `AxSession` directly so uids carry a
-/// generation tag and stale-uid rejection works by construction. Leaving a
-/// macOS path in this function would be a tombstone footgun — any caller
-/// who reached it would get bare `a<N>` uids that `ax_click` / `ax_set_value`
-/// cannot accept, and there would be no test to catch the drift.
+/// **Windows-only.** On macOS the server dispatches `take_ax_snapshot`
+/// directly against [`crate::macos::ax::collect_ax_tree_indexed`] plus
+/// [`crate::tools::ax_session::AxSession::create_snapshot`], so uids carry
+/// the generation suffix that `ax_click` and `ax_set_value` require.
+/// Exposing a macOS variant here would produce bare `a<N>` uids that those
+/// tools reject as `snapshot_expired`.
 #[cfg(target_os = "windows")]
 pub fn take_ax_snapshot(params: TakeAxSnapshotParams) -> Result<String, String> {
     let nodes = crate::windows::uia::collect_uia_tree(params.app_name.as_deref())?;

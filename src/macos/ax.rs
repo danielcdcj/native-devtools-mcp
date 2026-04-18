@@ -69,14 +69,14 @@ extern "C" {
 /// The raw `AXUIElementRef` (`*mut c_void`) is not `Send`/`Sync` by default,
 /// but Apple documents the Accessibility API as safe to invoke from any
 /// thread, and `CFRetain` / `CFRelease` are atomic. Cross-thread sharing is
-/// real under the post-round-1 ownership model: `AXRef`s live inside
-/// `AxSession.current: RwLock<Option<AxSnapshot>>`, held on
-/// `MacOSDevToolsServer` as `ax_session: Arc<AxSession>`, and
-/// `ServerHandler::call_tool` runs on the tokio multi-threaded runtime with
-/// `&self`. Any tool call can read the session concurrently; `take_ax_snapshot`
-/// writes it under the write half of the lock. The outer `Arc` makes clones
-/// free (no `CFRetain` per handoff); the inner `Drop` preserves single-
-/// `CFRelease` per retained element.
+/// real: `AXRef`s live inside `AxSession.current:
+/// RwLock<Option<AxSnapshot>>`, held on `MacOSDevToolsServer` as
+/// `ax_session: Arc<AxSession>`, and `ServerHandler::call_tool` runs on the
+/// tokio multi-threaded runtime with `&self`. Any tool call can read the
+/// session concurrently; `take_ax_snapshot` writes it under the write half
+/// of the lock. The outer `Arc` makes clones free (no `CFRetain` per
+/// handoff); the inner `Drop` preserves single-`CFRelease` per retained
+/// element.
 #[derive(Clone)]
 pub struct AXRef(Arc<AXRefInner>);
 
@@ -351,8 +351,12 @@ pub fn press_element(element: &AXRef) -> Result<(), AXDispatchError> {
 }
 
 /// Write `text` into an element's `kAXValueAttribute`. Returns `Ok(())` on
-/// success. See design doc §Tool surface > ax_set_value for the explicit
-/// semantic limits (no key events, no IME, no undo stack).
+/// success.
+///
+/// This is value assignment, not key-event typing: the target app does not
+/// observe keydown/keyup, does not see IME composition events, and does not
+/// record the change on its undo stack. Elements whose role does not expose
+/// a writable `kAXValueAttribute` return `NotDispatchable`.
 pub fn set_value_attribute(element: &AXRef, text: &str) -> Result<(), AXDispatchError> {
     let attr = CFString::new("AXValue");
     let value = CFString::new(text);

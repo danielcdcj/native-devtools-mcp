@@ -304,10 +304,10 @@ impl MacOSDevToolsServer {
             annotate_state_change(),
         );
 
-        // take_ax_snapshot is now state-changing on both platforms (macOS bumps
-        // the session generation; Windows takes a small accuracy hit for
-        // uniform cross-platform posture — see design doc §Tool surface >
-        // Annotation change).
+        // take_ax_snapshot is state-changing on both platforms: macOS bumps
+        // the session generation on every call (invalidating prior uids);
+        // Windows advertises the same posture for a uniform client-safety
+        // contract even though the underlying UIA read is still pure.
         annotate_tools(tools, &["take_ax_snapshot"], annotate_state_change());
 
         #[cfg(target_os = "macos")]
