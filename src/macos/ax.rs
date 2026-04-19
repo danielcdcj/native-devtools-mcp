@@ -6,8 +6,8 @@
 
 use super::ocr::{TextBounds, TextMatch};
 use crate::tools::ax_snapshot::{map_ax_role, AXSnapshotNode};
-use core_foundation::array::CFArray;
-use core_foundation::base::{CFType, TCFType};
+use core_foundation::array::{kCFTypeArrayCallBacks, CFArray, CFArrayCreate};
+use core_foundation::base::{kCFAllocatorDefault, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::string::CFString;
 use core_graphics::geometry::{CGPoint, CGSize};
@@ -374,6 +374,114 @@ pub(crate) fn set_value_attribute(element: &AXRef, text: &str) -> Result<(), AXD
             element.as_raw(),
             attr.as_concrete_TypeRef(),
             value.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
+        )
+    };
+    match AXDispatchError::from_set_value_code(code) {
+        None => Ok(()),
+        Some(e) => Err(e),
+    }
+}
+
+/// Read the `AXRole` attribute of an element as a `String`, or `None` when
+/// the attribute is unavailable or not a string.
+///
+/// Used by `find_ancestor_with_role` during the row-resolution walk.
+/// Crate-internal so external consumers cannot recreate the
+/// lookup-then-dispatch race `AxSession::dispatch` exists to close.
+fn ax_role(element: &AXRef) -> Option<String> {
+    unsafe { get_string_attribute(element.as_raw(), "AXRole") }
+}
+
+/// Return the AX parent of `element` if the attribute is readable.
+///
+/// The returned `AXRef` is retained via `from_get`; drop semantics mirror
+/// every other `AXRef` in the crate. Private — the blessed way to walk
+/// ancestors is `ancestor_role_chain`, which is what `ax_select`
+/// consumes. Leaving `ax_parent` `pub(crate)` would let intra-crate
+/// callers walk the tree outside `AxSession::dispatch`'s read lock.
+fn ax_parent(element: &AXRef) -> Option<AXRef> {
+    let attr = CFString::new("AXParent");
+    let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
+    let err = unsafe {
+        AXUIElementCopyAttributeValue(element.as_raw(), attr.as_concrete_TypeRef(), &mut value_ref)
+    };
+    if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
+        return None;
+    }
+    // value_ref is owned (create rule). `from_get` retains, so we release the
+    // copy to keep the net refcount balanced.
+    let parent = unsafe { AXRef::from_get(value_ref as AXUIElementRef) };
+    unsafe {
+        core_foundation::base::CFRelease(value_ref);
+    }
+    Some(parent)
+}
+
+/// Number of parent links to traverse when hunting for an enclosing role.
+/// Deep-enough to absorb the intermediate cells/groups native sidebars wrap
+/// their rows in, shallow enough to bail cleanly on a pathological cycle.
+const AX_ANCESTOR_WALK_LIMIT: u32 = 32;
+
+/// Walk up the `AXParent` chain starting from `start` (inclusive) and
+/// return a leaf-to-root vector of `(AXRef, Option<role>)` pairs.
+///
+/// The walk stops when `AXParent` becomes unreadable or when
+/// `AX_ANCESTOR_WALK_LIMIT` is reached — either way a bounded vector is
+/// returned rather than an error. Downstream logic (`ax_select`) inspects
+/// the chain to pick out the enclosing `AXRow` and `AXOutline`/`AXTable`;
+/// splitting the walk from the decision lets the decision logic be unit
+/// tested without live `AXUIElement` handles.
+pub(crate) fn ancestor_role_chain(start: &AXRef) -> Vec<(AXRef, Option<String>)> {
+    let mut chain: Vec<(AXRef, Option<String>)> = Vec::new();
+    let mut current = start.clone();
+    for _ in 0..AX_ANCESTOR_WALK_LIMIT {
+        let role = ax_role(&current);
+        chain.push((current.clone(), role));
+        match ax_parent(&current) {
+            Some(p) => current = p,
+            None => break,
+        }
+    }
+    chain
+}
+
+/// Write `rows` into the `AXSelectedRows` attribute of an outline/table.
+/// Returns `Ok(())` on success.
+///
+/// Callers must have already walked up to the enclosing `AXOutline` /
+/// `AXTable` and verified the row is a direct descendant. The MVP selects
+/// exactly one row per call — the list shape leaves room for multi-row
+/// selection later without re-plumbing the FFI boundary.
+///
+/// Narrowed to `pub(crate)` so external Rust consumers cannot combine it
+/// with `AxSession::lookup` to recreate the lookup-then-dispatch race that
+/// `AxSession::dispatch` exists to close.
+pub(crate) fn select_rows_attribute(
+    container: &AXRef,
+    rows: &[&AXRef],
+) -> Result<(), AXDispatchError> {
+    let attr = CFString::new("AXSelectedRows");
+    // Build a CFArray<AXUIElementRef>. `kCFTypeArrayCallBacks` tells CFArray
+    // to CFRetain each pointer on insert and CFRelease on destruction, which
+    // is what we want for `AXUIElementRef` — a CFType under the hood. Using
+    // `CFArray::from_copyable` would pass a null callback set, producing a
+    // bag of unmanaged raw pointers that AX probably still accepts but that
+    // leaks refcount semantics across the FFI boundary.
+    let raw_ptrs: Vec<*const c_void> = rows.iter().map(|r| r.as_raw() as *const c_void).collect();
+    let cf_array_ref = unsafe {
+        CFArrayCreate(
+            kCFAllocatorDefault,
+            raw_ptrs.as_ptr(),
+            raw_ptrs.len() as core_foundation::base::CFIndex,
+            &kCFTypeArrayCallBacks,
+        )
+    };
+    let cf_array: CFArray<*const c_void> = unsafe { CFArray::wrap_under_create_rule(cf_array_ref) };
+    let code = unsafe {
+        AXUIElementSetAttributeValue(
+            container.as_raw(),
+            attr.as_concrete_TypeRef(),
+            cf_array.as_concrete_TypeRef() as core_foundation::base::CFTypeRef,
         )
     };
     match AXDispatchError::from_set_value_code(code) {

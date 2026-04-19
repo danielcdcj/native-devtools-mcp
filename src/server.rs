@@ -314,7 +314,7 @@ impl MacOSDevToolsServer {
         {
             annotate_tools(
                 tools,
-                &["ax_click", "ax_set_value"],
+                &["ax_click", "ax_set_value", "ax_select"],
                 annotate_state_change(),
             );
         }
@@ -867,9 +867,10 @@ impl MacOSDevToolsServer {
                  any app without requiring a debug port. \
                  macOS note: this tool mutates server state — each call bumps a \
                  monotonic generation and invalidates every prior uid for ax_click / \
-                 ax_set_value consumption. Snapshot IDs on macOS look like 'a42g3' \
-                 (generation-tagged); Windows IDs remain bare 'a42'. Re-snapshot \
-                 immediately before any ax_click / ax_set_value call.",
+                 ax_set_value / ax_select consumption. Snapshot IDs on macOS look like \
+                 'a42g3' (generation-tagged); Windows IDs remain bare 'a42'. \
+                 Re-snapshot immediately before any ax_click / ax_set_value / ax_select \
+                 call.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -899,6 +900,7 @@ impl MacOSDevToolsServer {
         {
             tools.push(Self::get_ax_click_tool());
             tools.push(Self::get_ax_set_value_tool());
+            tools.push(Self::get_ax_select_tool());
         }
         tools
     }
@@ -950,6 +952,36 @@ impl MacOSDevToolsServer {
                     "text": {
                         "type": "string",
                         "description": "Text to assign via kAXValueAttribute."
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_select_tool() -> Tool {
+        Tool::new(
+            "ax_select",
+            "macOS only. Select a row inside an NSOutlineView / NSTableView (sidebars, \
+             rule lists, file browsers) by writing AXSelectedRows on the enclosing \
+             outline or table. Accepts a uid pointing at the row, a cell inside the row, \
+             or any descendant — the tool walks up to the enclosing AXRow then the \
+             enclosing AXOutline / AXTable. Does not move the cursor and does not steal \
+             focus. Use ax_select instead of ax_click for row targets: rows typically \
+             refuse AXPress (returning not_dispatchable or AX error -25205), and a \
+             coordinate click steals focus. On failure the tool returns { error: { code, \
+             message, fallback: { x, y } | null } } with codes snapshot_expired, \
+             uid_not_found, no_row_ancestor, no_outline_container, not_dispatchable, or \
+             ax_error. The fallback centre falls back from the row bbox to the \
+             originally-targeted element bbox so the caller can still click(x, y) if \
+             desired.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot. Points at the row itself, a cell within the row, or any descendant."
                     }
                 }
             }))),
@@ -1790,7 +1822,7 @@ impl ServerHandler for MacOSDevToolsServer {
         #[cfg(target_os = "macos")]
         {
             instructions.push_str(
-                "- Desktop apps (element-precise, macOS only): ax_* (ax_click, ax_set_value) — focus-preserving dispatch against uids from take_ax_snapshot.\n",
+                "- Desktop apps (element-precise, macOS only): ax_* (ax_click, ax_set_value, ax_select) — focus-preserving dispatch against uids from take_ax_snapshot.\n",
             );
         }
 
@@ -1816,11 +1848,15 @@ impl ServerHandler for MacOSDevToolsServer {
             instructions.push_str(
                 "ELEMENT-PRECISE AUTOMATION (macOS, PREFERRED for native apps): \
                  Call take_ax_snapshot(app_name='...') to get a tree of elements tagged \
-                 with generation-stamped uids like 'a42g3'. Then use ax_click(uid='a42g3') \
-                 to press a button without stealing focus, or ax_set_value(uid='a5g3', \
-                 text='...') to write to a text field via kAXValueAttribute. IMPORTANT: \
-                 any fresh take_ax_snapshot invalidates all prior uids — snapshot \
-                 immediately before each ax_click / ax_set_value call. ax_set_value is \
+                 with generation-stamped uids like 'a42g3'. Then pick the dispatch \
+                 primitive that matches the target: ax_click(uid) dispatches AXPress for \
+                 buttons, menu items, and anything pressable; ax_set_value(uid, text) \
+                 writes kAXValueAttribute on text fields; ax_select(uid) writes \
+                 AXSelectedRows for NSOutlineView / NSTableView row selection (sidebars, \
+                 rule lists, file browsers) — rows typically refuse AXPress so ax_click \
+                 returns not_dispatchable or AX error -25205 against them. IMPORTANT: any \
+                 fresh take_ax_snapshot invalidates all prior uids — snapshot immediately \
+                 before each ax_click / ax_set_value / ax_select call. ax_set_value is \
                  value assignment, not keystrokes: no IME, no undo-stack entry. If a call \
                  fails with not_dispatchable and returns a fallback {x, y}, retry via \
                  click(x, y) (plus type_text(text) for ax_set_value).\n\n",
@@ -2084,6 +2120,12 @@ impl ServerHandler for MacOSDevToolsServer {
                     serde_json::from_value(args)
                         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
                 Ok(crate::tools::ax_set_value::ax_set_value(params, self.ax_session.clone()).await)
+            }
+            #[cfg(target_os = "macos")]
+            "ax_select" => {
+                let params: crate::tools::ax_select::AxSelectParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_select::ax_select(params, self.ax_session.clone()).await)
             }
             "probe_app" => {
                 let params: crate::tools::probe_app::ProbeAppParams = serde_json::from_value(args)
