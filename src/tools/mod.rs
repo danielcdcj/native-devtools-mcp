@@ -1,4 +1,12 @@
 pub mod app_protocol;
+#[cfg(target_os = "macos")]
+pub mod ax_click;
+#[cfg(target_os = "macos")]
+pub mod ax_response;
+#[cfg(target_os = "macos")]
+pub mod ax_session;
+#[cfg(target_os = "macos")]
+pub mod ax_set_value;
 pub mod ax_snapshot;
 pub mod find_image;
 pub mod hover_tracker;

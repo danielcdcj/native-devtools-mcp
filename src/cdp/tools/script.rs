@@ -213,7 +213,7 @@ pub async fn cdp_take_ax_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) ->
             let (snapshot_nodes, snapshot_map) =
                 crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, page_url, generation);
 
-            let output = format_snapshot(&snapshot_nodes);
+            let output = format_snapshot(&snapshot_nodes, None);
             client.last_ax_snapshot = Some(snapshot_map);
 
             CallToolResult::success(vec![Content::text(output)])

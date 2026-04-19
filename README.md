@@ -12,6 +12,7 @@ npx -y native-devtools-mcp
 
 **Core capabilities**
 - Screenshots, OCR, and accessibility-first `find_text`
+- **Element-precise, focus-preserving automation (macOS):** `take_ax_snapshot` → `ax_click` / `ax_set_value` — dispatch against Accessibility-tree elements without moving the mouse or stealing focus. Generation-tagged uids (`a<N>g<gen>`) make stale snapshots fail loud instead of silently targeting the wrong element.
 - `click`, `type_text`, `scroll`, `launch_app`, `quit_app`, and window management
 - `element_at_point` for inspecting accessible UI elements at screen coordinates
 - `load_image` + `find_image` for non-text UI elements such as icons and custom controls
@@ -74,6 +75,19 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
 8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
 9.  `cdp_connect` / `cdp_take_ax_snapshot` / `cdp_take_dom_snapshot` / `cdp_find_elements` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
+
+### Element-precise AX dispatch (macOS, preferred for native apps)
+
+```
+take_ax_snapshot(app_name='Calculator')
+  → tree with uids like `a42g3` (generation-tagged) and bboxes
+ax_click(uid='a42g3')                          # press without stealing focus
+ax_set_value(uid='a5g3', text='hello world')   # write via kAXValueAttribute
+```
+
+**Invalidation rule:** every fresh `take_ax_snapshot` bumps the generation. All uids from prior snapshots become stale immediately — `ax_click` / `ax_set_value` will reject them with `snapshot_expired`. Snapshot immediately before you dispatch.
+
+**When `ax_set_value` is not a substitute for typing:** `ax_set_value` writes `kAXValueAttribute` — it does not fire keydown/keyup, does not participate in IME composition, and does not populate the app's undo stack. If you need those semantics, fall back to `click(x, y)` + `type_text(text)` using the `fallback` bbox the tool returns on `not_dispatchable`.
 
 ## 📦 Installation
 
