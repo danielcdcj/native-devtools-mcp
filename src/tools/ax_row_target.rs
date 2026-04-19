@@ -75,9 +75,10 @@ pub(crate) fn resolve_row_and_container(ancestor_roles: &[Option<&str>]) -> RowR
     };
 
     // Phase 2: find the outline/table container above the row (exclusive).
-    let Some(offset) = ancestor_roles[row_idx + 1..].iter().position(
-        |r| matches!(r, Some(role) if *role == OUTLINE_ROLE || *role == TABLE_ROLE),
-    ) else {
+    let Some(offset) = ancestor_roles[row_idx + 1..]
+        .iter()
+        .position(|r| matches!(r, Some(role) if *role == OUTLINE_ROLE || *role == TABLE_ROLE))
+    else {
         return RowResolution::NoContainer {
             row_idx,
             depth_walked,

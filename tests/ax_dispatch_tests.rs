@@ -30,6 +30,7 @@
 
 use native_devtools_mcp::macos::ax::collect_ax_tree_indexed;
 use native_devtools_mcp::tools::ax_click::{ax_click, AxClickParams};
+use native_devtools_mcp::tools::ax_select::{ax_select, AxSelectParams};
 use native_devtools_mcp::tools::ax_session::AxSession;
 use native_devtools_mcp::tools::ax_set_value::{ax_set_value, AxSetValueParams};
 use native_devtools_mcp::tools::ax_snapshot::format_snapshot;
@@ -411,5 +412,194 @@ async fn ax_set_value_preserves_focus_writing_textedit_while_terminal_is_front()
     assert!(
         snap2_text.contains("value=\"hello\""),
         "TextEdit should reflect the written value"
+    );
+}
+
+// === ax_select — sidebar row selection in System Settings ===
+
+/// Open a System Settings pane in the background (no focus steal) so the
+/// test runs deterministically without cursor/focus contention.
+fn open_system_settings_pane(pane_id: &str) {
+    // `open -g` launches in background; `x-apple.systempreferences:<pane>`
+    // is the documented URL scheme for System Settings panes. We use
+    // `com.apple.preference.security` because Privacy & Security is a
+    // commonly-present pane across macOS versions.
+    let url = format!("x-apple.systempreferences:{}", pane_id);
+    let status = std::process::Command::new("open")
+        .args(["-g", &url])
+        .status()
+        .expect("`open` should be invocable");
+    assert!(
+        status.success(),
+        "`open -g {}` should succeed; got {:?}",
+        url,
+        status
+    );
+    // Give Settings a moment to reach the snapshot-worthy state. The
+    // AX tree is not populated instantly after pane switch.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+}
+
+/// Find a row line in a snapshot whose subtree contains a cell with the
+/// given text. Returns `(uid, selected)` for the row or `None` when no
+/// such row exists. Heuristic: scan for lines with role `row ` and look at
+/// the immediately following lines (greater indent) for a cell whose name
+/// or value equals `text`.
+fn find_sidebar_row(snapshot: &str, text: &str) -> Option<(String, bool)> {
+    let lines: Vec<&str> = snapshot.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !(line.contains(" row ") || line.contains(" row\t")) {
+            continue;
+        }
+        // Parse uid and selected state from this row line.
+        let uid_token = line.split_whitespace().next()?;
+        let uid = uid_token.strip_prefix("uid=")?.to_string();
+        let selected = line.contains("selected");
+        // Row indent — children must be strictly deeper.
+        let row_indent = line.len() - line.trim_start().len();
+        // Scan descendants until indent returns to <= row_indent.
+        for follow in lines.iter().skip(i + 1) {
+            let follow_indent = follow.len() - follow.trim_start().len();
+            if follow_indent <= row_indent {
+                break;
+            }
+            if follow.contains(&format!("\"{}\"", text)) {
+                return Some((uid, selected));
+            }
+        }
+    }
+    None
+}
+
+/// Smoke test: open System Settings' Privacy & Security pane, pick any
+/// sidebar row whose text differs from the currently-selected one,
+/// dispatch `ax_select` against it, and assert the selection moved. The
+/// test is tolerant of locale and version drift — it does not require a
+/// specific row to be present, only that at least two rows exist and we
+/// can flip between them.
+#[tokio::test]
+#[ignore]
+async fn ax_select_moves_sidebar_selection_in_system_settings() {
+    open_system_settings_pane("com.apple.preference.security");
+
+    let session = new_session();
+    let snap_text = snapshot(&session, Some("System Settings")).await;
+
+    // Collect all sidebar rows and their selected state.
+    let mut rows: Vec<(String, bool, String)> = Vec::new();
+    let lines: Vec<&str> = snap_text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if !(line.contains(" row ") || line.contains(" row\t")) {
+            continue;
+        }
+        let Some(uid_token) = line.split_whitespace().next() else {
+            continue;
+        };
+        let Some(uid) = uid_token.strip_prefix("uid=") else {
+            continue;
+        };
+        let selected = line.contains("selected");
+        // Extract any descendant label as a readable identifier for this row.
+        let row_indent = line.len() - line.trim_start().len();
+        let mut label = String::new();
+        for follow in lines.iter().skip(i + 1) {
+            let follow_indent = follow.len() - follow.trim_start().len();
+            if follow_indent <= row_indent {
+                break;
+            }
+            if let Some(start) = follow.find('"') {
+                let rest = &follow[start + 1..];
+                if let Some(end) = rest.find('"') {
+                    if end > 0 {
+                        label = rest[..end].to_string();
+                        break;
+                    }
+                }
+            }
+        }
+        rows.push((uid.to_string(), selected, label));
+    }
+    assert!(
+        rows.len() >= 2,
+        "System Settings sidebar should expose at least two rows; got {:?}",
+        rows
+    );
+
+    let previously_selected = rows.iter().find(|(_, sel, _)| *sel);
+    // Pick a target row: any row that is NOT the currently-selected one.
+    let target = rows
+        .iter()
+        .find(|(_, sel, _)| !*sel)
+        .expect("at least one sidebar row should be non-selected to target");
+    let target_uid = target.0.clone();
+    let target_label = target.2.clone();
+
+    // Dispatch the selection.
+    let result = ax_select(
+        AxSelectParams {
+            uid: target_uid.clone(),
+        },
+        session.clone(),
+    )
+    .await;
+    let body = parse_json(&extract_text(&result));
+    assert_eq!(
+        body["ok"], true,
+        "ax_select should succeed on a live sidebar row; body={}",
+        body
+    );
+    assert_eq!(body["dispatched_via"], "AXSelectedRows");
+
+    // Re-snapshot and verify the selection moved. The new snapshot lives
+    // in a fresh session so the uids don't overlap, and we match rows by
+    // label rather than uid.
+    let verify_session = new_session();
+    let snap2_text = snapshot(&verify_session, Some("System Settings")).await;
+
+    // The target row must now be selected.
+    let (_new_uid, now_selected) =
+        find_sidebar_row(&snap2_text, &target_label).unwrap_or_else(|| {
+            panic!("target row (label={target_label:?}) missing from post-dispatch snapshot")
+        });
+    assert!(
+        now_selected,
+        "target row (label={:?}) should be selected after ax_select",
+        target_label
+    );
+
+    // The previously-selected row (if any) must no longer be selected.
+    if let Some((_prev_uid, _prev_sel, prev_label)) = previously_selected {
+        if prev_label != &target_label {
+            if let Some((_, still_selected)) = find_sidebar_row(&snap2_text, prev_label) {
+                assert!(
+                    !still_selected,
+                    "previously-selected row (label={:?}) should no longer be selected",
+                    prev_label
+                );
+            }
+        }
+    }
+}
+
+/// Dispatching `ax_select` at a uid that has no `AXRow` ancestor must
+/// return the `no_row_ancestor` error envelope with the fallback bbox set
+/// to the starting element's centre — not panic, not succeed.
+#[tokio::test]
+#[ignore]
+async fn ax_select_on_non_row_element_returns_no_row_ancestor() {
+    // Calculator has no AXRow anywhere in its tree, so every uid is a
+    // negative case.
+    let session = new_session();
+    let snap_text = snapshot(&session, Some("Calculator")).await;
+    let five_uid = extract_uid_for_named_button(&snap_text, "5");
+
+    let result = ax_select(AxSelectParams { uid: five_uid }, session.clone()).await;
+    assert_eq!(result.is_error, Some(true));
+    let body = parse_json(&extract_text(&result));
+    assert_eq!(body["error"]["code"], "no_row_ancestor");
+    // Fallback centre should be populated from the button's bbox.
+    assert!(
+        body["error"]["fallback"].is_object(),
+        "fallback should be populated when the starting element has a bbox"
     );
 }

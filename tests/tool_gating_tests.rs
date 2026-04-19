@@ -789,6 +789,7 @@ mod ax_dispatch_tool_gating {
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(names.contains(&"ax_click".to_string()));
         assert!(names.contains(&"ax_set_value".to_string()));
+        assert!(names.contains(&"ax_select".to_string()));
     }
 
     #[test]
@@ -823,6 +824,22 @@ mod ax_dispatch_tool_gating {
     }
 
     #[test]
+    fn ax_select_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_select")
+            .expect("ax_select not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_select should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+        assert_eq!(ann.idempotent_hint, Some(false));
+    }
+
+    #[test]
     fn instructions_mention_ax_click_and_ax_set_value() {
         let server = MacOSDevToolsServer::new();
         let info = server.get_info();
@@ -834,6 +851,10 @@ mod ax_dispatch_tool_gating {
         assert!(
             instr.contains("ax_set_value"),
             "instructions should mention ax_set_value"
+        );
+        assert!(
+            instr.contains("ax_select"),
+            "instructions should mention ax_select"
         );
         assert!(
             instr.contains("take_ax_snapshot"),
@@ -852,6 +873,7 @@ mod ax_dispatch_tool_gating {
     #[test]
     fn ax_dispatch_param_structs_accept_schema_fields() {
         use native_devtools_mcp::tools::ax_click::AxClickParams;
+        use native_devtools_mcp::tools::ax_select::AxSelectParams;
         use native_devtools_mcp::tools::ax_set_value::AxSetValueParams;
 
         let p: AxClickParams = serde_json::from_value(serde_json::json!({ "uid": "a1g1" }))
@@ -863,6 +885,10 @@ mod ax_dispatch_tool_gating {
                 .expect("ax_set_value params must accept { uid, text }");
         assert_eq!(q.uid, "a2g1");
         assert_eq!(q.text, "hello");
+
+        let s: AxSelectParams = serde_json::from_value(serde_json::json!({ "uid": "a3g1" }))
+            .expect("ax_select params must accept { uid }");
+        assert_eq!(s.uid, "a3g1");
     }
 }
 
@@ -877,6 +903,7 @@ mod ax_dispatch_tool_gating_non_macos {
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(!names.contains(&"ax_click".to_string()));
         assert!(!names.contains(&"ax_set_value".to_string()));
+        assert!(!names.contains(&"ax_select".to_string()));
     }
 
     #[test]
@@ -890,6 +917,10 @@ mod ax_dispatch_tool_gating_non_macos {
         );
         assert!(
             !instr.contains("ax_set_value"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+        assert!(
+            !instr.contains("ax_select"),
             "Windows/Linux build must not advertise macOS-only tools in instructions"
         );
     }

@@ -51,10 +51,7 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
             // pure decision logic in `resolve_row_and_container` then tells
             // us which ancestors are the row and the container.
             let chain = ancestor_role_chain(ax_ref);
-            let role_strs: Vec<Option<&str>> = chain
-                .iter()
-                .map(|(_, r)| r.as_deref())
-                .collect();
+            let role_strs: Vec<Option<&str>> = chain.iter().map(|(_, r)| r.as_deref()).collect();
 
             let (row_idx, container_idx) = match resolve_row_and_container(&role_strs) {
                 RowResolution::Resolved {
@@ -73,8 +70,7 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
                     // Row was found but no outline/table above it — use
                     // the row's bbox as fallback so coord-based retry at
                     // least targets the visible row.
-                    let row_bbox =
-                        unsafe { element_bbox(chain[row_idx].0.as_raw()) }.or(pre_bbox);
+                    let row_bbox = unsafe { element_bbox(chain[row_idx].0.as_raw()) }.or(pre_bbox);
                     return ax_response::error(
                         "no_outline_container",
                         "row is not nested inside an AXOutline or AXTable; \
