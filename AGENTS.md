@@ -17,7 +17,7 @@ For robust automation, follow this "Visual Feedback Loop":
 3.  **ACT:** Call `click()`, `type_text()`, or `scroll()` using those coordinates.
 4.  **VERIFY:** Call `take_screenshot` again to confirm the action had the intended effect.
 
-**macOS-preferred branch (native apps):** substitute OBSERVE with `take_ax_snapshot(app_name='...')`; LOCATE reads uid + bbox from the emitted tree; ACT calls `ax_click(uid)` or `ax_set_value(uid, text)`; VERIFY re-snapshots and reads the new state. This branch does not move the cursor or steal focus, so it composes with background work.
+**macOS-preferred branch (native apps):** substitute OBSERVE with `take_ax_snapshot(app_name='...')`; LOCATE reads uid + bbox from the emitted tree; ACT calls `ax_click(uid)` for pressable controls, `ax_set_value(uid, text)` for text fields, or `ax_select(uid)` for `NSOutlineView` / `NSTableView` row selection (sidebars, rule lists); VERIFY re-snapshots and reads the new state. This branch does not move the cursor or steal focus, so it composes with background work.
 
 ---
 
@@ -39,6 +39,7 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Quit an app" | `quit_app(app_name="Safari")` | Graceful by default; use `force=true` to kill immediately. |
 | "Click a named button in a native app (macOS)" | `take_ax_snapshot` → `ax_click(uid)` | Focus-preserving. Generation-tagged uids; fresh snapshot invalidates prior uids. |
 | "Enter text into a text field via value assignment (macOS)" | `take_ax_snapshot` → `ax_set_value(uid, text)` | No key events, no IME, no undo-stack entry. Fall back to `click` + `type_text` on `not_dispatchable`. |
+| "Select a sidebar row in System Settings / a `NSOutlineView` row (macOS)" | `take_ax_snapshot` → `ax_select(uid)` | Writes `AXSelectedRows` on the enclosing outline/table. Use this instead of `ax_click` for row targets — rows typically refuse `AXPress`. |
 | "AX snapshot invalidation rule (macOS)" | — | Every `take_ax_snapshot` call bumps the generation. All prior uids become stale; `ax_*` tools return `snapshot_expired`. |
 | "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_ax_snapshot()` → `cdp_click(uid="a42")` | CDP is more reliable than coordinates for web content. |
 | "Type in a web input" | `cdp_take_ax_snapshot()` → `cdp_fill(uid="a42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
@@ -62,9 +63,9 @@ Use this table to choose the right tool sequence for the user's goal.
 **Schema:**
 - `app_name: string` (optional) — target app; defaults to frontmost.
 
-**macOS session state:** on macOS this tool is no longer a pure read — it writes session state. Every call bumps a monotonic generation and replaces the server's cached map of `AXUIElement` handles. Uids are emitted as `a<N>g<gen>` (e.g. `a42g3`). All uids from prior snapshots become stale for `ax_click` / `ax_set_value` consumption (return `snapshot_expired`). Windows behavior is unchanged — no session, uids stay bare `a<N>`.
+**macOS session state:** on macOS this tool is no longer a pure read — it writes session state. Every call bumps a monotonic generation and replaces the server's cached map of `AXUIElement` handles. Uids are emitted as `a<N>g<gen>` (e.g. `a42g3`). All uids from prior snapshots become stale for `ax_click` / `ax_set_value` / `ax_select` consumption (return `snapshot_expired`). Windows behavior is unchanged — no session, uids stay bare `a<N>`.
 
-**Usage pattern (macOS):** snapshot immediately before each `ax_click` / `ax_set_value` call to avoid `snapshot_expired`. Every branch or retry starts with a fresh snapshot.
+**Usage pattern (macOS):** snapshot immediately before each `ax_click` / `ax_set_value` / `ax_select` call to avoid `snapshot_expired`. Every branch or retry starts with a fresh snapshot.
 
 #### `take_screenshot`
 Captures pixel data and layout.
@@ -170,6 +171,23 @@ Types text at the *current* cursor position.
 - Only works on elements that expose a writable `kAXValueAttribute` (e.g. `AXTextField`, `AXTextArea`, `AXSearchField`).
 
 **Fallback on `not_dispatchable`:** perform `click(fallback.x, fallback.y)` to focus, then `type_text(text)` for true key-event input.
+
+#### `ax_select` (macOS only)
+
+**Purpose:** Select a row inside an `NSOutlineView` / `NSTableView` by writing `AXSelectedRows` on the enclosing outline/table. Use for sidebars (System Settings, Mail, Xcode, Finder), rule lists, and any native browser-style row container where `AXPress` is not supported.
+
+**Schema:**
+- `uid: string` — generation-tagged uid. Points at the row itself, a cell inside the row, or any descendant; the tool walks up to the enclosing `AXRow`.
+
+**Response:**
+- Success: `{ "ok": true, "dispatched_via": "AXSelectedRows", "bbox": { "x", "y", "w", "h" } }`. The bbox describes the resolved row (not necessarily the uid-targeted descendant).
+- Error: same envelope as `ax_click` with codes `snapshot_expired`, `uid_not_found`, `no_row_ancestor`, `no_outline_container`, `not_dispatchable`, `ax_error`.
+
+**When to reach for `ax_select` vs `ax_click`:** rows in native sidebars typically refuse `AXPress` — `ax_click` returns `not_dispatchable` or AX error `-25205` against them. Use `ax_select` for row targets. A coordinate-based fallback (`click(x, y)`) works but steals focus — the whole reason `ax_*` exists.
+
+**Gotchas:**
+- `no_row_ancestor` means the uid is not inside a row at all — you probably targeted the wrong element. Re-snapshot and pick the `AXRow` or one of its descendants.
+- `no_outline_container` means the row exists but is not nested in an `AXOutline` / `AXTable` — unusual; custom row containers may need `click(fallback.x, fallback.y)`.
 
 #### `scroll`
 Scrolls at a specific screen position.

@@ -12,7 +12,7 @@ npx -y native-devtools-mcp
 
 **Core capabilities**
 - Screenshots, OCR, and accessibility-first `find_text`
-- **Element-precise, focus-preserving automation (macOS):** `take_ax_snapshot` → `ax_click` / `ax_set_value` — dispatch against Accessibility-tree elements without moving the mouse or stealing focus. Generation-tagged uids (`a<N>g<gen>`) make stale snapshots fail loud instead of silently targeting the wrong element.
+- **Element-precise, focus-preserving automation (macOS):** `take_ax_snapshot` → `ax_click` / `ax_set_value` / `ax_select` — dispatch against Accessibility-tree elements without moving the mouse or stealing focus. Generation-tagged uids (`a<N>g<gen>`) make stale snapshots fail loud instead of silently targeting the wrong element.
 - `click`, `type_text`, `scroll`, `launch_app`, `quit_app`, and window management
 - `element_at_point` for inspecting accessible UI elements at screen coordinates
 - `load_image` + `find_image` for non-text UI elements such as icons and custom controls
@@ -79,13 +79,22 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 ### Element-precise AX dispatch (macOS, preferred for native apps)
 
 ```
-take_ax_snapshot(app_name='Calculator')
+take_ax_snapshot(app_name='System Settings')
   → tree with uids like `a42g3` (generation-tagged) and bboxes
-ax_click(uid='a42g3')                          # press without stealing focus
-ax_set_value(uid='a5g3', text='hello world')   # write via kAXValueAttribute
+ax_click(uid='a42g3')                          # press a button / menu item
+ax_set_value(uid='a5g3', text='hello world')   # write a text field via kAXValueAttribute
+ax_select(uid='a18g3')                         # select a sidebar / table row via AXSelectedRows
 ```
 
-**Invalidation rule:** every fresh `take_ax_snapshot` bumps the generation. All uids from prior snapshots become stale immediately — `ax_click` / `ax_set_value` will reject them with `snapshot_expired`. Snapshot immediately before you dispatch.
+**Picking the right dispatch primitive:**
+
+| Primitive | AX mechanism | Best for |
+|-----------|--------------|----------|
+| `ax_click` | `AXPress` action | Buttons, menu items, checkboxes, toolbar items |
+| `ax_set_value` | write `kAXValueAttribute` | Text fields, search fields, stepper-backed inputs |
+| `ax_select` | write `AXSelectedRows` | `NSOutlineView` / `NSTableView` row selection (sidebars, rule lists, file browsers) |
+
+**Invalidation rule:** every fresh `take_ax_snapshot` bumps the generation. All uids from prior snapshots become stale immediately — `ax_click` / `ax_set_value` / `ax_select` will reject them with `snapshot_expired`. Snapshot immediately before you dispatch.
 
 **When `ax_set_value` is not a substitute for typing:** `ax_set_value` writes `kAXValueAttribute` — it does not fire keydown/keyup, does not participate in IME composition, and does not populate the app's undo stack. If you need those semantics, fall back to `click(x, y)` + `type_text(text)` using the `fallback` bbox the tool returns on `not_dispatchable`.
 
