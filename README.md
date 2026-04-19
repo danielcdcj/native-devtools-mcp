@@ -292,7 +292,7 @@ cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```
 
-**17 CDP tools** — click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
+**19 CDP tools** — snapshot (AX + DOM), find elements, click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
 
 **Chrome 136+ note:** Requires `--user-data-dir=<path>` alongside `--remote-debugging-port` (Chrome silently ignores the debug port with the default profile). Electron apps only need `--remote-debugging-port`.
 

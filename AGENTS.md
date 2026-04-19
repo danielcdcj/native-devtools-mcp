@@ -256,6 +256,7 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 *   `cdp_hover(uid)`: Hover over an element by UID.
 *   `cdp_fill(uid, value)`: Type text into an input/textarea or select an option from a `<select>`.
 *   `cdp_press_key(key)`: Press a key or combo (e.g., `"Enter"`, `"Control+A"`, `"Control+Shift+R"`). Modifiers: Control, Shift, Alt, Meta.
+*   `cdp_type_text(text, submit_key?)`: Character-by-character keyboard input into a previously focused element. Use `cdp_fill` for form fields; use this for inputs that react to each keypress.
 *   `cdp_handle_dialog(action, prompt_text?)`: Accept or dismiss a JS dialog (alert, confirm, prompt).
 *   `cdp_navigate(url?, type?)`: Navigate to a URL, or go back/forward/reload. Type: `"url"` (default), `"back"`, `"forward"`, `"reload"`.
 *   `cdp_new_page(url)`: Create a new tab and navigate to URL. Becomes the selected page.

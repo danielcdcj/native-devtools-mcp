@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Element-precise AX dispatch (macOS)
+
+Three macOS-only tools that dispatch against accessibility-tree elements by uid, without moving the cursor or stealing focus. Complement — not replace — coordinate-based `click` / `type_text`.
+
+- **`ax_click`** — press a button, menu item, checkbox, or toolbar item by AX uid via `AXPress`.
+- **`ax_set_value`** — write to a text field's `kAXValueAttribute`. Value assignment, not keystroke typing: no `keydown`/`keyup`, no IME composition, no undo-stack entry. Fall back to `click` + `type_text` when key-event semantics are required.
+- **`ax_select`** — select a row inside `NSOutlineView` / `NSTableView` by writing `AXSelectedRows` on the enclosing outline/table. Use for sidebars (System Settings, Mail, Xcode, Finder) and rule lists where rows refuse `AXPress`.
+
+All three return `{ ok, dispatched_via, bbox }` on success; on failure, a typed error (`snapshot_expired`, `uid_not_found`, `not_dispatchable`, `no_row_ancestor`, `no_outline_container`, `ax_error`) with an optional `fallback: {x, y}` coordinate for coordinate-based retry.
+
+### Session-stateful `take_ax_snapshot` (macOS)
+
+`take_ax_snapshot` on macOS is now session-backed: each call bumps a monotonic generation and emits uids as `a<N>g<gen>` (e.g. `a42g3`). Uids from prior snapshots are rejected by `ax_click` / `ax_set_value` / `ax_select` with `snapshot_expired`, eliminating the silent wrong-element-clicked failure mode. Snapshot immediately before each dispatch; every branch or retry starts with a fresh snapshot. Windows behavior is unchanged — bare `a<N>` uids, no session.
+
+### MCP tool metadata
+
+- **ToolAnnotations on every tool** — `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` safety hints let MCP clients surface the right permission prompts and defaults.
+- **`click` coordinate variants are mutually exclusive** — schema uses `oneOf` (screen / window / screenshot), enforced at runtime. Mixing variants now produces a clear validation error instead of silent coordinate misinterpretation.
+- **`focus_window`** returns structured JSON (`{ app_name, pid, kind }`) instead of free-form text.
+
+### CDP
+
+- **CDP tools are listed unconditionally.** Previously they appeared only after `cdp_connect`; they now appear at session start and return a stable "not connected" error until connected, so callers can discover the API up front.
+
+### Dependencies
+
+- `rmcp` bumped to `0.2` to unlock `ToolAnnotations`.
+- `rand` and `rustls-webpki` bumped for low-severity advisories.
+
 ## v0.8.0
 
 ### New tools
