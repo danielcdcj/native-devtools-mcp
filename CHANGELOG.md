@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0
 
 ### Element-precise AX dispatch (macOS)
 
