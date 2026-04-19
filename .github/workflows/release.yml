@@ -250,7 +250,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 for npm v11, which supports the current OIDC handshake
+          # required by Trusted Publishing. Node 22 (npm v10) gets silently
+          # treated as anonymous and publish fails with a misleading 404.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Copy binaries to npm packages
