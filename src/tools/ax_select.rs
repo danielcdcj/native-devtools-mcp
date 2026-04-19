@@ -42,14 +42,10 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
     // both execute under the held lock.
     let outcome = session
         .dispatch(&params.uid, |ax_ref: &AXRef| {
-            // Capture pre-dispatch bbox against the uid-targeted element
-            // so the error envelope's fallback still lands on the visible
-            // row even when the walk cannot resolve a container.
+            // Capture pre-dispatch bbox so error envelopes have a fallback
+            // centre even when the walk cannot resolve a container.
             let pre_bbox = unsafe { element_bbox(ax_ref.as_raw()) };
 
-            // Build leaf-to-root `(AXRef, Option<role>)` chain once. The
-            // pure decision logic in `resolve_row_and_container` then tells
-            // us which ancestors are the row and the container.
             let chain = ancestor_role_chain(ax_ref);
             let role_strs: Vec<Option<&str>> = chain.iter().map(|(_, r)| r.as_deref()).collect();
 
@@ -58,7 +54,7 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
                     row_idx,
                     container_idx,
                 } => (row_idx, container_idx),
-                RowResolution::NoRow { .. } => {
+                RowResolution::NoRow => {
                     return ax_response::error(
                         "no_row_ancestor",
                         "uid does not resolve to an element inside an AXRow; \
@@ -66,10 +62,7 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
                         pre_bbox,
                     );
                 }
-                RowResolution::NoContainer { row_idx, .. } => {
-                    // Row was found but no outline/table above it — use
-                    // the row's bbox as fallback so coord-based retry at
-                    // least targets the visible row.
+                RowResolution::NoContainer { row_idx } => {
                     let row_bbox = unsafe { element_bbox(chain[row_idx].0.as_raw()) }.or(pre_bbox);
                     return ax_response::error(
                         "no_outline_container",
@@ -84,11 +77,8 @@ pub async fn ax_select(params: AxSelectParams, session: Arc<AxSession>) -> CallT
             let container = &chain[container_idx].0;
             let row_bbox = unsafe { element_bbox(row.as_raw()) }.or(pre_bbox);
 
-            // Phase 3: write `AXSelectedRows = [row]` on the container.
             match select_rows_attribute(container, &[row]) {
                 Ok(()) => {
-                    // On success, return the row's post-dispatch bbox as
-                    // telemetry — same pattern as ax_click / ax_set_value.
                     let post_bbox = unsafe { element_bbox(row.as_raw()) }.or(row_bbox);
                     ax_response::success(DISPATCHED_VIA, post_bbox)
                 }

@@ -17,9 +17,6 @@
 //!   walk limit is an outline or table. Unusual — typically means the host
 //!   app nests rows inside a non-standard container.
 //!
-//! Both failures carry the walk depth we reached so handlers can include it
-//! in their error envelope.
-//!
 //! # Why a pure function
 //!
 //! The production walk calls into `AXParent` / `AXRole` FFI which requires
@@ -48,12 +45,9 @@ pub(crate) enum RowResolution {
         row_idx: usize,
         container_idx: usize,
     },
-    NoRow {
-        depth_walked: usize,
-    },
+    NoRow,
     NoContainer {
         row_idx: usize,
-        depth_walked: usize,
     },
 }
 
@@ -64,31 +58,23 @@ pub(crate) enum RowResolution {
 /// unreadable — common near the app root, and not fatal unless we run out
 /// of ancestors before finding a row or container.
 pub(crate) fn resolve_row_and_container(ancestor_roles: &[Option<&str>]) -> RowResolution {
-    let depth_walked = ancestor_roles.len();
-
-    // Phase 1: find the row (inclusive of the starting element).
     let Some(row_idx) = ancestor_roles
         .iter()
         .position(|r| matches!(r, Some(role) if *role == ROW_ROLE))
     else {
-        return RowResolution::NoRow { depth_walked };
+        return RowResolution::NoRow;
     };
 
-    // Phase 2: find the outline/table container above the row (exclusive).
     let Some(offset) = ancestor_roles[row_idx + 1..]
         .iter()
         .position(|r| matches!(r, Some(role) if *role == OUTLINE_ROLE || *role == TABLE_ROLE))
     else {
-        return RowResolution::NoContainer {
-            row_idx,
-            depth_walked,
-        };
+        return RowResolution::NoContainer { row_idx };
     };
-    let container_idx = row_idx + 1 + offset;
 
     RowResolution::Resolved {
         row_idx,
-        container_idx,
+        container_idx: row_idx + 1 + offset,
     }
 }
 
@@ -168,10 +154,7 @@ mod tests {
     fn non_row_descendant_chain_reports_no_row() {
         // uid pointed at a bare button — no row in any ancestor.
         let roles = chain(&["AXButton", "AXGroup", "AXWindow", "AXApplication"]);
-        assert_eq!(
-            resolve_row_and_container(&roles),
-            RowResolution::NoRow { depth_walked: 4 }
-        );
+        assert_eq!(resolve_row_and_container(&roles), RowResolution::NoRow);
     }
 
     #[test]
@@ -180,10 +163,7 @@ mod tests {
         let roles = chain(&["AXCell", "AXRow", "AXGroup", "AXWindow", "AXApplication"]);
         assert_eq!(
             resolve_row_and_container(&roles),
-            RowResolution::NoContainer {
-                row_idx: 1,
-                depth_walked: 5,
-            }
+            RowResolution::NoContainer { row_idx: 1 }
         );
     }
 
@@ -212,10 +192,7 @@ mod tests {
     #[test]
     fn empty_chain_reports_no_row() {
         let roles: Vec<Option<&str>> = Vec::new();
-        assert_eq!(
-            resolve_row_and_container(&roles),
-            RowResolution::NoRow { depth_walked: 0 }
-        );
+        assert_eq!(resolve_row_and_container(&roles), RowResolution::NoRow);
     }
 
     #[test]
@@ -224,10 +201,7 @@ mod tests {
         let roles = chain(&["AXRow"]);
         assert_eq!(
             resolve_row_and_container(&roles),
-            RowResolution::NoContainer {
-                row_idx: 0,
-                depth_walked: 1,
-            }
+            RowResolution::NoContainer { row_idx: 0 }
         );
     }
 }

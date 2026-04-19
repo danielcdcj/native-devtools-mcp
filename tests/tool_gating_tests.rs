@@ -784,7 +784,7 @@ mod ax_dispatch_tool_gating {
     use super::*;
 
     #[test]
-    fn ax_click_and_ax_set_value_are_visible_on_macos() {
+    fn ax_dispatch_triad_is_visible_on_macos() {
         let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(names.contains(&"ax_click".to_string()));
@@ -840,7 +840,7 @@ mod ax_dispatch_tool_gating {
     }
 
     #[test]
-    fn instructions_mention_ax_click_and_ax_set_value() {
+    fn instructions_mention_ax_dispatch_triad() {
         let server = MacOSDevToolsServer::new();
         let info = server.get_info();
         let instr = info.instructions.expect("instructions should be set");
@@ -898,7 +898,7 @@ mod ax_dispatch_tool_gating_non_macos {
     use super::*;
 
     #[test]
-    fn ax_click_and_ax_set_value_are_absent_off_macos() {
+    fn ax_dispatch_triad_is_absent_off_macos() {
         let tools = MacOSDevToolsServer::get_tools(true, true, true, true, true);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(!names.contains(&"ax_click".to_string()));

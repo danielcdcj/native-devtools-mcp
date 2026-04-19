@@ -108,11 +108,6 @@ impl AXRef {
     /// holds a +1 refcount and transfers ownership to the `AXRef`. Drop will
     /// balance with a single `CFRelease`. Do not call `CFRelease` on the raw
     /// pointer after calling this.
-    ///
-    /// Currently only exercised by tests and by synthetic `AXRef` construction
-    /// in the session tests; the production tree-walk uses `from_get`. Kept
-    /// as part of the symmetric create/get API contract.
-    #[allow(dead_code)]
     pub(crate) unsafe fn from_create(raw: AXUIElementRef) -> Self {
         AXRef(Arc::new(AXRefInner(raw)))
     }
@@ -382,23 +377,10 @@ pub(crate) fn set_value_attribute(element: &AXRef, text: &str) -> Result<(), AXD
     }
 }
 
-/// Read the `AXRole` attribute of an element as a `String`, or `None` when
-/// the attribute is unavailable or not a string.
-///
-/// Used by `find_ancestor_with_role` during the row-resolution walk.
-/// Crate-internal so external consumers cannot recreate the
-/// lookup-then-dispatch race `AxSession::dispatch` exists to close.
-fn ax_role(element: &AXRef) -> Option<String> {
-    unsafe { get_string_attribute(element.as_raw(), "AXRole") }
-}
-
 /// Return the AX parent of `element` if the attribute is readable.
 ///
-/// The returned `AXRef` is retained via `from_get`; drop semantics mirror
-/// every other `AXRef` in the crate. Private — the blessed way to walk
-/// ancestors is `ancestor_role_chain`, which is what `ax_select`
-/// consumes. Leaving `ax_parent` `pub(crate)` would let intra-crate
-/// callers walk the tree outside `AxSession::dispatch`'s read lock.
+/// Private — walking ancestors outside `AxSession::dispatch`'s read lock
+/// reopens the lookup-then-dispatch race `dispatch` exists to close.
 fn ax_parent(element: &AXRef) -> Option<AXRef> {
     let attr = CFString::new("AXParent");
     let mut value_ref: core_foundation::base::CFTypeRef = ptr::null();
@@ -408,13 +390,9 @@ fn ax_parent(element: &AXRef) -> Option<AXRef> {
     if err != K_AX_ERROR_SUCCESS || value_ref.is_null() {
         return None;
     }
-    // value_ref is owned (create rule). `from_get` retains, so we release the
-    // copy to keep the net refcount balanced.
-    let parent = unsafe { AXRef::from_get(value_ref as AXUIElementRef) };
-    unsafe {
-        core_foundation::base::CFRelease(value_ref);
-    }
-    Some(parent)
+    // `AXUIElementCopyAttributeValue` returns under the create rule, so
+    // `from_create` takes that +1 directly — no CFRetain/CFRelease pair.
+    Some(unsafe { AXRef::from_create(value_ref as AXUIElementRef) })
 }
 
 /// Number of parent links to traverse when hunting for an enclosing role.
@@ -435,7 +413,7 @@ pub(crate) fn ancestor_role_chain(start: &AXRef) -> Vec<(AXRef, Option<String>)>
     let mut chain: Vec<(AXRef, Option<String>)> = Vec::new();
     let mut current = start.clone();
     for _ in 0..AX_ANCESTOR_WALK_LIMIT {
-        let role = ax_role(&current);
+        let role = unsafe { get_string_attribute(current.as_raw(), "AXRole") };
         chain.push((current.clone(), role));
         match ax_parent(&current) {
             Some(p) => current = p,

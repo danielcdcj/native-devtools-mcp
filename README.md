@@ -94,8 +94,6 @@ ax_select(uid='a18g3')                         # select a sidebar / table row vi
 | `ax_set_value` | write `kAXValueAttribute` | Text fields, search fields, stepper-backed inputs |
 | `ax_select` | write `AXSelectedRows` | `NSOutlineView` / `NSTableView` row selection (sidebars, rule lists, file browsers) |
 
-Rows in sidebars typically refuse `AXPress` — `ax_click` returns `not_dispatchable` or AX error `-25205`. Use `ax_select` for those targets instead of falling back to `click(x, y)`, which would steal focus.
-
 **Invalidation rule:** every fresh `take_ax_snapshot` bumps the generation. All uids from prior snapshots become stale immediately — `ax_click` / `ax_set_value` / `ax_select` will reject them with `snapshot_expired`. Snapshot immediately before you dispatch.
 
 **When `ax_set_value` is not a substitute for typing:** `ax_set_value` writes `kAXValueAttribute` — it does not fire keydown/keyup, does not participate in IME composition, and does not populate the app's undo stack. If you need those semantics, fall back to `click(x, y)` + `type_text(text)` using the `fallback` bbox the tool returns on `not_dispatchable`.
