@@ -58,15 +58,32 @@ There's also a fourth, niche path: **AppDebugKit** (`app_connect` / `app_query` 
 
 ## 🆚 How it compares
 
-| Capability                                          | native-devtools-mcp | Playwright        | Claude Computer Use | pyautogui       |
-|-----------------------------------------------------|:-------------------:|:-----------------:|:-------------------:|:---------------:|
-| Native desktop apps                                 | ✅                  | ❌                | ✅ (screenshots)    | ✅ (coords)     |
-| Web / DOM-level automation                          | ✅ (via CDP)        | ✅                | ❌                  | ❌              |
-| Electron apps via CDP                               | ✅                  | Limited           | ❌                  | ❌              |
-| Android devices (ADB)                               | ✅                  | ❌                | ❌                  | ❌              |
-| Element-precise accessibility (no focus steal)      | ✅ (macOS)          | N/A (headless)    | ❌                  | ❌              |
-| MCP protocol — works with any MCP client            | ✅                  | ❌                | Claude only         | ❌              |
-| Local-only, no API key                              | ✅                  | ✅                | ❌ (needs API)      | ✅              |
+The most honest peers are other **MCP servers for computer use**. This table compares `native-devtools-mcp` against the leading MCP servers and two widely used non-MCP libraries.
+
+| Capability                     | native-devtools-mcp | [Playwright MCP][pw-mcp] | [Windows-MCP][win-mcp] | [Appium][appium] | [pywinauto][pwa] |
+|--------------------------------|:-------------------:|:------------------------:|:----------------------:|:----------------:|:----------------:|
+| Native macOS apps              | ✅ AX + screenshots | ❌ browser only           | ❌ Windows only        | ❌ mobile focus  | ❌ Windows only  |
+| Native Windows apps            | ✅ UIA + input      | ❌ browser only           | ✅                     | ◐ limited        | ✅                |
+| Web / DOM automation           | ✅ via CDP          | ✅                        | ◐ via Windows UIA      | ◐ mobile-web     | ❌                |
+| Electron apps                  | ✅ CDP + AX         | ✅ first-class `_electron`| ◐ if UIA exposed       | ❌                | ◐ if UIA exposed |
+| Android devices (ADB)          | ✅ built-in         | ◐ experimental            | ❌                     | ✅ first-class    | ❌                |
+| MCP-native                     | ✅                  | ✅                        | ✅                     | ❌                | ❌                |
+| Local, no API key              | ✅                  | ✅                        | ✅                     | ✅ self-hosted    | ✅                |
+
+[pw-mcp]: https://github.com/microsoft/playwright-mcp
+[win-mcp]: https://github.com/CursorTouch/Windows-MCP
+[appium]: https://github.com/appium/appium
+[pwa]: https://github.com/pywinauto/pywinauto
+
+**Where `native-devtools-mcp` stands out:** one local MCP server covering macOS + Windows + Chrome/Electron (CDP) + Android in the same session, plus element-precise macOS AX dispatch that doesn't move the cursor or steal focus.
+
+**Honest limits:**
+- **No Linux** (contributions welcome — see [Linux Desktop MCP](https://github.com/BeckhamLabsLLC/linux-desktop-mcp) for an AT-SPI2-based alternative in the meantime)
+- **Browser automation is Chrome / Electron only** via CDP — no Firefox, no WebKit (for those, use [Playwright MCP][pw-mcp])
+- **Headed only** — depends on real-machine permissions; not a headless CI test grid
+- **No iOS**
+
+If you need *just* web automation, [Playwright MCP][pw-mcp] is more mature. If you need *just* mobile (iOS + Android + deep device features), [Appium][appium] is more mature. This server is for the cross-cutting native-desktop + Chrome/Electron + Android case.
 
 ## 📦 Installation
 
@@ -305,7 +322,7 @@ Computes the SHA-256 hash of the running binary and checks it against the offici
 
 **Does it need an API key?** No. The server runs entirely locally and makes no outbound API calls. Your MCP client may need its own LLM API key (Anthropic, OpenAI, etc.), but the server itself does not.
 
-**How is this different from Claude Computer Use?** Claude Computer Use is an Anthropic feature locked to Claude models and works via screenshots + coordinates. `native-devtools-mcp` is model-agnostic (anything that speaks MCP — Claude, Gemini, GPT, local models via a bridge), runs locally, and adds element-precise macOS AX dispatch, Chrome DevTools Protocol, and Android over ADB.
+**How is this different from Claude Computer Use?** Claude Computer Use is an [Anthropic API beta tool](https://docs.anthropic.com/en/docs/build-with-claude/computer-use) — it works with Claude Opus, Sonnet, and Haiku behind a beta header and requires an Anthropic API key. It operates via screenshots + coordinate-based mouse/keyboard actions. `native-devtools-mcp` is model-agnostic (anything that speaks MCP), runs 100% locally with no API dependency, and adds element-precise macOS AX dispatch, Chrome DevTools Protocol, and Android over ADB.
 
 **Does it work with local models (Ollama, LM Studio, etc.)?** Yes — as long as the client speaks MCP. Any MCP-compatible client can connect. Non-MCP clients can wrap the server behind a bridge.
 
@@ -313,7 +330,7 @@ Computes the SHA-256 hash of the running binary and checks it against the offici
 
 **Does it record what I'm doing?** No — unless you explicitly call `start_recording`, which writes to a directory you specify and stops on `stop_recording`. Hover tracking likewise runs only while `start_hover_tracking` is active. Nothing is recorded or sent anywhere otherwise.
 
-**How does it compare to Playwright or Puppeteer?** Those are browser-only. `native-devtools-mcp` covers native desktop apps and Android in addition to Chrome/Electron (via CDP). If you only need web automation, Playwright is mature and a better fit.
+**How does it compare to Playwright or [Playwright MCP](https://github.com/microsoft/playwright-mcp)?** Playwright is the mature choice for pure web automation — Chromium, Firefox, and WebKit, plus first-class Electron support via `_electron.launch()` and experimental Android automation. Playwright MCP wraps it as an MCP server for AI agents. If you only need web / Electron automation, use Playwright MCP. `native-devtools-mcp` covers native macOS / Windows apps and Android devices in addition to Chrome/Electron, in one local MCP server — which Playwright MCP does not.
 
 ## 🏗️ Architecture
 
