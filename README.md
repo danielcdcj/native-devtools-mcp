@@ -1,33 +1,19 @@
 # native-devtools-mcp
 
-`native-devtools-mcp` is a Model Context Protocol (MCP) server for computer use on macOS, Windows, and Android. It gives AI agents and MCP clients direct control over native desktop apps, Chrome/Electron browsers, and Android devices through screenshots, OCR, accessibility-based text lookup, input simulation, window management, Chrome DevTools Protocol (CDP), and ADB.
-
-Use it when browser-only automation is not enough: Electron apps (Signal, Discord, VS Code), Chrome browser automation, system dialogs, desktop tools, native app testing, and Android device workflows. It works with [Claude Desktop](https://claude.ai/download), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and other MCP-compatible clients.
-
-Useful for MCP-based computer use, desktop automation, browser automation, UI automation, native app testing, e2e testing, RPA, screen reading, mouse and keyboard control, Chrome DevTools Protocol automation, and Android device automation.
-
-```bash
-npx -y native-devtools-mcp
-```
-
-**Core capabilities**
-- Screenshots, OCR, and accessibility-first `find_text`
-- **Element-precise, focus-preserving automation (macOS):** `take_ax_snapshot` → `ax_click` / `ax_set_value` / `ax_select` — dispatch against Accessibility-tree elements without moving the mouse or stealing focus. Generation-tagged uids (`a<N>g<gen>`) make stale snapshots fail loud instead of silently targeting the wrong element.
-- `click`, `type_text`, `scroll`, `launch_app`, `quit_app`, and window management
-- `element_at_point` for inspecting accessible UI elements at screen coordinates
-- `load_image` + `find_image` for non-text UI elements such as icons and custom controls
-- Chrome/Electron automation via CDP: snapshots, click, fill, navigate, type, and tab management
-- Android screenshots, text lookup, input, and app control over ADB
-- Local execution: screenshots and input stay on the machine
-
-**For AI agents:** Read [`AGENTS.md`](./AGENTS.md) for tool definitions, workflow patterns, and machine-readable usage guidance.
+> **An MCP server for computer use on native desktop and mobile apps — macOS, Windows, Android, and Chrome/Electron via CDP.**
 
 ![Version](https://img.shields.io/npm/v/native-devtools-mcp?style=flat-square)
 ![License](https://img.shields.io/npm/l/native-devtools-mcp?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-blue?style=flat-square)
 ![Downloads](https://img.shields.io/npm/dt/native-devtools-mcp?style=flat-square)
 
-[Features](#-features) • [Installation](#-installation) • [Getting Started](#-getting-started) • [Recipes](#-recipes-and-examples) • [Security & Trust](#-security--trust) • [For AI Agents](#-for-ai-agents-llms) • [Chrome/Electron (CDP)](#-browser-automation-cdp) • [Android](#-android-support)
+`native-devtools-mcp` gives AI agents and MCP clients direct control over native desktop apps, Chrome/Electron browsers, and Android devices — screenshots, OCR, accessibility-first element lookup, input simulation, window management, Chrome DevTools Protocol (CDP), and ADB — all in one local server. Works with [Claude Desktop](https://claude.ai/download), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.com), and other MCP-compatible clients.
+
+## Quickstart
+
+```bash
+npx -y native-devtools-mcp
+```
 
 <div align="center">
 <table>
@@ -46,59 +32,41 @@ npx -y native-devtools-mcp
 
 ## 🚀 Features
 
-- **👀 Computer Vision:** Capture screenshots of screens, windows, or specific regions. Includes built-in OCR (text recognition) to "read" the screen.
-- **🖱️ Input Simulation:** Click, drag, scroll, and type text naturally. Supports global coordinates and window-relative actions.
-- **🪟 Window Management:** List open windows, find applications, and bring them to focus.
-- **🧩 Template Matching:** Find non-text UI elements (icons, shapes) using `load_image` + `find_image`, returning precise click coordinates.
-- **🔒 Local & Private:** 100% local execution. No screenshots or data are ever sent to external servers.
-- **📱 Android Support:** Connect to Android devices over ADB for screenshots, input simulation, UI element search, and app management — all from the same MCP server.
-- **🔍 Hover Tracking:** Track cursor hover transitions across UI elements in real-time. Configurable dwell threshold filters pass-through noise — designed for LLMs observing user navigation patterns.
-- **🌐 Browser Automation (CDP):** Connect to Chrome/Electron apps via Chrome DevTools Protocol. Take accessibility tree snapshots, click elements by UID, evaluate JavaScript, and manage tabs — all without a separate Node.js server.
-- **🔌 Multi-Mode Interaction:**
-    1.  **Visual/Native:** Works with *any* app via screenshots & coordinates (Universal).
-    2.  **AX Dispatch (macOS):** Element-precise, focus-preserving automation against the Accessibility tree — preferred for native macOS apps.
-    3.  **CDP:** Connect to Chrome/Electron via `--remote-debugging-port` for DOM-level element targeting and JS evaluation.
-    4.  **AppDebugKit:** Deep integration for supported apps to inspect the UI tree (DOM-like structure).
+- **👀 Computer Vision:** Screenshots of screens, windows, or regions with built-in OCR (Vision on macOS, Windows Media OCR on Windows).
+- **🖱️ Input Simulation:** Click, drag, scroll, type — global coordinates, window-relative, and screenshot-relative targeting.
+- **🎯 Element-Precise AX Dispatch (macOS):** `take_ax_snapshot` → `ax_click` / `ax_set_value` / `ax_select` — dispatch against Accessibility-tree elements without moving the mouse or stealing focus. The preferred path for native macOS apps.
+- **🌐 Browser Automation (CDP):** Chrome DevTools Protocol for Chrome and Electron apps (Signal, Discord, VS Code, Slack) — DOM-level click, fill, navigate, and JS evaluation without a separate Node.js server.
+- **📱 Android (ADB):** Screenshots, uiautomator-based text lookup, input, and app management over USB or Wi-Fi.
+- **🧩 Template Matching:** `load_image` + `find_image` for icons, toggles, and custom controls OCR can't identify.
+- **🪟 Window Management:** List, focus, launch, and quit apps; record windows as timestamped JPEG frames.
+- **🔍 Hover Tracking:** Observe user navigation patterns with dwell-filtered hover events — designed for LLMs watching a user work.
+- **🔒 Local & Private:** 100% local execution. Screenshots and input never leave your machine.
 
-## 🤖 For AI Agents (LLMs)
+## 🧭 Three Approaches to Interaction
 
-This MCP server is designed to be **highly discoverable and usable** by AI models (Claude, Gemini, GPT).
+Pick the approach that matches your target app.
 
-- **[📄 Read `AGENTS.md`](./AGENTS.md):** A compact, token-optimized technical reference designed specifically for ingestion by LLMs. It contains intent definitions, schema examples, and reasoning patterns.
+| Approach              | Best for                                                                 | Key tools                                                               |
+|-----------------------|--------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| **Visual** (universal)| Any app — games, Qt, custom renderers, anything without an AX tree       | `take_screenshot`, `find_text`, `click`, `type_text`, `find_image`      |
+| **AX Dispatch** (macOS — *preferred for native macOS apps*) | AppKit / SwiftUI apps — System Settings, Finder, Mail, Xcode, Notes | `take_ax_snapshot`, `ax_click`, `ax_set_value`, `ax_select`             |
+| **CDP** (Chrome / Electron) | Web content, Electron apps with `--remote-debugging-port`          | `cdp_connect`, `cdp_take_ax_snapshot`, `cdp_click`, `cdp_fill`          |
 
-**Core Capabilities for System Prompts:**
-1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).
-2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
-3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately. Uses the platform **accessibility API** (macOS Accessibility / Windows UI Automation) for precise element-level matching, with OCR fallback.
-4.  `take_ax_snapshot` / `ax_click` / `ax_set_value` / `ax_select` (macOS): Element-precise, focus-preserving automation against the Accessibility tree. Snapshot returns a tree of generation-tagged uids (e.g. `a42g3`); dispatch primitives press buttons (`AXPress`), write text fields (`kAXValueAttribute`), and select rows (`AXSelectedRows`) without moving the mouse. **Preferred for native macOS apps.**
-5.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
-6.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
-7.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
-8.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
-9.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
-10. `cdp_connect` / `cdp_take_ax_snapshot` / `cdp_take_dom_snapshot` / `cdp_find_elements` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
+> For macOS native apps, **AX Dispatch is the preferred path** — it's element-precise, doesn't move the mouse, and doesn't steal focus. See the [Native App AX Dispatch recipe](./examples/native-app-ax-dispatch-flow.md).
 
-### Element-precise AX dispatch (macOS, preferred for native apps)
+There's also a fourth, niche path: **AppDebugKit** (`app_connect` / `app_query` / `app_click`) for apps instrumented with the AppDebugKit library. Mostly useful for developers testing their own apps.
 
-```
-take_ax_snapshot(app_name='System Settings')
-  → tree with uids like `a42g3` (generation-tagged) and bboxes
-ax_click(uid='a42g3')                          # press a button / menu item
-ax_set_value(uid='a5g3', text='hello world')   # write a text field via kAXValueAttribute
-ax_select(uid='a18g3')                         # select a sidebar / table row via AXSelectedRows
-```
+## 🆚 How it compares
 
-**Picking the right dispatch primitive:**
-
-| Primitive | AX mechanism | Best for |
-|-----------|--------------|----------|
-| `ax_click` | `AXPress` action | Buttons, menu items, checkboxes, toolbar items |
-| `ax_set_value` | write `kAXValueAttribute` | Text fields, search fields, stepper-backed inputs |
-| `ax_select` | write `AXSelectedRows` | `NSOutlineView` / `NSTableView` row selection (sidebars, rule lists, file browsers) |
-
-**Invalidation rule:** every fresh `take_ax_snapshot` bumps the generation. All uids from prior snapshots become stale immediately — `ax_click` / `ax_set_value` / `ax_select` will reject them with `snapshot_expired`. Snapshot immediately before you dispatch.
-
-**When `ax_set_value` is not a substitute for typing:** `ax_set_value` writes `kAXValueAttribute` — it does not fire keydown/keyup, does not participate in IME composition, and does not populate the app's undo stack. If you need those semantics, fall back to `click(x, y)` + `type_text(text)` using the `fallback` bbox the tool returns on `not_dispatchable`.
+| Capability                                          | native-devtools-mcp | Playwright        | Claude Computer Use | pyautogui       |
+|-----------------------------------------------------|:-------------------:|:-----------------:|:-------------------:|:---------------:|
+| Native desktop apps                                 | ✅                  | ❌                | ✅ (screenshots)    | ✅ (coords)     |
+| Web / DOM-level automation                          | ✅ (via CDP)        | ✅                | ❌                  | ❌              |
+| Electron apps via CDP                               | ✅                  | Limited           | ❌                  | ❌              |
+| Android devices (ADB)                               | ✅                  | ❌                | ❌                  | ❌              |
+| Element-precise accessibility (no focus steal)      | ✅ (macOS)          | N/A (headless)    | ❌                  | ❌              |
+| MCP protocol — works with any MCP client            | ✅                  | ❌                | Claude only         | ❌              |
+| Local-only, no API key                              | ✅                  | ✅                | ❌ (needs API)      | ✅              |
 
 ## 📦 Installation
 
@@ -138,45 +106,10 @@ cargo build --release
 
 </details>
 
-## 🏁 Getting Started
-
-After installing, run the setup wizard:
-
-```bash
-npx native-devtools-mcp setup
-```
-
-This will:
-1. **Check permissions** (macOS) — verifies Accessibility and Screen Recording, opens System Settings if needed
-2. **Detect your MCP clients** — finds Claude Desktop, Claude Code, Cursor
-3. **Write the configuration** — generates the correct JSON config and offers to write it for you
-
-Then restart your MCP client and you're ready to go.
-
-> **Claude Desktop on macOS** requires the signed app bundle (Gatekeeper blocks npx). Download `NativeDevtools-X.X.X.dmg` from [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases), drag to `/Applications`, then run setup — it will detect the app and configure Claude Desktop to use it.
-
-> **VS Code, Windsurf, and other clients:** `setup` doesn't auto-detect these yet. Run `setup` for the permission checks, then see the manual configuration below for the JSON config snippet.
-
-> **Claude Code tip:** To avoid approving every tool call (clicks, screenshots), add this to `.claude/settings.local.json`:
-> ```json
-> { "permissions": { "allow": ["mcp__native-devtools__*"] } }
-> ```
-
-## 📚 Recipes and Examples
-
-- [Recipes and Examples Index](./examples/README.md)
-- [Claude Desktop Setup](./examples/claude-desktop-setup.md)
-- [Claude Code Setup](./examples/claude-code-setup.md)
-- [Cursor Setup](./examples/cursor-setup.md)
-- [End-to-End Desktop Flow](./examples/end-to-end-desktop-flow.md)
-- [Native App AX Dispatch Flow (macOS)](./examples/native-app-ax-dispatch-flow.md) — preferred for native macOS apps
-- [Native App Click Flow](./examples/native-app-click-flow.md)
-- [OCR Fallback and Element Inspection](./examples/ocr-fallback-and-element-inspection.md)
-- [Template Matching Flow](./examples/template-matching-flow.md)
-- [Android Quickstart](./examples/android-quickstart.md)
+### Manual configuration (without the setup wizard)
 
 <details>
-<summary><strong>Manual configuration (without setup)</strong></summary>
+<summary>Click to expand MCP client config snippets</summary>
 
 #### macOS — Claude Desktop
 
@@ -213,76 +146,50 @@ Requires Node.js 18+.
 
 </details>
 
-## 🔐 Security & Trust
+> **macOS permissions:** the server needs **Accessibility** and **Screen Recording** permissions. The setup wizard opens the right System Settings panes for you. Without both, clicks silently fail and screenshots return a black rectangle.
 
-This tool requires Accessibility and Screen Recording permissions — that's a lot of trust. Here's how to verify it deserves it.
+> **Linux is not supported yet.** The server uses platform-specific APIs (Core Graphics + Accessibility on macOS, Win32 + UI Automation on Windows) that don't exist on Linux. Contributions welcome — X11/Wayland screenshot, input, and AT-SPI paths would be a good first issue.
 
-### Verify your binary
+## 🏁 Getting Started
 
-```bash
-native-devtools-mcp verify
-```
-
-Computes the SHA-256 hash of the running binary and checks it against the official checksums published on the [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases) page. If the hash matches, you're running an unmodified official build.
-
-### Build from source
-
-Don't trust pre-built binaries? Build it yourself:
+After installing, run the setup wizard:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sh3ll3x3c/native-devtools-mcp/master/scripts/build-from-source.sh | bash
+npx native-devtools-mcp setup
 ```
 
-The script clones the repo, optionally opens it for review before building, compiles the release binary, and runs setup. See [`scripts/build-from-source.sh`](scripts/build-from-source.sh).
+This will:
+1. **Check permissions** (macOS) — verifies Accessibility and Screen Recording, opens System Settings if needed.
+2. **Detect your MCP clients** — finds Claude Desktop, Claude Code, and Cursor.
+3. **Write the configuration** — generates the correct JSON config and offers to write it for you.
 
-### Audit the code
+Then restart your MCP client and you're ready to go.
 
-[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) documents exactly which permissions are used, where in the source code, and includes an LLM audit prompt you can paste into any AI model to perform an independent security review.
+> **Claude Desktop on macOS** requires the signed app bundle (Gatekeeper blocks npx). Download `NativeDevtools-X.X.X.dmg` from [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases), drag to `/Applications`, then run setup — it will detect the app and configure Claude Desktop to use it.
 
-### What this server does NOT do
+> **VS Code, Windsurf, and other clients:** `setup` doesn't auto-detect these yet. Run `setup` for the permission checks, then see the manual configuration above for the JSON config snippet.
 
-- **No unsolicited network access** — the server never phones home. Network is only used when the MCP client explicitly invokes `app_connect` (WebSocket to a local debug server) or when you run the `verify` subcommand (fetches checksums from GitHub)
-- **No file scanning** — does not read or index your files. The only file reads are `load_image` (reads a path the MCP client explicitly provides) and short-lived temp files for screenshots (deleted immediately after capture)
-- **No background persistence** — exits when the MCP client disconnects
-- **No data exfiltration** — screenshots are returned to the MCP client via stdout, never stored or transmitted elsewhere
+> **Claude Code tip:** To avoid approving every tool call (clicks, screenshots), add this to `.claude/settings.local.json`:
+> ```json
+> { "permissions": { "allow": ["mcp__native-devtools__*"] } }
+> ```
 
-## 🔍 Three Approaches to Interaction
+### ⚠️ Operational safety
 
-We provide three ways for agents to interact with apps, so they can pick the best tool for the target.
+- **Hands off:** when the agent is "driving" (clicking / typing), don't move your mouse or type. Real hardware inputs conflict with simulated ones and clicks land in the wrong place.
+- **Focus matters:** ensure the window you want the agent to use is visible. If a popup steals focus mid-flow, the agent may type into the wrong window unless it re-checks first.
+- **Prefer AX Dispatch on macOS** when you want to keep using the machine — AX calls don't move the cursor and don't steal focus from whatever window is active.
 
-### 1. The "Visual" Approach (Universal)
-**Best for:** Any app — Electron, Qt, games, custom renderers, anything without a rich accessibility tree.
-*   **How it works:** The agent takes a screenshot, analyzes it visually (or uses OCR), and clicks at coordinates.
-*   **Tools:** `take_screenshot`, `find_text`, `click`, `type_text` (plus `load_image` / `find_image` for icons and shapes).
-*   **Example:** "Click the button that looks like a gear icon." → use `find_image` with a gear template.
+## 📚 Recipes and Examples
 
-### 2. The "Structural (AX)" Approach (macOS native apps — preferred)
-**Best for:** Native macOS apps (AppKit / SwiftUI) — System Settings, Finder, Mail, Xcode, Notes, most App Store apps.
-*   **How it works:** The agent takes an Accessibility-tree snapshot, picks an element by uid, and dispatches an AX action — no mouse movement, no focus steal. Generation-tagged uids make stale snapshots fail loud.
-*   **Tools:** `take_ax_snapshot`, `ax_click`, `ax_set_value`, `ax_select` (plus `element_at_point` for inspection).
-*   **Example:** `take_ax_snapshot(app_name="System Settings")` → `ax_click(uid="a42g3")`.
-
-### 3. The "Structural" Approach (AppDebugKit)
-**Best for:** Apps specifically instrumented with our AppDebugKit library (mostly for developers testing their own apps).
-*   **How it works:** The agent connects to a debug port and queries the UI tree (like HTML DOM).
-*   **Tools:** `app_connect`, `app_query`, `app_click`.
-*   **Example:** `app_click(element_id="submit-button")`.
-
-## 🧩 Template Matching (find_image)
-
-Use `find_image` when the target is **not text** (icons, toggles, custom controls) and OCR or `find_text` cannot identify it.
-
-**Typical flow:**
-1. `take_screenshot(app_name="MyApp")` → `screenshot_id`
-2. `load_image(path="/path/to/icon.png")` → `template_id`
-3. `find_image(screenshot_id="...", template_id="...")` → `matches` with `screen_x/screen_y`
-4. `click(x=..., y=...)`
-
-**Fast vs Accurate:**
-- **fast** (default): uses downscaling and early-exit for speed.
-- **accurate**: uses full-resolution, wider scale search, and smaller stride for thorough matching.
-
-Optional inputs like `mask_id`, `search_region`, `scales`, and `rotations` can improve precision and performance.
+- [Recipes Index](./examples/README.md)
+- [Claude Desktop Setup](./examples/claude-desktop-setup.md) · [Claude Code Setup](./examples/claude-code-setup.md) · [Cursor Setup](./examples/cursor-setup.md)
+- [End-to-End Desktop Flow](./examples/end-to-end-desktop-flow.md)
+- [Native App AX Dispatch Flow (macOS)](./examples/native-app-ax-dispatch-flow.md) — **preferred for native macOS apps**
+- [Native App Click Flow](./examples/native-app-click-flow.md)
+- [OCR Fallback and Element Inspection](./examples/ocr-fallback-and-element-inspection.md)
+- [Template Matching Flow](./examples/template-matching-flow.md)
+- [Android Quickstart](./examples/android-quickstart.md)
 
 ## 🌐 Browser Automation (CDP)
 
@@ -301,21 +208,21 @@ cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```
 
-**19 CDP tools** — snapshot (AX + DOM), find elements, click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for full tool reference.
+**19 CDP tools** — snapshot (AX + DOM), find elements, click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for the full tool reference.
 
-**Chrome 136+ note:** Requires `--user-data-dir=<path>` alongside `--remote-debugging-port` (Chrome silently ignores the debug port with the default profile). Electron apps only need `--remote-debugging-port`.
+> **Chrome 136+ note:** requires `--user-data-dir=<path>` alongside `--remote-debugging-port` — Chrome silently ignores the debug port with the default profile. Electron apps only need `--remote-debugging-port`.
 
 ## 📱 Android Support
 
-Android support is built-in. The MCP server communicates with Android devices over ADB (USB or Wi-Fi), providing screenshots, input simulation, UI element search, and app management.
+Android support is built-in. The server communicates with Android devices over ADB (USB or Wi-Fi), providing screenshots, input simulation, UI element search, and app management.
 
 ### Prerequisites
 
-1. **ADB installed** on the host machine (`brew install android-platform-tools` on macOS, or install via [Android SDK](https://developer.android.com/tools/releases/platform-tools))
-2. **USB debugging enabled** on the Android device (Settings > Developer options > USB debugging)
-3. **ADB server running** — starts automatically when you run `adb devices`
+1. **ADB installed** on the host (`brew install android-platform-tools` on macOS, or via [Android SDK](https://developer.android.com/tools/releases/platform-tools)).
+2. **USB debugging enabled** on the device (Settings > Developer options > USB debugging).
+3. **ADB server running** — starts automatically when you run `adb devices`.
 
-### Android tools
+### Tools
 
 All Android tools are prefixed with `android_` and appear dynamically after connecting to a device:
 
@@ -338,37 +245,75 @@ All Android tools are prefixed with `android_` and appear dynamically after conn
 ### Typical workflow
 
 ```
-android_list_devices          → find your device serial
+android_list_devices           → find your device serial
 android_connect(serial="...")  → connect (unlocks android_* tools)
-android_screenshot            → see what's on screen
-android_find_text(text="OK")  → locate a button
-android_click(x=..., y=...)   → tap it
+android_screenshot             → see what's on screen
+android_find_text(text="OK")   → locate a button
+android_click(x=..., y=...)    → tap it
 ```
 
-### Known issues
+<details>
+<summary><strong>Known issues & advanced setup</strong></summary>
 
-> **MIUI / HyperOS (Xiaomi, Redmi, POCO devices):** Input injection (`android_click`, `android_type_text`, `android_press_key`, `android_swipe`) and `android_find_text` (via uiautomator) require an additional security toggle:
->
+**MIUI / HyperOS (Xiaomi, Redmi, POCO devices):** input injection (`android_click`, `android_type_text`, `android_press_key`, `android_swipe`) and `android_find_text` (via uiautomator) require an additional security toggle:
+
 > **Settings > Developer options > USB debugging (Security settings)** — enable this toggle. MIUI may require you to sign in with a Mi account to enable it.
->
-> Without this, you'll see `INJECT_EVENTS permission` errors for input tools and `could not get idle state` errors for `android_find_text`. Screenshot and device info tools work without this toggle.
 
-> **Wireless ADB:** To connect without a USB cable, first connect via USB and run:
-> ```bash
-> adb tcpip 5555
-> adb connect <phone-ip>:5555
-> ```
-> Then use the `<phone-ip>:5555` serial in `android_connect`.
+Without this, you'll see `INJECT_EVENTS permission` errors for input tools and `could not get idle state` errors for `android_find_text`. Screenshot and device info tools work without this toggle.
 
-### Smoke tests
+**Wireless ADB:** to connect without a USB cable, first connect via USB and run:
+```bash
+adb tcpip 5555
+adb connect <phone-ip>:5555
+```
+Then use the `<phone-ip>:5555` serial in `android_connect`.
 
-Smoke tests verify all Android tools against a real connected device. They are `#[ignore]`d by default and must be run explicitly:
-
+**Smoke tests:** verify all Android tools against a real connected device. They are `#[ignore]`d by default:
 ```bash
 cargo test --test android_smoke_tests -- --ignored --test-threads=1
 ```
+Tests must run sequentially since they share a single physical device. The device must be unlocked and awake.
 
-Tests must run sequentially (`--test-threads=1`) since they share a single physical device. The device must be unlocked and awake.
+</details>
+
+## 🔐 Security & Trust
+
+This tool requires Accessibility and Screen Recording permissions — that's a lot of trust. Here's how to verify it deserves it.
+
+### Verify your binary
+
+```bash
+native-devtools-mcp verify
+```
+
+Computes the SHA-256 hash of the running binary and checks it against the official checksums published on the [GitHub Releases](https://github.com/sh3ll3x3c/native-devtools-mcp/releases) page. If the hash matches, you're running an unmodified official build.
+
+### Audit the code
+
+[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) documents exactly which permissions are used, where in the source code, and includes an LLM audit prompt you can paste into any AI model for an independent security review.
+
+### What this server does NOT do
+
+- **No unsolicited network access.** The server never phones home. Network is only used when the MCP client explicitly invokes `app_connect` (WebSocket to a local debug server) or when you run the `verify` subcommand (fetches checksums from GitHub).
+- **No file scanning.** Does not read or index your files. The only file reads are `load_image` (a path the MCP client explicitly provides) and short-lived temp files for screenshots (deleted immediately after capture).
+- **No background persistence.** Exits when the MCP client disconnects.
+- **No data exfiltration.** Screenshots are returned to the MCP client via stdout, never stored or transmitted elsewhere.
+
+## ❓ FAQ
+
+**Does it work on Linux?** Not yet — macOS, Windows, and Android only. The server uses Core Graphics + Accessibility APIs on macOS and Win32 + UI Automation on Windows. An X11/Wayland + AT-SPI port would be a welcome contribution.
+
+**Does it need an API key?** No. The server runs entirely locally and makes no outbound API calls. Your MCP client may need its own LLM API key (Anthropic, OpenAI, etc.), but the server itself does not.
+
+**How is this different from Claude Computer Use?** Claude Computer Use is an Anthropic feature locked to Claude models and works via screenshots + coordinates. `native-devtools-mcp` is model-agnostic (anything that speaks MCP — Claude, Gemini, GPT, local models via a bridge), runs locally, and adds element-precise macOS AX dispatch, Chrome DevTools Protocol, and Android over ADB.
+
+**Does it work with local models (Ollama, LM Studio, etc.)?** Yes — as long as the client speaks MCP. Any MCP-compatible client can connect. Non-MCP clients can wrap the server behind a bridge.
+
+**Is it free / open source?** Yes, MIT-licensed. See [`LICENSE`](./LICENSE).
+
+**Does it record what I'm doing?** No — unless you explicitly call `start_recording`, which writes to a directory you specify and stops on `stop_recording`. Hover tracking likewise runs only while `start_hover_tracking` is active. Nothing is recorded or sent anywhere otherwise.
+
+**How does it compare to Playwright or Puppeteer?** Those are browser-only. `native-devtools-mcp` covers native desktop apps and Android in addition to Chrome/Electron (via CDP). If you only need web automation, Playwright is mature and a better fit.
 
 ## 🏗️ Architecture
 
@@ -376,6 +321,7 @@ Tests must run sequentially (`--test-threads=1`) since they share a single physi
 graph TD
     Client[Claude / LLM Client] <-->|JSON-RPC 2.0| Server[native-devtools-mcp]
     Server -->|Direct API| Sys[System APIs]
+    Server -->|CDP / WebSocket| Chrome[Chrome / Electron]
     Server -->|WebSocket| Debug[AppDebugKit]
     Server -->|ADB Protocol| Android[Android Device]
 
@@ -384,7 +330,8 @@ graph TD
         Sys -->|Input| Win[Win32 / SendInput]
         Sys -->|Text Search| UIA[UI Automation]
         Sys -->|AX Snapshot + Dispatch| AXapi[Accessibility API - macOS]
-        Debug -.->|Inspect| App[Target App]
+        Chrome -.->|DOM-level| ChromeApp[Web Page / Electron UI]
+        Debug -.->|Inspect| App[Instrumented App]
     end
 
     subgraph "Android Device (USB/Wi-Fi)"
@@ -403,14 +350,14 @@ graph TD
 | | Input | `CGEvent` (CoreGraphics) |
 | | Text Search (`find_text`) | `Accessibility API` (primary), Vision OCR (fallback) |
 | | AX Snapshot + Dispatch (`take_ax_snapshot` / `ax_click` / `ax_set_value` / `ax_select`) | Accessibility API — AX tree walk, `AXPress` action, `kAXValueAttribute` write, `AXSelectedRows` write (focus-preserving, no mouse movement) |
-| | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback (Accessibility API) |
+| | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback |
 | | Hover Tracking (`start_hover_tracking`) | `CGEvent` cursor + Accessibility API polling |
 | | Screen Recording (`start_recording`) | `CGWindowListCreateImage` at configurable fps |
 | | OCR | `VNRecognizeTextRequest` (Vision Framework) |
 | **Windows** | Screenshots | `BitBlt` (GDI) |
 | | Input | `SendInput` (Win32) |
 | | Text Search (`find_text`) | `UI Automation` (primary), WinRT OCR (fallback) |
-| | Element Inspection (`element_at_point`) | `IUIAutomation::ElementFromPoint` (UI Automation) |
+| | Element Inspection (`element_at_point`) | `IUIAutomation::ElementFromPoint` |
 | | Hover Tracking (`start_hover_tracking`) | `GetCursorPos` + UI Automation polling |
 | | Screen Recording (`start_recording`) | `BitBlt` (GDI) at configurable fps |
 | | OCR | `Windows.Media.Ocr` (WinRT) |
@@ -418,6 +365,7 @@ graph TD
 | | Input | `adb shell input` (tap, swipe, text, keyevent) |
 | | Text Search (`find_text`) | `uiautomator dump` (accessibility tree) |
 | | Device Communication | `adb_client` crate (native Rust ADB protocol) |
+| **Chrome / Electron** | DOM-level automation | Chrome DevTools Protocol via `chromiumoxide` |
 
 ### Screenshot Coordinate Precision
 
@@ -435,25 +383,24 @@ screen_y = screenshot_origin_y + (pixel_y / screenshot_scale)
 ```
 
 **Implementation notes:**
-- **Window captures** (macOS): Uses `screencapture -o` which excludes window shadow. The captured image dimensions match `kCGWindowBounds × scale` exactly, ensuring click coordinates derived from screenshots land on intended UI elements.
-- **Region captures**: Origin coordinates are aligned to integers to match the actual captured area.
+- **Window captures** (macOS): uses `screencapture -o` which excludes window shadow. Captured dimensions match `kCGWindowBounds × scale` exactly, so click coordinates derived from screenshots land on intended UI elements.
+- **Region captures:** origin coordinates are aligned to integers to match the actual captured area.
 
 </details>
-
-## ⚠️ Operational Safety
-
-*   **Hands Off:** When the agent is "driving" (clicking/typing), **do not move your mouse or type**.
-    *   *Why?* Real hardware inputs can conflict with the simulated ones, causing clicks to land in the wrong place.
-*   **Focus Matters:** Ensure the window you want the agent to use is visible. If a popup steals focus, the agent might type into the wrong window unless it checks first.
 
 ## 🪟 Windows Notes
 
 Works out of the box on **Windows 10/11**.
-*   Uses standard Win32 APIs (GDI, SendInput).
-*   `find_text` uses **UI Automation (UIA)** as the primary search mechanism, querying the accessibility tree for element names. This is the same accessibility-first approach used on macOS (with the Accessibility API). Falls back to OCR automatically when UIA finds no matches.
-*   OCR uses the built-in Windows Media OCR engine (offline).
-*   **Note:** Cannot interact with "Run as Administrator" windows unless the MCP server itself is also running as Administrator.
-*   **Screen Recording Performance:** Screen recording uses GDI/BitBlt at configurable fps (default 5). For higher fps requirements or game capture scenarios, DXGI Desktop Duplication API would provide hardware-accelerated capture — this is a planned future upgrade.
+
+- Uses standard Win32 APIs (GDI, SendInput).
+- `find_text` uses **UI Automation (UIA)** as the primary search mechanism, querying the accessibility tree for element names. This is the same accessibility-first approach used on macOS. Falls back to OCR automatically when UIA finds no matches.
+- OCR uses the built-in Windows Media OCR engine (offline).
+- **Cannot interact with "Run as Administrator" windows** unless the MCP server itself is also running as Administrator.
+- **Screen recording** uses GDI/BitBlt at configurable fps (default 5). For higher fps or game capture, DXGI Desktop Duplication API would provide hardware-accelerated capture — a planned future upgrade.
+
+## 🤖 For AI Agents
+
+Agent-oriented usage — intent definitions, schema examples, reasoning patterns — lives in [**`AGENTS.md`**](./AGENTS.md). It's a compact, token-optimized reference designed for ingestion by LLMs (Claude, Gemini, GPT, local models). If you're an AI agent reading this README to decide whether to use the server, go there next.
 
 ## ⭐ Star History
 
