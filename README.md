@@ -54,10 +54,11 @@ npx -y native-devtools-mcp
 - **📱 Android Support:** Connect to Android devices over ADB for screenshots, input simulation, UI element search, and app management — all from the same MCP server.
 - **🔍 Hover Tracking:** Track cursor hover transitions across UI elements in real-time. Configurable dwell threshold filters pass-through noise — designed for LLMs observing user navigation patterns.
 - **🌐 Browser Automation (CDP):** Connect to Chrome/Electron apps via Chrome DevTools Protocol. Take accessibility tree snapshots, click elements by UID, evaluate JavaScript, and manage tabs — all without a separate Node.js server.
-- **🔌 Dual-Mode Interaction:**
+- **🔌 Multi-Mode Interaction:**
     1.  **Visual/Native:** Works with *any* app via screenshots & coordinates (Universal).
-    2.  **AppDebugKit:** Deep integration for supported apps to inspect the UI tree (DOM-like structure).
+    2.  **AX Dispatch (macOS):** Element-precise, focus-preserving automation against the Accessibility tree — preferred for native macOS apps.
     3.  **CDP:** Connect to Chrome/Electron via `--remote-debugging-port` for DOM-level element targeting and JS evaluation.
+    4.  **AppDebugKit:** Deep integration for supported apps to inspect the UI tree (DOM-like structure).
 
 ## 🤖 For AI Agents (LLMs)
 
@@ -69,12 +70,13 @@ This MCP server is designed to be **highly discoverable and usable** by AI model
 1.  `take_screenshot`: The "eyes". Returns images + layout metadata + text locations (OCR).
 2.  `click` / `type_text`: The "hands". Interacts with the system based on visual feedback.
 3.  `find_text`: A shortcut to find text on screen and get its coordinates immediately. Uses the platform **accessibility API** (macOS Accessibility / Windows UI Automation) for precise element-level matching, with OCR fallback.
-4.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
-5.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
-6.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
-7.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
-8.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
-9.  `cdp_connect` / `cdp_take_ax_snapshot` / `cdp_take_dom_snapshot` / `cdp_find_elements` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
+4.  `take_ax_snapshot` / `ax_click` / `ax_set_value` / `ax_select` (macOS): Element-precise, focus-preserving automation against the Accessibility tree. Snapshot returns a tree of generation-tagged uids (e.g. `a42g3`); dispatch primitives press buttons (`AXPress`), write text fields (`kAXValueAttribute`), and select rows (`AXSelectedRows`) without moving the mouse. **Preferred for native macOS apps.**
+5.  `element_at_point`: Inspect the accessibility element at given screen coordinates — returns name, role, label, value, bounds, pid, and app_name. Note: privacy-focused Electron apps (e.g. Signal) may restrict their AX tree, returning only a container — use `take_screenshot` with OCR as a fallback.
+6.  `load_image` / `find_image`: Template matching for non-text UI elements (icons, shapes), returning screen coordinates for clicking.
+7.  `start_hover_tracking` / `get_hover_events` / `stop_hover_tracking`: Track cursor hover transitions across UI elements. Configurable dwell threshold filters pass-throughs.
+8.  `start_recording` / `stop_recording`: Record the frontmost app's window at ~5fps as timestamped JPEG frames. Automatically follows app switches.
+9.  `launch_app` / `quit_app`: Launch apps with optional CLI args, or gracefully/forcefully quit them.
+10. `cdp_connect` / `cdp_take_ax_snapshot` / `cdp_take_dom_snapshot` / `cdp_find_elements` / `cdp_click` / `cdp_fill` / `cdp_navigate` / `cdp_element_at_point`: Connect to Chrome or Electron apps via CDP for DOM-level automation — snapshots, clicking, typing, navigation, element inspection, and tab management without a separate Node.js server.
 
 ### Element-precise AX dispatch (macOS, preferred for native apps)
 
@@ -167,6 +169,7 @@ Then restart your MCP client and you're ready to go.
 - [Claude Code Setup](./examples/claude-code-setup.md)
 - [Cursor Setup](./examples/cursor-setup.md)
 - [End-to-End Desktop Flow](./examples/end-to-end-desktop-flow.md)
+- [Native App AX Dispatch Flow (macOS)](./examples/native-app-ax-dispatch-flow.md) — preferred for native macOS apps
 - [Native App Click Flow](./examples/native-app-click-flow.md)
 - [OCR Fallback and Element Inspection](./examples/ocr-fallback-and-element-inspection.md)
 - [Template Matching Flow](./examples/template-matching-flow.md)
@@ -243,17 +246,23 @@ The script clones the repo, optionally opens it for review before building, comp
 - **No background persistence** — exits when the MCP client disconnects
 - **No data exfiltration** — screenshots are returned to the MCP client via stdout, never stored or transmitted elsewhere
 
-## 🔍 Two Approaches to Interaction
+## 🔍 Three Approaches to Interaction
 
-We provide two ways for agents to interact, allowing them to choose the best tool for the job.
+We provide three ways for agents to interact with apps, so they can pick the best tool for the target.
 
 ### 1. The "Visual" Approach (Universal)
-**Best for:** 99% of apps (Electron, Qt, Games, Browsers).
+**Best for:** Any app — Electron, Qt, games, custom renderers, anything without a rich accessibility tree.
 *   **How it works:** The agent takes a screenshot, analyzes it visually (or uses OCR), and clicks at coordinates.
 *   **Tools:** `take_screenshot`, `find_text`, `click`, `type_text` (plus `load_image` / `find_image` for icons and shapes).
 *   **Example:** "Click the button that looks like a gear icon." → use `find_image` with a gear template.
 
-### 2. The "Structural" Approach (AppDebugKit)
+### 2. The "Structural (AX)" Approach (macOS native apps — preferred)
+**Best for:** Native macOS apps (AppKit / SwiftUI) — System Settings, Finder, Mail, Xcode, Notes, most App Store apps.
+*   **How it works:** The agent takes an Accessibility-tree snapshot, picks an element by uid, and dispatches an AX action — no mouse movement, no focus steal. Generation-tagged uids make stale snapshots fail loud.
+*   **Tools:** `take_ax_snapshot`, `ax_click`, `ax_set_value`, `ax_select` (plus `element_at_point` for inspection).
+*   **Example:** `take_ax_snapshot(app_name="System Settings")` → `ax_click(uid="a42g3")`.
+
+### 3. The "Structural" Approach (AppDebugKit)
 **Best for:** Apps specifically instrumented with our AppDebugKit library (mostly for developers testing their own apps).
 *   **How it works:** The agent connects to a debug port and queries the UI tree (like HTML DOM).
 *   **Tools:** `app_connect`, `app_query`, `app_click`.
@@ -374,6 +383,7 @@ graph TD
         Sys -->|Screen/OCR| macOS[CoreGraphics / Vision]
         Sys -->|Input| Win[Win32 / SendInput]
         Sys -->|Text Search| UIA[UI Automation]
+        Sys -->|AX Snapshot + Dispatch| AXapi[Accessibility API - macOS]
         Debug -.->|Inspect| App[Target App]
     end
 
@@ -392,6 +402,7 @@ graph TD
 | **macOS** | Screenshots | `screencapture` (CLI) |
 | | Input | `CGEvent` (CoreGraphics) |
 | | Text Search (`find_text`) | `Accessibility API` (primary), Vision OCR (fallback) |
+| | AX Snapshot + Dispatch (`take_ax_snapshot` / `ax_click` / `ax_set_value` / `ax_select`) | Accessibility API — AX tree walk, `AXPress` action, `kAXValueAttribute` write, `AXSelectedRows` write (focus-preserving, no mouse movement) |
 | | Element Inspection (`element_at_point`) | `AXUIElementCopyElementAtPosition` + AX tree walk fallback (Accessibility API) |
 | | Hover Tracking (`start_hover_tracking`) | `CGEvent` cursor + Accessibility API polling |
 | | Screen Recording (`start_recording`) | `CGWindowListCreateImage` at configurable fps |
@@ -443,6 +454,16 @@ Works out of the box on **Windows 10/11**.
 *   OCR uses the built-in Windows Media OCR engine (offline).
 *   **Note:** Cannot interact with "Run as Administrator" windows unless the MCP server itself is also running as Administrator.
 *   **Screen Recording Performance:** Screen recording uses GDI/BitBlt at configurable fps (default 5). For higher fps requirements or game capture scenarios, DXGI Desktop Duplication API would provide hardware-accelerated capture — this is a planned future upgrade.
+
+## ⭐ Star History
+
+<a href="https://www.star-history.com/?repos=sh3ll3x3c%2Fnative-devtools-mcp&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sh3ll3x3c/native-devtools-mcp&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sh3ll3x3c/native-devtools-mcp&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sh3ll3x3c/native-devtools-mcp&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## 📜 License
 

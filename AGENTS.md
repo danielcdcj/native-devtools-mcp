@@ -380,6 +380,19 @@ Use this when you (the model) look at the *image* from `take_screenshot` and est
 2.  **Call:** `take_screenshot(include_ocr=true)`
 3.  **Action:** Read the OCR summary text in the response (lines include clickable coordinates).
 
+### "Open the Wi-Fi pane in System Settings (macOS)"
+1.  **Thought:** This is a native macOS app. The AX-dispatch branch is preferred — no mouse movement, no focus steal, and sidebar rows are a perfect fit for `ax_select`.
+2.  **Call:** `take_ax_snapshot(app_name="System Settings")` → tree with a row `AXRow "Wi-Fi"` at `uid="a18g3"`.
+3.  **Thought:** Sidebar rows are backed by `NSOutlineView` — they refuse `AXPress`, so use `ax_select` rather than `ax_click`.
+4.  **Call:** `ax_select(uid="a18g3")` → `{ "ok": true, "dispatched_via": "AXSelectedRows" }`.
+5.  **Call:** `take_ax_snapshot(app_name="System Settings")` → verify the Wi-Fi detail pane is visible. The generation bumps; any earlier uids are now stale.
+
+### "Fill the search field in Finder (macOS)"
+1.  **Thought:** Native macOS app with a text field. `ax_set_value` writes `kAXValueAttribute` directly — but it doesn't fire keydown/keyup and doesn't feed IME, so if the app has key-handlers fall back to `click` + `type_text`.
+2.  **Call:** `take_ax_snapshot(app_name="Finder")` → `AXSearchField` at `uid="a7g2"`.
+3.  **Call:** `ax_set_value(uid="a7g2", text="invoice.pdf")` → `{ "ok": true, "dispatched_via": "AXSetAttributeValue" }`.
+4.  **Fallback on `not_dispatchable`:** `click(fallback.x, fallback.y)` to focus, then `type_text("invoice.pdf")` for real key events.
+
 ---
 
 ## 🖼️ Template Matching (Advanced Vision)
