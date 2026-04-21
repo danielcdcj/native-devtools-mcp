@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.1
+
+### CDP
+
+- **DOM walker no longer returns composite labels.** `getLabel()` previously fell through to `el.textContent` when an element had no `aria-label` / `aria-labelledby` / `title` / `alt`, concatenating all descendant text. A header button wrapping avatar + chat name + badges produced labels like `"Note to Self1 weekVerified"`, which misled agents into clicking the wrong element. Replaced with a direct-text collector that walks only direct text nodes plus descendant subtrees that do not carry their own label and are not themselves interactive; falls back to the tag name when no direct text exists.
+- **DOM snapshot now renders parent context.** Each line shows `(in <role> "<name>")` at the end, using the `parentRole` / `parentName` already captured by the walker. Lets a reader disambiguate, for example, a sidebar list item from a chat-header button that would otherwise print the same label.
+
 ## v0.9.0
 
 ### Element-precise AX dispatch (macOS)
