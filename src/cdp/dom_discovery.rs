@@ -134,9 +134,39 @@ function getLabel(el) {{
     const alt = el.getAttribute("alt");
     if (alt) return alt.trim();
 
-    const text = el.textContent || "";
-    const trimmed = text.trim().substring(0, 200);
-    return trimmed;
+    // Fallback: collect only direct/own text, pruning any descendant subtree
+    // that carries its own label or is itself interactive. This prevents a
+    // header button wrapping avatar + name + badges from collapsing all
+    // descendant textContent into a composite label like
+    // "Note to Self1 weekVerified".
+    const direct = directOwnText(el).trim().substring(0, 200);
+    if (direct) return direct;
+
+    // Last resort: tag name, so we never concatenate descendant text.
+    return el.tagName.toLowerCase();
+}}
+
+function hasOwnLabel(el) {{
+    return el.hasAttribute("aria-label")
+        || el.hasAttribute("aria-labelledby")
+        || el.hasAttribute("title")
+        || el.hasAttribute("alt");
+}}
+
+function directOwnText(el) {{
+    let out = "";
+    for (const child of el.childNodes) {{
+        if (child.nodeType === Node.TEXT_NODE) {{
+            out += child.nodeValue;
+        }} else if (child.nodeType === Node.ELEMENT_NODE) {{
+            // Prune subtrees that own their own label or are interactive on
+            // their own — their text belongs to them, not the ancestor.
+            if (hasOwnLabel(child)) continue;
+            if (isInteractive(child)) continue;
+            out += " " + directOwnText(child);
+        }}
+    }}
+    return out.replace(/\s+/g, " ").trim();
 }}
 
 function getRole(el) {{
@@ -265,6 +295,10 @@ return {{ elements: matchedElements, metadata: metadataArray, inventory }};
 }
 
 /// Format DOM candidates as indented text (similar to AX snapshot format).
+///
+/// Includes parent context (`role` / optional `name`) when the walker
+/// captured one, so an LLM can disambiguate, e.g., a sidebar list row from
+/// a chat-header button that happen to carry the same label text.
 pub fn format_dom_snapshot(candidates: &[DomCandidate]) -> String {
     let mut lines = Vec::with_capacity(candidates.len());
     for (i, node) in candidates.iter().enumerate() {
@@ -275,6 +309,16 @@ pub fn format_dom_snapshot(candidates: &[DomCandidate]) -> String {
         parts.push(format!("tag={}", node.tag));
         if node.disabled {
             parts.push("disabled".to_string());
+        }
+        if !node.parent_role.is_empty() {
+            if node.parent_name.is_empty() {
+                parts.push(format!("(in {})", node.parent_role));
+            } else {
+                parts.push(format!(
+                    "(in {} \"{}\")",
+                    node.parent_role, node.parent_name
+                ));
+            }
         }
         lines.push(parts.join(" "));
     }
@@ -376,7 +420,80 @@ mod tests {
         let result = format_dom_snapshot(&candidates);
         assert_eq!(
             result,
-            "uid=d1 button \"Submit\" tag=button\nuid=d2 textbox tag=input disabled"
+            "uid=d1 button \"Submit\" tag=button (in form \"Login\")\nuid=d2 textbox tag=input disabled"
+        );
+    }
+
+    #[test]
+    fn format_dom_snapshot_parent_role_only() {
+        // parent_role set, parent_name empty → emit only the role.
+        let candidates = vec![DomCandidate {
+            backend_node_id: 1,
+            role: "button".to_string(),
+            label: "Send".to_string(),
+            tag: "button".to_string(),
+            disabled: false,
+            parent_role: "nav".to_string(),
+            parent_name: "".to_string(),
+        }];
+
+        let result = format_dom_snapshot(&candidates);
+        assert_eq!(result, "uid=d1 button \"Send\" tag=button (in nav)");
+    }
+
+    #[test]
+    fn format_dom_snapshot_disambiguates_sidebar_vs_header() {
+        // Regression: the clickweave agent once confused a sidebar row and a
+        // chat-header button that both surfaced the label "Note to Self" in
+        // the snapshot. With parent context rendered, the two lines are
+        // visibly distinct.
+        let candidates = vec![
+            DomCandidate {
+                backend_node_id: 100,
+                role: "button".to_string(),
+                label: "Note to Self".to_string(),
+                tag: "li".to_string(),
+                disabled: false,
+                parent_role: "list".to_string(),
+                parent_name: "Chats".to_string(),
+            },
+            DomCandidate {
+                backend_node_id: 200,
+                role: "button".to_string(),
+                label: "Note to Self".to_string(),
+                tag: "button".to_string(),
+                disabled: false,
+                parent_role: "header".to_string(),
+                parent_name: "".to_string(),
+            },
+        ];
+
+        let result = format_dom_snapshot(&candidates);
+        assert_eq!(
+            result,
+            "uid=d1 button \"Note to Self\" tag=li (in list \"Chats\")\n\
+             uid=d2 button \"Note to Self\" tag=button (in header)"
+        );
+    }
+
+    #[test]
+    fn dom_walker_js_uses_direct_text_fallback() {
+        // Sanity: the emitted JS includes the direct-text helpers and no
+        // longer relies on bare `el.textContent` for the label fallback.
+        let js = dom_walker_js("anything", None, 1);
+        assert!(
+            js.contains("directOwnText"),
+            "expected directOwnText helper in walker JS"
+        );
+        assert!(
+            js.contains("hasOwnLabel"),
+            "expected hasOwnLabel helper in walker JS"
+        );
+        // The old fallback concatenated all descendants via `el.textContent`.
+        // Guard against regressing to that.
+        assert!(
+            !js.contains("el.textContent || \"\""),
+            "walker JS must not fall back to raw el.textContent for label"
         );
     }
 }
