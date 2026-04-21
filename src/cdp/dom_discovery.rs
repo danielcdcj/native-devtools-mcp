@@ -134,13 +134,17 @@ function getLabel(el) {{
     const alt = el.getAttribute("alt");
     if (alt) return alt.trim();
 
-    // Fallback: collect only direct/own text, pruning any descendant subtree
-    // that carries its own label or is itself interactive. This prevents a
-    // header button wrapping avatar + name + badges from collapsing all
-    // descendant textContent into a composite label like
-    // "Note to Self1 weekVerified".
-    const direct = directOwnText(el).trim().substring(0, 200);
-    if (direct) return direct;
+    // Fallback: collect the element's own text. Prefer direct text nodes
+    // (what this element itself says) over any descendant text. Only walk
+    // into children — with pruning — if the element has no direct text of
+    // its own. This prevents a header button wrapping avatar + name +
+    // badges from collapsing all descendant textContent into a composite
+    // label like "Note to Self 1 week Verified".
+    const own = ownTextNodes(el);
+    if (own) return own.substring(0, 200);
+
+    const nested = directOwnText(el).trim().substring(0, 200);
+    if (nested) return nested;
 
     // Last resort: tag name, so we never concatenate descendant text.
     return el.tagName.toLowerCase();
@@ -150,7 +154,23 @@ function hasOwnLabel(el) {{
     return el.hasAttribute("aria-label")
         || el.hasAttribute("aria-labelledby")
         || el.hasAttribute("title")
-        || el.hasAttribute("alt");
+        || el.hasAttribute("alt")
+        || el.hasAttribute("role")
+        || el.hasAttribute("data-testid");
+}}
+
+// Returns the concatenation of this element's *direct* child text nodes
+// (nodeType === 3), normalised. Ignores descendant elements entirely. This
+// is the preferred label source: it captures what the element itself says
+// without picking up styled-span badges or avatar text.
+function ownTextNodes(el) {{
+    let out = "";
+    for (const child of el.childNodes) {{
+        if (child.nodeType === Node.TEXT_NODE) {{
+            out += child.nodeValue;
+        }}
+    }}
+    return out.replace(/\s+/g, " ").trim();
 }}
 
 function directOwnText(el) {{
@@ -494,6 +514,116 @@ mod tests {
         assert!(
             !js.contains("el.textContent || \"\""),
             "walker JS must not fall back to raw el.textContent for label"
+        );
+    }
+
+    #[test]
+    fn dom_walker_js_prefers_element_own_text_over_descendants() {
+        // Primary defence: the walker should look at an element's direct
+        // text nodes first (ownTextNodes) and only descend into children
+        // when the element has no direct text of its own. Without this,
+        // header buttons like Signal's "Note to Self" chat header collapse
+        // their sibling badge spans ("1 week", "Verified") into a composite
+        // label.
+        let js = dom_walker_js("anything", None, 1);
+        assert!(
+            js.contains("ownTextNodes"),
+            "expected ownTextNodes helper (direct text nodes) in walker JS"
+        );
+        // The helper must filter for TEXT_NODE only — no ELEMENT_NODE branch.
+        let helper_start = js
+            .find("function ownTextNodes")
+            .expect("ownTextNodes should be defined");
+        // The next function definition marks the end of ownTextNodes.
+        let helper_rest = &js[helper_start..];
+        let after_header = helper_rest.find('{').expect("ownTextNodes has no body") + 1;
+        let helper_end = helper_rest[after_header..]
+            .find("function ")
+            .expect("ownTextNodes body not followed by another function")
+            + after_header;
+        let helper_body = &helper_rest[..helper_end];
+        assert!(
+            helper_body.contains("Node.TEXT_NODE"),
+            "ownTextNodes must inspect TEXT_NODE children"
+        );
+        assert!(
+            !helper_body.contains("ELEMENT_NODE"),
+            "ownTextNodes must NOT descend into element children"
+        );
+        // getLabel must try ownTextNodes before directOwnText so the direct
+        // path wins whenever the element has any direct text at all.
+        let get_label_start = js.find("function getLabel").expect("getLabel must exist");
+        let get_label_body = &js[get_label_start..];
+        let own_idx = get_label_body
+            .find("ownTextNodes(el)")
+            .expect("getLabel must call ownTextNodes");
+        let nested_idx = get_label_body
+            .find("directOwnText(el)")
+            .expect("getLabel must call directOwnText as fallback");
+        assert!(
+            own_idx < nested_idx,
+            "getLabel must call ownTextNodes before directOwnText"
+        );
+    }
+
+    #[test]
+    fn dom_walker_js_hasownlabel_covers_role_and_testid() {
+        // Belt-and-braces: role= and data-testid on a descendant are strong
+        // signals it's a semantic unit of its own; pruning them makes the
+        // recursive fallback safer if we ever fall back to it (e.g. buttons
+        // whose text actually lives inside a wrapper span).
+        let js = dom_walker_js("anything", None, 1);
+        let start = js
+            .find("function hasOwnLabel")
+            .expect("hasOwnLabel must exist");
+        let rest = &js[start..];
+        let after_header = rest.find('{').expect("hasOwnLabel has no body") + 1;
+        let end = rest[after_header..]
+            .find("function ")
+            .expect("hasOwnLabel body not followed by another function")
+            + after_header;
+        let body = &rest[..end];
+        assert!(body.contains("\"role\""), "hasOwnLabel should prune role=");
+        assert!(
+            body.contains("\"data-testid\""),
+            "hasOwnLabel should prune data-testid="
+        );
+    }
+
+    #[test]
+    fn format_dom_snapshot_header_button_wraps_badges() {
+        // Structural regression: in Signal's web-based chat header, the
+        // title button wraps "Note to Self" plus unlabelled badge spans
+        // ("1 week", "Verified"). With the new direct-text-first logic,
+        // the DOM walker reports the button's direct text only, so
+        // format_dom_snapshot emits a clean label — not a composite.
+        //
+        // This test validates the downstream rendering given candidates
+        // that already reflect the new walker output: label is just
+        // "Note to Self", and the header context is preserved for
+        // disambiguation against sidebar rows.
+        let candidates = vec![DomCandidate {
+            backend_node_id: 321,
+            role: "button".to_string(),
+            label: "Note to Self".to_string(),
+            tag: "button".to_string(),
+            disabled: false,
+            parent_role: "header".to_string(),
+            parent_name: "".to_string(),
+        }];
+
+        let result = format_dom_snapshot(&candidates);
+        assert_eq!(
+            result,
+            "uid=d1 button \"Note to Self\" tag=button (in header)"
+        );
+        assert!(
+            !result.contains("1 week"),
+            "badge text must not leak into the header button label"
+        );
+        assert!(
+            !result.contains("Verified"),
+            "verified badge must not leak into the header button label"
         );
     }
 }
