@@ -66,10 +66,14 @@ pub struct LaunchAppParams {
     pub app_name: String,
     /// Optional CLI arguments to pass to the app (e.g., ["--remote-debugging-port=9222"])
     pub args: Option<Vec<String>>,
+    /// If true, launch without bringing the app to the foreground (uses `open -g` on macOS).
+    /// Recommended when the next action will use CDP or AX dispatch, which are focus-preserving.
+    pub background: Option<bool>,
 }
 
 pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
     let args = params.args.as_deref().unwrap_or(&[]);
+    let background = params.background.unwrap_or(false);
 
     // If args are provided, check if the app is already running — args only apply on fresh launch
     if !args.is_empty() && platform::is_app_running(&params.app_name) {
@@ -79,7 +83,7 @@ pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
         ))]);
     }
 
-    match platform::launch_app(&params.app_name, args) {
+    match platform::launch_app(&params.app_name, args, background) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Launched '{}'",
             params.app_name

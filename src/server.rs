@@ -478,6 +478,10 @@ impl MacOSDevToolsServer {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "CLI arguments to pass to the app (e.g., ['--remote-debugging-port=9222']). Only applied on fresh launch — if the app is already running, returns an error."
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "If true, launch without bringing the app to the foreground (uses `open -g` on macOS). Recommended when the next action will use CDP or AX dispatch, which are focus-preserving."
                         }
                     }
                 }))),

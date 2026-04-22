@@ -306,7 +306,11 @@ pub fn is_app_running(app_name: &str) -> bool {
 /// Uses `cmd /c start "" "app_name"` which searches PATH and App Paths registry.
 /// For apps not in PATH, provide the full executable path.
 /// If args is non-empty, they are appended after the app name.
-pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
+///
+/// The `_background` parameter is accepted for API parity with the macOS
+/// implementation but is a no-op on Windows (Windows uses different launch
+/// semantics; background launching is not supported here).
+pub fn launch_app(app_name: &str, args: &[String], _background: bool) -> Result<(), String> {
     let mut cmd_args = vec!["/C", "start", "", app_name];
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     cmd_args.extend(arg_refs);
