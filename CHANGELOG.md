@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.2
+
+### macOS
+
+- **`launch_app` gains a `background` flag.** When `true`, the app is launched via `open -g -a`, so it starts without being brought to the foreground. Useful when the next step uses CDP or AX dispatch (both focus-preserving) and you don't want the target window stealing focus. Default is `false`; Windows ignores the flag.
+
+### CDP
+
+- **Label fallback prefers the element's own text nodes.** The v0.9.1 DOM walker still concatenated sibling descendant text when those descendants had no aria/title/alt/role hints, producing composite labels like `"Note to Self 1 week Verified"` on wrapper buttons. `getLabel()` now first concatenates only the element's direct Text-node children and returns immediately on a non-empty result; the prior recursive walk remains as a secondary fallback for wrappers whose visible text lives inside an inner span. Elements with `role` or `data-testid` are also treated as self-contained semantic units so the recursive fallback no longer swallows badge text.
+
 ## v0.9.1
 
 ### CDP
