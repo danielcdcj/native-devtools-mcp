@@ -6,7 +6,7 @@
 //! parsing, snapshot conversion). These tests cover the *live* pipeline:
 //!
 //!   Runtime.evaluate (JS walker) → DOM.describeNode (backendNodeId) →
-//!   SnapshotMap (`d<N>` / `a<N>`) → action-tool UID resolution → click/eval.
+//!   SnapshotMap (`d<N>`) → action-tool UID resolution → click/eval.
 //!
 //! Failures in that chain (element removed between calls, shadow root not
 //! descended, prefix parsing bug, stale-map lookup) would silently mis-target

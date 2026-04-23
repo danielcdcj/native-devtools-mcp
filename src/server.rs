@@ -1787,10 +1787,12 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_element_at_point",
-                "Given screen coordinates (x, y) in points, resolve the CDP accessibility snapshot UID \
-                 of the DOM element at that position. Returns the element's UID, role, name, and \
-                 backend_node_id. Requires an active CDP connection. Coordinates use the same \
-                 screen-point system as element_at_point and click.",
+                "Given screen coordinates (x, y) in points, hit-test the DOM element at that \
+                 position. Always returns the element's backend_node_id. If a current DOM \
+                 snapshot already contains that node, the response also includes its d-prefixed \
+                 UID, role, and name; otherwise uid is null and a note points at \
+                 cdp_take_dom_snapshot / cdp_find_elements. Requires an active CDP connection. \
+                 Coordinates use the same screen-point system as element_at_point and click.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["x", "y"],

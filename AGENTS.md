@@ -41,14 +41,14 @@ Use this table to choose the right tool sequence for the user's goal.
 | "Enter text into a text field via value assignment (macOS)" | `take_ax_snapshot` → `ax_set_value(uid, text)` | No key events, no IME, no undo-stack entry. Fall back to `click` + `type_text` on `not_dispatchable`. |
 | "Select a sidebar row in System Settings / a `NSOutlineView` row (macOS)" | `take_ax_snapshot` → `ax_select(uid)` | Writes `AXSelectedRows` on the enclosing outline/table. Use this instead of `ax_click` for row targets — rows typically refuse `AXPress`. |
 | "AX snapshot invalidation rule (macOS)" | — | Every `take_ax_snapshot` call bumps the generation. All prior uids become stale; `ax_*` tools return `snapshot_expired`. |
-| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_take_ax_snapshot()` → `cdp_click(uid="a42")` | CDP is more reliable than coordinates for web content. |
-| "Type in a web input" | `cdp_take_ax_snapshot()` → `cdp_fill(uid="a42", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
+| "Click a button in Chrome" | `cdp_connect(port=9222)` → `cdp_find_elements(query="Submit")` → `cdp_click(uid="d1")` | CDP is more reliable than coordinates for web content. |
+| "Type in a web input" | `cdp_find_elements(query="Email")` → `cdp_fill(uid="d1", value="hello")` | Works for `<input>`, `<textarea>`, and `<select>` elements. |
 | "Run JS in a browser page" | `cdp_evaluate_script(function="() => document.title")` | Evaluate any JS in the selected page. |
 | "Navigate to a URL" | `cdp_navigate(url="https://example.com")` | Also supports back, forward, reload. |
 | "Press Enter or shortcut" | `cdp_press_key(key="Enter")` or `cdp_press_key(key="Control+A")` | Supports modifier combos. |
-| "Wait for page content" | `cdp_wait_for(text="Success")` | Polls snapshot until text appears or timeout. |
+| "Wait for page content" | `cdp_wait_for(text=["Success"])` | Polls page text until any value appears or timeout. Pass `include_snapshot=true` to also get a DOM snapshot. |
 | "Switch browser tabs" | `cdp_list_pages()` → `cdp_select_page(page_idx=1)` | List tabs, then select by index. |
-| "Get browser page structure" | `cdp_take_ax_snapshot()` | Accessibility tree with element UIDs, roles, and names. |
+| "Get browser page structure" | `cdp_take_dom_snapshot()` | Full interactive-element DOM snapshot with UIDs, roles, and labels. |
 
 ---
 
@@ -249,9 +249,8 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 
 *   `cdp_connect(port)`: Connect to a Chrome/Electron debug port. Auto-selects the first page.
 *   `cdp_disconnect`: Disconnect the CDP client. The CDP tools stay listed; subsequent calls return a "not connected" error until `cdp_connect` is called again.
-*   `cdp_take_ax_snapshot`: Accessibility tree snapshot — returns elements with UIDs prefixed `a` (e.g., a1, a2), roles, and names. **Always take a fresh snapshot before clicking.** Prefer this over `take_screenshot` for web content.
-*   `cdp_take_dom_snapshot(max_nodes?)`: DOM-native snapshot of interactive elements — returns UIDs prefixed `d` (e.g., d1, d2). Use when AX snapshot misses contenteditable or custom widgets.
-*   `cdp_find_elements(query, role?, max_results?)`: Search the live DOM for interactive elements matching a text query. Returns matches with `d`-prefixed UIDs plus a page-level inventory.
+*   `cdp_take_dom_snapshot(max_nodes?)`: Full DOM snapshot of interactive elements — returns UIDs prefixed `d` (e.g., d1, d2) with roles, labels, and parent context. Use when you need the complete page structure; for targeted lookups prefer `cdp_find_elements`. **Always take a fresh snapshot after any navigation or DOM change before resolving UIDs.**
+*   `cdp_find_elements(query, role?, max_results?)`: **Preferred discovery tool.** Search the live DOM for interactive elements matching a text query. Returns matches with `d`-prefixed UIDs plus a page-level inventory grouped by role — focused results without flooding context.
 *   `cdp_click(uid, dbl_click?)`: Click an element by UID. Scrolls into view automatically.
 *   `cdp_hover(uid)`: Hover over an element by UID.
 *   `cdp_fill(uid, value)`: Type text into an input/textarea or select an option from a `<select>`.
@@ -261,11 +260,11 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 *   `cdp_navigate(url?, type?)`: Navigate to a URL, or go back/forward/reload. Type: `"url"` (default), `"back"`, `"forward"`, `"reload"`.
 *   `cdp_new_page(url)`: Create a new tab and navigate to URL. Becomes the selected page.
 *   `cdp_close_page(page_idx)`: Close a tab by index. Cannot close the last page.
-*   `cdp_wait_for(text, timeout?)`: Wait for text to appear on the page (polls snapshot, default 10s timeout).
-*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "a5"}]`.
+*   `cdp_wait_for(text, timeout?, include_snapshot?)`: Wait for any value in `text` to appear on the page (polls `document.body.innerText`, default 10s timeout). Returns a one-line "text appeared after Xms" header by default; pass `include_snapshot=true` to also append a DOM snapshot.
+*   `cdp_evaluate_script(function, args?)`: Evaluate JS in the page. No args: `() => document.title`. With element args: `(el) => el.innerText` + `args=[{uid: "d5"}]`.
 *   `cdp_list_pages`: List open tabs/windows with indices. Selected page marked with `*`.
 *   `cdp_select_page(page_idx)`: Switch to a tab/window by index.
-*   `cdp_element_at_point(x, y)`: Given screen coordinates (in points), resolve the CDP accessibility snapshot UID of the DOM element at that position. Returns the element's UID, role, name, and backend_node_id. Requires an active CDP connection.
+*   `cdp_element_at_point(x, y)`: Given screen coordinates (in points), hit-test the DOM element at that position. Always returns `backend_node_id`. If a current DOM snapshot already contains the node, the response also carries the `d`-prefixed UID, role, and name; otherwise `uid` is `null` with a note to call `cdp_take_dom_snapshot` or `cdp_find_elements`. Requires an active CDP connection.
 
 #### Key Patterns
 
@@ -276,13 +275,14 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 **Chrome:**
 ```
 1. launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--user-data-dir=/tmp/chrome-profile"])
-2. cdp_connect(port=9222)                  → "Connected. Selected page: chrome://new-tab-page/"
+2. cdp_connect(port=9222)                        → "Connected. Selected page: chrome://new-tab-page/"
 3. cdp_navigate(url="https://example.com")
-4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "Example" ...
-5. cdp_fill(uid="a10", value="search query")
+4. cdp_find_elements(query="Search")              → matches=[{uid:"d1", role:"textbox", label:"Search", ...}]
+5. cdp_fill(uid="d1", value="search query")
 6. cdp_press_key(key="Enter")
-7. cdp_wait_for(text="Results")
-8. cdp_click(uid="a5")                      → "Clicked uid=a5 'Submit' (button) at (200, 300)"
+7. cdp_wait_for(text=["Results"])
+8. cdp_find_elements(query="Submit")              → matches=[{uid:"d1", role:"button", label:"Submit", ...}]
+9. cdp_click(uid="d1")                             → "Clicked uid=d1 'Submit' (button) at (200, 300)"
 ```
 
 **Electron app (e.g., Slack, Discord, Signal):**
@@ -290,10 +290,10 @@ Connect to Chrome or Electron apps via Chrome DevTools Protocol for DOM-level el
 1. quit_app(app_name="MyElectronApp")
 2. launch_app(app_name="MyElectronApp", args=["--remote-debugging-port=9333"])
 3. cdp_connect(port=9333)                  → "Connected. Selected page: file:///...app.html"
-4. cdp_take_ax_snapshot()                  → uid=a1 RootWebArea "MyApp" ... (search for buttons, inputs)
-5. cdp_click(uid="a42")                    → click a list item or button
-6. cdp_take_ax_snapshot()                  → fresh snapshot of the new view
-7. cdp_fill(uid="a100", value="hello")
+4. cdp_take_dom_snapshot()                  → uid=d1 button "New Chat" tag=button ... (full interactive surface)
+5. cdp_click(uid="d5")                      → click a list item or button
+6. cdp_take_dom_snapshot()                  → fresh snapshot of the new view
+7. cdp_fill(uid="d12", value="hello")
 ```
 
 ### 7. Android Device Control

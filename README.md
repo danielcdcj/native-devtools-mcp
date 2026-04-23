@@ -50,7 +50,7 @@ Pick the approach that matches your target app.
 |-----------------------|--------------------------------------------------------------------------|-------------------------------------------------------------------------|
 | **Visual** (universal)| Any app — games, Qt, custom renderers, anything without an AX tree       | `take_screenshot`, `find_text`, `click`, `type_text`, `find_image`      |
 | **AX Dispatch** (macOS — *preferred for native macOS apps*) | AppKit / SwiftUI apps — System Settings, Finder, Mail, Xcode, Notes | `take_ax_snapshot`, `ax_click`, `ax_set_value`, `ax_select`             |
-| **CDP** (Chrome / Electron) | Web content, Electron apps with `--remote-debugging-port`          | `cdp_connect`, `cdp_take_ax_snapshot`, `cdp_click`, `cdp_fill`          |
+| **CDP** (Chrome / Electron) | Web content, Electron apps with `--remote-debugging-port`          | `cdp_connect`, `cdp_find_elements`, `cdp_take_dom_snapshot`, `cdp_click`, `cdp_fill` |
 
 > For macOS native apps, **AX Dispatch is the preferred path** — it's element-precise, doesn't move the mouse, and doesn't steal focus. See the [Native App AX Dispatch recipe](./examples/native-app-ax-dispatch-flow.md).
 
@@ -219,13 +219,13 @@ launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--us
 # Connect and automate
 cdp_connect(port=9222)
 cdp_navigate(url="https://example.com")
-cdp_take_ax_snapshot()        # accessibility tree with element UIDs (a1, a2, ...)
-cdp_fill(uid="a10", value="search query")
+cdp_find_elements(query="search")    # DOM walker with element UIDs (d1, d2, ...)
+cdp_fill(uid="d1", value="search query")
 cdp_press_key(key="Enter")
 cdp_wait_for(text=["Results"])
 ```
 
-**19 CDP tools** — snapshot (AX + DOM), find elements, click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for the full tool reference.
+**18 CDP tools** — DOM snapshot, find elements, click, hover, fill, type, press key, navigate, handle dialogs, manage tabs, evaluate JS, element inspection, and more. Works with Chrome 136+, Chromium, and Electron apps (Signal, Discord, VS Code, Slack). See [`AGENTS.md`](./AGENTS.md) for the full tool reference.
 
 > **Chrome 136+ note:** requires `--user-data-dir=<path>` alongside `--remote-debugging-port` — Chrome silently ignores the debug port with the default profile. Electron apps only need `--remote-debugging-port`.
 
