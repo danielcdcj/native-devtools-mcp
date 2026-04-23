@@ -20,7 +20,7 @@ async fn maybe_append_snapshot(
     if !include_snapshot {
         return result;
     }
-    let snapshot = super::script::cdp_take_ax_snapshot(cdp_client).await;
+    let snapshot = super::script::cdp_take_dom_snapshot(None, cdp_client).await;
     result.content.extend(snapshot.content);
     result
 }

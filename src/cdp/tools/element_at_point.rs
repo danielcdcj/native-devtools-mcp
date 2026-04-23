@@ -6,7 +6,7 @@ use rmcp::model::{CallToolResult, Content};
 
 use crate::cdp::{CdpClient, SnapshotMap};
 
-/// Resolve screen coordinates to a CDP snapshot UID from either the AX or DOM snapshot.
+/// Resolve screen coordinates to a CDP snapshot UID from the DOM snapshot.
 pub async fn cdp_element_at_point(
     x: f64,
     y: f64,
@@ -70,7 +70,7 @@ pub async fn cdp_element_at_point(
         }
     };
 
-    // Step 5: Read-only lookup in both snapshot maps (prefer DOM, then AX).
+    // Step 5: Read-only lookup in the DOM snapshot map.
     let current_url = crate::cdp::page_url(&page).await;
     let note = match lookup_uid(client, backend_node_id, &current_url) {
         LookupResult::Found { uid, role, name } => {
@@ -85,11 +85,11 @@ pub async fn cdp_element_at_point(
             )]);
         }
         LookupResult::Stale => {
-            "Snapshots are stale — page has navigated. Call cdp_take_dom_snapshot or cdp_take_ax_snapshot again."
+            "Snapshot is stale — page has navigated. Call cdp_take_dom_snapshot again."
         }
         LookupResult::NotInSnapshot => {
-            "Element not in any snapshot. Call cdp_take_ax_snapshot, \
-             cdp_take_dom_snapshot, or cdp_find_elements to get a UID."
+            "Element not in the DOM snapshot. Call cdp_take_dom_snapshot or \
+             cdp_find_elements to get a UID."
         }
     };
 
@@ -110,47 +110,30 @@ enum LookupResult {
         role: String,
         name: String,
     },
-    /// At least one snapshot exists but its generation doesn't match
+    /// A DOM snapshot exists but its generation doesn't match
     /// `client.generation`. The page has navigated since the snapshot
     /// was taken — the caller should re-snapshot before resolving.
     Stale,
-    /// The backendNodeId isn't present in any fresh snapshot. Either no
-    /// snapshot has been taken yet, or the element wasn't captured.
+    /// The backendNodeId isn't present in the fresh DOM snapshot, or no
+    /// snapshot has been taken yet.
     NotInSnapshot,
 }
 
-/// Read-only lookup across both snapshot maps. Prefers DOM, falls back to AX.
-/// Distinguishes "stale" (a snapshot exists but its generation or URL no
-/// longer match the live page) from "not in snapshot" (no matching entry
-/// in any fresh snapshot).
+/// Read-only lookup in the DOM snapshot map. Distinguishes "stale"
+/// (a snapshot exists but its generation or URL no longer match the live
+/// page) from "not in snapshot" (no matching entry in a fresh snapshot).
 fn lookup_uid(client: &CdpClient, backend_node_id: i64, current_url: &str) -> LookupResult {
-    let fresh = |s: &&SnapshotMap| s.generation == client.generation && s.page_url == current_url;
-    let dom_fresh = client.last_dom_snapshot.as_ref().filter(fresh);
-    let ax_fresh = client.last_ax_snapshot.as_ref().filter(fresh);
+    let Some(dom) = client.last_dom_snapshot.as_ref() else {
+        return LookupResult::NotInSnapshot;
+    };
 
-    if let Some(dom) = dom_fresh {
-        if let Some((uid, role, name)) = lookup_in_snapshot(dom, backend_node_id) {
-            return LookupResult::Found { uid, role, name };
-        }
-    }
-    if let Some(ax) = ax_fresh {
-        if let Some((uid, role, name)) = lookup_in_snapshot(ax, backend_node_id) {
-            return LookupResult::Found { uid, role, name };
-        }
+    if dom.generation != client.generation || dom.page_url != current_url {
+        return LookupResult::Stale;
     }
 
-    // Only report "stale" when every snapshot we hold is actually stale —
-    // otherwise at least one fresh snapshot failed to match and the right
-    // hint is to take a fresh snapshot of the other kind, not re-take the
-    // one that's already current.
-    let has_any_fresh = dom_fresh.is_some() || ax_fresh.is_some();
-    let has_any_stale = (client.last_dom_snapshot.is_some() && dom_fresh.is_none())
-        || (client.last_ax_snapshot.is_some() && ax_fresh.is_none());
-
-    if !has_any_fresh && has_any_stale {
-        LookupResult::Stale
-    } else {
-        LookupResult::NotInSnapshot
+    match lookup_in_snapshot(dom, backend_node_id) {
+        Some((uid, role, name)) => LookupResult::Found { uid, role, name },
+        None => LookupResult::NotInSnapshot,
     }
 }
 

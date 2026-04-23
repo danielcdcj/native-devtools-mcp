@@ -51,11 +51,9 @@ mod harness;
 
 use harness::{
     content_text, Harness, HTML_CONTENTEDITABLE, HTML_CUSTOM_BUTTON, HTML_DUPLICATE_LABELS,
-    HTML_MIXED_AX_DOM, HTML_SHADOW_AND_IFRAME,
+    HTML_SHADOW_AND_IFRAME,
 };
-use native_devtools_mcp::cdp::tools::{
-    cdp_click, cdp_find_elements, cdp_take_ax_snapshot, cdp_take_dom_snapshot,
-};
+use native_devtools_mcp::cdp::tools::cdp_find_elements;
 
 /// Contenteditable editor found by placeholder only.
 ///
@@ -244,99 +242,4 @@ fn assert_matches_label(result: &rmcp::model::CallToolResult, expected: &str) {
         found,
         "no entry in `matches` with label={expected:?}; body:\n{body}"
     );
-}
-
-/// Mixed AX/DOM workflow end-to-end.
-///
-/// 1. Take an AX snapshot — populates `last_ax_snapshot` and yields `a<N>`
-///    UIDs for semantically-tagged elements.
-/// 2. Take a DOM snapshot — populates `last_dom_snapshot` independently and
-///    yields `d<N>` UIDs for *every* interactive element on the page,
-///    including ones AX missed.
-/// 3. Click a button via its `a<N>` UID, verify it lands on the AX-labelled
-///    button (page marks `#ax-hit`).
-/// 4. Click a contenteditable via its `d<N>` UID, verify the DOM snapshot
-///    targeting hit the contenteditable and not the AX button.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Chrome — run with `cargo test -- --ignored`"]
-async fn mixed_ax_and_dom_uids_resolve_independently() {
-    let Some(mut h) = Harness::launch_or_skip().await else {
-        return;
-    };
-    h.navigate(HTML_MIXED_AX_DOM).await;
-
-    // --- AX snapshot + click ---
-    let ax_out = cdp_take_ax_snapshot(h.client_handle()).await;
-    assert_eq!(ax_out.is_error, Some(false));
-    let ax_text = content_text(&ax_out);
-
-    // Find the a-prefixed UID of the button labelled "AxButton".
-    let ax_uid = harness::find_ax_uid(&ax_text, "button", "AxButton")
-        .unwrap_or_else(|| panic!("could not find 'AxButton' in AX snapshot:\n{ax_text}"));
-
-    let click_ax = cdp_click(ax_uid.clone(), false, false, h.client_handle()).await;
-    assert_eq!(
-        click_ax.is_error,
-        Some(false),
-        "click {ax_uid} failed: {click_ax:?}"
-    );
-
-    let ax_hit = h
-        .eval_bool("document.getElementById('ax-hit').dataset.clicked === '1'")
-        .await;
-    assert!(ax_hit, "AX UID {ax_uid} click did not register on #ax-hit");
-
-    // --- DOM snapshot + click ---
-    let dom_out = cdp_take_dom_snapshot(None, h.client_handle()).await;
-    assert_eq!(dom_out.is_error, Some(false));
-    let dom_text = content_text(&dom_out);
-
-    // Find the d-prefixed UID of the contenteditable whose placeholder is
-    // "EditorHere". The AX tree typically hides this.
-    let dom_uid = harness::find_dom_uid(&dom_text, "textbox", "EditorHere").unwrap_or_else(|| {
-        panic!("could not find 'EditorHere' textbox in DOM snapshot:\n{dom_text}")
-    });
-
-    let click_dom = cdp_click(dom_uid.clone(), false, false, h.client_handle()).await;
-    assert_eq!(
-        click_dom.is_error,
-        Some(false),
-        "click {dom_uid} failed: {click_dom:?}"
-    );
-
-    // The contenteditable receives focus on click; we attached a `focus`
-    // handler that stamps `#editor-hit`.
-    let editor_hit = h
-        .eval_bool("document.getElementById('editor-hit').dataset.focused === '1'")
-        .await;
-    assert!(
-        editor_hit,
-        "DOM UID {dom_uid} click did not focus contenteditable"
-    );
-
-    // Sanity: the two UIDs must have different prefixes (regression guard
-    // against the `a<N>` / `d<N>` prefix collapse).
-    assert!(
-        ax_uid.starts_with('a'),
-        "AX UID should start with 'a': {ax_uid}"
-    );
-    assert!(
-        dom_uid.starts_with('d'),
-        "DOM UID should start with 'd': {dom_uid}"
-    );
-
-    // Sanity: snapshot state should have both maps populated simultaneously.
-    {
-        let handle = h.client_handle();
-        let guard = handle.read().await;
-        let client = guard.as_ref().expect("client present");
-        assert!(
-            client.last_ax_snapshot.is_some(),
-            "AX snapshot should be retained after DOM snapshot"
-        );
-        assert!(
-            client.last_dom_snapshot.is_some(),
-            "DOM snapshot should be retained after AX snapshot"
-        );
-    }
 }

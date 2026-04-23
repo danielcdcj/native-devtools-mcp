@@ -275,54 +275,6 @@ fn text_of(content: &Content) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot-text parsers (small, test-only)
-// ---------------------------------------------------------------------------
-
-/// Find the first `a<N>` UID in an AX snapshot whose role matches as a
-/// whole token and whose name contains the given substring. AX snapshot
-/// lines are `<indent>uid=a<N> <role> "<name>" ...` from
-/// `tools::ax_snapshot::format_snapshot`.
-pub fn find_ax_uid(snapshot: &str, role: &str, name_substring: &str) -> Option<String> {
-    find_uid_in_snapshot(snapshot, 'a', role, name_substring)
-}
-
-/// Find the first `d<N>` UID in a DOM snapshot whose role matches as a
-/// whole token and whose label contains the given substring. DOM snapshot
-/// lines are `uid=d<N> <role> "<label>" tag=<tag> ...` from
-/// `dom_discovery::format_dom_snapshot`.
-pub fn find_dom_uid(snapshot: &str, role: &str, label_substring: &str) -> Option<String> {
-    find_uid_in_snapshot(snapshot, 'd', role, label_substring)
-}
-
-/// Parse a snapshot line formatted as `uid=<prefix><N> <role> "<text>" …`
-/// and return the UID when the role token is an exact match and the text
-/// contains the substring.
-fn find_uid_in_snapshot(
-    snapshot: &str,
-    prefix: char,
-    role: &str,
-    text_substring: &str,
-) -> Option<String> {
-    for line in snapshot.lines() {
-        let mut tokens = line.split_whitespace();
-        let uid_token = tokens.next()?;
-        let uid = uid_token.strip_prefix("uid=")?;
-        if !uid_starts_with_prefix(uid, prefix) {
-            continue;
-        }
-        if tokens.next() == Some(role) && line.contains(text_substring) {
-            return Some(uid.to_string());
-        }
-    }
-    None
-}
-
-fn uid_starts_with_prefix(uid: &str, prefix: char) -> bool {
-    let mut chars = uid.chars();
-    chars.next() == Some(prefix) && chars.clone().count() > 0 && chars.all(|c| c.is_ascii_digit())
-}
-
-// ---------------------------------------------------------------------------
 // HTML fixtures for the scenarios.
 // ---------------------------------------------------------------------------
 
@@ -382,26 +334,5 @@ pub const HTML_SHADOW_AND_IFRAME: &str = r#"
     }
     customElements.define('host-el', HostEl);
   </script>
-</body></html>
-"#;
-
-/// Scenario 5: one button the AX tree labels well ("AxButton") and one
-/// contenteditable that only DOM discovery can find by its placeholder
-/// ("EditorHere"). Each target stamps a marker element when activated so
-/// the test can verify the click landed on the right node.
-pub const HTML_MIXED_AX_DOM: &str = r#"
-<!doctype html>
-<html><body>
-  <div id="ax-hit" data-clicked="0" style="display:none"></div>
-  <div id="editor-hit" data-focused="0" style="display:none"></div>
-
-  <button id="axbtn" onclick="document.getElementById('ax-hit').dataset.clicked='1'">AxButton</button>
-
-  <div id="editor"
-       contenteditable="true"
-       data-placeholder="EditorHere"
-       onfocus="document.getElementById('editor-hit').dataset.focused='1'"
-       style="min-height:40px;border:1px solid #ccc;margin-top:20px">
-  </div>
 </body></html>
 "#;

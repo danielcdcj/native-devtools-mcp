@@ -171,7 +171,6 @@ mod cdp_tool_gating {
     const CDP_TOOL_NAMES: &[&str] = &[
         "cdp_connect",
         "cdp_disconnect",
-        "cdp_take_ax_snapshot",
         "cdp_take_dom_snapshot",
         "cdp_find_elements",
         "cdp_evaluate_script",
@@ -275,13 +274,13 @@ mod cdp_not_connected_errors {
 
     #[tokio::test]
     async fn cdp_click_without_connection_returns_clean_error() {
-        let result = tools::cdp_click("a1".to_string(), false, false, empty_client()).await;
+        let result = tools::cdp_click("d1".to_string(), false, false, empty_client()).await;
         assert_not_connected(&result);
     }
 
     #[tokio::test]
-    async fn cdp_take_ax_snapshot_without_connection_returns_clean_error() {
-        let result = tools::cdp_take_ax_snapshot(empty_client()).await;
+    async fn cdp_take_dom_snapshot_without_connection_returns_clean_error() {
+        let result = tools::cdp_take_dom_snapshot(None, empty_client()).await;
         assert_not_connected(&result);
     }
 

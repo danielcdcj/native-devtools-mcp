@@ -1,8 +1,7 @@
-//! CDP script and snapshot tools: evaluate_script, take_ax_snapshot, find_elements,
+//! CDP script and snapshot tools: evaluate_script, find_elements,
 //! take_dom_snapshot, wait_for.
 
 use crate::cdp::{cdp_error, page_url, CdpClient};
-use crate::tools::ax_snapshot::format_snapshot;
 use chromiumoxide::cdp::browser_protocol::dom::{
     BackendNodeId, DescribeNodeParams, ResolveNodeParams,
 };
@@ -93,7 +92,6 @@ pub async fn cdp_evaluate_script(
         if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
             let node = match crate::cdp::resolve_uid_from_maps(
                 uid,
-                client.last_ax_snapshot.as_ref(),
                 client.last_dom_snapshot.as_ref(),
                 client.generation,
                 &current_url,
@@ -180,48 +178,6 @@ pub async fn cdp_evaluate_script(
     }
 }
 
-pub async fn cdp_take_ax_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
-    let mut guard = cdp_client.write().await;
-    let client = match guard.as_mut() {
-        Some(c) => c,
-        None => return cdp_error("No CDP connection. Use cdp_connect first."),
-    };
-
-    let page = match client.require_page() {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let result = page
-        .execute(
-            chromiumoxide::cdp::browser_protocol::accessibility::GetFullAxTreeParams::default(),
-        )
-        .await;
-
-    match result {
-        Ok(response) => {
-            let nodes_json: Vec<serde_json::Value> = response
-                .result
-                .nodes
-                .iter()
-                .map(|n| serde_json::to_value(n).unwrap_or_default())
-                .collect();
-
-            let generation = client.generation;
-            let page_url = page_url(&page).await;
-
-            let (snapshot_nodes, snapshot_map) =
-                crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, page_url, generation);
-
-            let output = format_snapshot(&snapshot_nodes, None);
-            client.last_ax_snapshot = Some(snapshot_map);
-
-            CallToolResult::success(vec![Content::text(output)])
-        }
-        Err(e) => cdp_error(format!("Failed to get accessibility tree: {}", e)),
-    }
-}
-
 const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
 
 pub async fn cdp_wait_for(
@@ -270,7 +226,7 @@ pub async fn cdp_wait_for(
         };
 
         if found {
-            return cdp_take_ax_snapshot(cdp_client.clone()).await;
+            return cdp_take_dom_snapshot(None, cdp_client.clone()).await;
         }
 
         if start.elapsed() >= timeout {

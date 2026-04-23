@@ -326,7 +326,6 @@ impl MacOSDevToolsServer {
             annotate_tools(
                 tools,
                 &[
-                    "cdp_take_ax_snapshot",
                     "cdp_take_dom_snapshot",
                     "cdp_find_elements",
                     "cdp_list_pages",
@@ -1502,7 +1501,7 @@ impl MacOSDevToolsServer {
 
     #[cfg(feature = "cdp")]
     const UID_DESC: &'static str =
-        "Element UID from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements";
+        "Element UID from cdp_take_dom_snapshot or cdp_find_elements (d-prefixed)";
 
     fn get_cdp_tools() -> Vec<Tool> {
         vec![
@@ -1515,16 +1514,8 @@ impl MacOSDevToolsServer {
                 }))),
             ),
             Tool::new(
-                "cdp_take_ax_snapshot",
-                "Take an accessibility tree snapshot of the selected browser page. Returns elements with UIDs prefixed 'a' (e.g., a1, a2). Rarely needed — prefer cdp_find_elements for targeted lookups or cdp_take_dom_snapshot for full page structure. Only use this when you specifically need ARIA roles or accessibility states that the DOM tools don't provide. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
-                Arc::new(json_to_object(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }))),
-            ),
-            Tool::new(
                 "cdp_take_dom_snapshot",
-                "Take a full DOM snapshot of the selected browser page. Returns all interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use when you need the complete page structure — captures contenteditable editors, placeholder inputs, and custom widgets that cdp_take_ax_snapshot often misses. For targeted lookups, prefer cdp_find_elements instead. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                "Take a full DOM snapshot of the selected browser page. Returns all interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use when you need the complete page structure — captures contenteditable editors, placeholder inputs, and custom widgets. For targeted lookups, prefer cdp_find_elements instead. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -1559,7 +1550,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_evaluate_script",
-                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: 'a5'}].",
+                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_dom_snapshot or cdp_find_elements via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: 'd5'}].",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["function"],
@@ -1583,7 +1574,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_click",
-                "Click a DOM element by its UID from a cdp_take_ax_snapshot, cdp_take_dom_snapshot, or cdp_find_elements result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content.",
+                "Click a DOM element by its UID from a cdp_take_dom_snapshot or cdp_find_elements result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["uid"],
@@ -1598,7 +1589,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1638,7 +1629,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1660,7 +1651,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1678,7 +1669,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Appends an AX accessibility snapshot (a-prefixed UIDs) to the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -2604,10 +2595,6 @@ impl ServerHandler for MacOSDevToolsServer {
                         "No CDP connection. Use cdp_connect first.",
                     )]))
                 }
-            }
-            #[cfg(feature = "cdp")]
-            "cdp_take_ax_snapshot" => {
-                Ok(crate::cdp::tools::cdp_take_ax_snapshot(self.cdp_client.clone()).await)
             }
             #[cfg(feature = "cdp")]
             "cdp_take_dom_snapshot" => {
