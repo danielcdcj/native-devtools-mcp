@@ -226,7 +226,10 @@ pub async fn cdp_wait_for(
         };
 
         if found {
-            return cdp_take_dom_snapshot(None, cdp_client.clone()).await;
+            // Smaller cap than the user-facing default: cdp_wait_for is
+            // typically followed by a targeted cdp_find_elements, so a
+            // lightweight snapshot is enough to show what appeared.
+            return cdp_take_dom_snapshot(Some(100), cdp_client.clone()).await;
         }
 
         if start.elapsed() >= timeout {
@@ -307,49 +310,20 @@ async fn resolve_dom_candidates(
             Err(_) => Vec::new(),
         };
 
-    let element_count = all_metadata.len();
-
-    // Step 4: For each element, get a reference and resolve backendNodeId via DOM.describeNode
-    let mut candidates = Vec::with_capacity(element_count);
-    for (i, mut candidate) in all_metadata.into_iter().enumerate() {
-        // Get element reference
-        let get_el_js = format!("function() {{ return this.elements[{}]; }}", i);
-        let el_params = CallFunctionOnParams::builder()
-            .function_declaration(&get_el_js)
-            .object_id(result_object_id.clone())
-            .return_by_value(false)
-            .build();
-        let el_object_id = match page.execute(el_params.unwrap()).await {
-            Ok(resp) => match resp.result.result.object_id {
-                Some(id) => id,
-                None => continue,
-            },
-            Err(_) => continue,
-        };
-
-        // Resolve backendNodeId via DOM.describeNode on the element
-        let el_oid_for_release = el_object_id.clone();
-        let describe = DescribeNodeParams::builder()
-            .object_id(el_object_id)
-            .build();
-        let describe_result = page.execute(describe).await;
-        // Release the per-element remote object handle
-        let _ = page
-            .execute(ReleaseObjectParams::new(el_oid_for_release))
-            .await;
-        match describe_result {
-            Ok(desc_resp) => {
-                let id = *desc_resp.result.node.backend_node_id.inner();
-                if id == 0 {
-                    continue;
-                }
-                candidate.backend_node_id = id;
-            }
-            Err(_) => continue,
-        };
-
-        candidates.push(candidate);
-    }
+    // Step 4: Resolve backendNodeIds in parallel. Each element requires three
+    // RPCs (get ref, DOM.describeNode, releaseObject) — running them in
+    // parallel pipelines them over the single CDP WebSocket instead of
+    // paying round-trip latency per element.
+    let describe_futures = all_metadata.into_iter().enumerate().map(|(i, candidate)| {
+        let result_object_id = result_object_id.clone();
+        async move { resolve_candidate(page, &result_object_id, i, candidate).await }
+    });
+    let candidates: Vec<crate::cdp::dom_discovery::DomCandidate> =
+        futures_util::future::join_all(describe_futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
 
     // Release the wrapper remote object to avoid memory leaks
     let _ = page
@@ -357,6 +331,48 @@ async fn resolve_dom_candidates(
         .await;
 
     Ok((candidates, inventory))
+}
+
+/// Resolve one DOM candidate's backendNodeId via `DOM.describeNode`.
+///
+/// Returns `None` when any of the three round trips fails or the
+/// describe returns `backendNodeId=0` (no real DOM backing).
+async fn resolve_candidate(
+    page: &Page,
+    result_object_id: &chromiumoxide::cdp::js_protocol::runtime::RemoteObjectId,
+    index: usize,
+    mut candidate: crate::cdp::dom_discovery::DomCandidate,
+) -> Option<crate::cdp::dom_discovery::DomCandidate> {
+    let get_el_js = format!("function() {{ return this.elements[{}]; }}", index);
+    let el_params = CallFunctionOnParams::builder()
+        .function_declaration(&get_el_js)
+        .object_id(result_object_id.clone())
+        .return_by_value(false)
+        .build()
+        .ok()?;
+    let el_object_id = page
+        .execute(el_params)
+        .await
+        .ok()?
+        .result
+        .result
+        .object_id?;
+
+    let el_oid_for_release = el_object_id.clone();
+    let describe = DescribeNodeParams::builder()
+        .object_id(el_object_id)
+        .build();
+    let describe_result = page.execute(describe).await;
+    let _ = page
+        .execute(ReleaseObjectParams::new(el_oid_for_release))
+        .await;
+
+    let id = *describe_result.ok()?.result.node.backend_node_id.inner();
+    if id == 0 {
+        return None;
+    }
+    candidate.backend_node_id = id;
+    Some(candidate)
 }
 
 pub async fn cdp_find_elements(

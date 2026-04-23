@@ -11,6 +11,12 @@ use rmcp::model::{CallToolResult, Content};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Cap for snapshots auto-appended after an action. Smaller than the
+/// user-facing `cdp_take_dom_snapshot` default (500) because the "quick
+/// look after click/hover/fill" use case doesn't need the full page, and
+/// every extra element costs three CDP round trips.
+const AUTO_SNAPSHOT_MAX_NODES: u32 = 100;
+
 /// Append a snapshot to an existing tool result if `include_snapshot` is true.
 async fn maybe_append_snapshot(
     mut result: CallToolResult,
@@ -20,7 +26,8 @@ async fn maybe_append_snapshot(
     if !include_snapshot {
         return result;
     }
-    let snapshot = super::script::cdp_take_dom_snapshot(None, cdp_client).await;
+    let snapshot =
+        super::script::cdp_take_dom_snapshot(Some(AUTO_SNAPSHOT_MAX_NODES), cdp_client).await;
     result.content.extend(snapshot.content);
     result
 }
