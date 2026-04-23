@@ -7,12 +7,12 @@
     "url": "https://github.com/sh3ll3x3c/native-devtools-mcp",
     "source": "github"
   },
-  "version": "0.9.2",
+  "version": "0.9.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "native-devtools-mcp",
-      "version": "0.9.2",
+      "version": "0.9.3",
       "transport": {
         "type": "stdio"
       }

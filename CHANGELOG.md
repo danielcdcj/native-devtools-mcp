@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.3
+
+### CDP
+
+- **Collapsed the CDP snapshot surface to DOM-only.** Removed `cdp_take_ax_snapshot` and the paired `a<N>` UID namespace. The native macOS `take_ax_snapshot` (still `a<N>`) and browser-side `cdp_take_dom_snapshot` / `cdp_find_elements` (always `d<N>`) now split cleanly — no more overlapping "which snapshot do I take?" for CDP. **Breaking:** existing callers that invoked `cdp_take_ax_snapshot` must switch to `cdp_find_elements` (for targeted lookups) or `cdp_take_dom_snapshot` (for the full page).
+- **Parallelized `DOM.describeNode` resolution.** `cdp_take_dom_snapshot` and `cdp_find_elements` previously did three sequential CDP round trips per element (get ref, describe, release) — for 500 elements that was ~1500 serial round trips. The per-element chain now runs through `futures::join_all`, pipelining over the single CDP WebSocket.
+- **`include_snapshot` auto-appends capped at 100 nodes.** `cdp_click` / `cdp_hover` / `cdp_fill` / `cdp_press_key` with `include_snapshot=true` previously appended a full 500-node DOM snapshot; they now append a 100-node snapshot. The user-facing `cdp_take_dom_snapshot(max_nodes=500)` default is unchanged.
+- **`cdp_wait_for` snapshot is now opt-in.** Added an `include_snapshot` flag (default `false`). On success the response is now a one-line `"Text appeared after Xms: [...]"` header unless `include_snapshot=true`, in which case a 100-node DOM snapshot is appended after the header. **Breaking:** callers that relied on `cdp_wait_for` implicitly returning a snapshot must pass `include_snapshot=true`.
+- **`cdp_element_at_point` description corrected.** Now accurately documents that the tool always returns `backend_node_id` and only carries a `d`-prefixed UID / role / name when the current DOM snapshot already contains the hit-tested node.
+
 ## v0.9.2
 
 ### macOS
