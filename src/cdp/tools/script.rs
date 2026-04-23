@@ -183,6 +183,7 @@ const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
 pub async fn cdp_wait_for(
     texts: Vec<String>,
     timeout_ms: Option<u64>,
+    include_snapshot: bool,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let raw_timeout = timeout_ms.unwrap_or(10_000).min(MAX_WAIT_TIMEOUT_MS);
@@ -226,10 +227,17 @@ pub async fn cdp_wait_for(
         };
 
         if found {
+            let elapsed_ms = start.elapsed().as_millis();
+            let header = format!("Text appeared after {}ms: {}", elapsed_ms, texts_json);
+            if !include_snapshot {
+                return CallToolResult::success(vec![Content::text(header)]);
+            }
             // Smaller cap than the user-facing default: cdp_wait_for is
             // typically followed by a targeted cdp_find_elements, so a
             // lightweight snapshot is enough to show what appeared.
-            return cdp_take_dom_snapshot(Some(100), cdp_client.clone()).await;
+            let mut result = cdp_take_dom_snapshot(Some(100), cdp_client.clone()).await;
+            result.content.insert(0, Content::text(header));
+            return result;
         }
 
         if start.elapsed() >= timeout {

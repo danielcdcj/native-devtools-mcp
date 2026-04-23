@@ -1759,6 +1759,10 @@ impl MacOSDevToolsServer {
                         "timeout": {
                             "type": "integer",
                             "description": "Maximum wait time in milliseconds (default: 10000)"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response after the text appears (default: false). When false, only a short 'text appeared after Xms' line is returned."
                         }
                     }
                 }))),
@@ -2775,7 +2779,17 @@ impl ServerHandler for MacOSDevToolsServer {
                     ));
                 }
                 let timeout = args.get("timeout").and_then(|v| v.as_u64());
-                Ok(crate::cdp::tools::cdp_wait_for(texts, timeout, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_wait_for(
+                    texts,
+                    timeout,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_type_text" => {
