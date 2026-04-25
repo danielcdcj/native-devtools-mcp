@@ -9,6 +9,11 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  # Opt every Node 20 action into Node 24 ahead of the June 2026 default flip
+  # and the September 2026 Node 20 removal.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: Build - ${{ matrix.target }}
@@ -245,11 +250,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 for npm v11, which supports the current OIDC handshake
+          # required by Trusted Publishing. Node 22 (npm v10) gets silently
+          # treated as anonymous and publish fails with a misleading 404.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Update npm to latest
-        run: npm install -g npm@latest && npm -v
 
       - name: Copy binaries to npm packages
         run: |

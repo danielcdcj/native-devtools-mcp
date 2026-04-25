@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.9.3
+
+### CDP
+
+- **Collapsed the CDP snapshot surface to DOM-only.** Removed `cdp_take_ax_snapshot` and the paired `a<N>` UID namespace. The native macOS `take_ax_snapshot` (still `a<N>`) and browser-side `cdp_take_dom_snapshot` / `cdp_find_elements` (always `d<N>`) now split cleanly — no more overlapping "which snapshot do I take?" for CDP. **Breaking:** existing callers that invoked `cdp_take_ax_snapshot` must switch to `cdp_find_elements` (for targeted lookups) or `cdp_take_dom_snapshot` (for the full page).
+- **Parallelized `DOM.describeNode` resolution.** `cdp_take_dom_snapshot` and `cdp_find_elements` previously did three sequential CDP round trips per element (get ref, describe, release) — for 500 elements that was ~1500 serial round trips. The per-element chain now runs through `futures::join_all`, pipelining over the single CDP WebSocket.
+- **`include_snapshot` auto-appends capped at 100 nodes.** `cdp_click` / `cdp_hover` / `cdp_fill` / `cdp_press_key` with `include_snapshot=true` previously appended a full 500-node DOM snapshot; they now append a 100-node snapshot. The user-facing `cdp_take_dom_snapshot(max_nodes=500)` default is unchanged.
+- **`cdp_wait_for` snapshot is now opt-in.** Added an `include_snapshot` flag (default `false`). On success the response is now a one-line `"Text appeared after Xms: [...]"` header unless `include_snapshot=true`, in which case a 100-node DOM snapshot is appended after the header. **Breaking:** callers that relied on `cdp_wait_for` implicitly returning a snapshot must pass `include_snapshot=true`.
+- **`cdp_element_at_point` description corrected.** Now accurately documents that the tool always returns `backend_node_id` and only carries a `d`-prefixed UID / role / name when the current DOM snapshot already contains the hit-tested node.
+
+## v0.9.2
+
+### macOS
+
+- **`launch_app` gains a `background` flag.** When `true`, the app is launched via `open -g -a`, so it starts without being brought to the foreground. Useful when the next step uses CDP or AX dispatch (both focus-preserving) and you don't want the target window stealing focus. Default is `false`; Windows ignores the flag.
+
+### CDP
+
+- **Label fallback prefers the element's own text nodes.** The v0.9.1 DOM walker still concatenated sibling descendant text when those descendants had no aria/title/alt/role hints, producing composite labels like `"Note to Self 1 week Verified"` on wrapper buttons. `getLabel()` now first concatenates only the element's direct Text-node children and returns immediately on a non-empty result; the prior recursive walk remains as a secondary fallback for wrappers whose visible text lives inside an inner span. Elements with `role` or `data-testid` are also treated as self-contained semantic units so the recursive fallback no longer swallows badge text.
+
+## v0.9.1
+
+### CDP
+
+- **DOM walker no longer returns composite labels.** `getLabel()` previously fell through to `el.textContent` when an element had no `aria-label` / `aria-labelledby` / `title` / `alt`, concatenating all descendant text. A header button wrapping avatar + chat name + badges produced labels like `"Note to Self1 weekVerified"`, which misled agents into clicking the wrong element. Replaced with a direct-text collector that walks only direct text nodes plus descendant subtrees that do not carry their own label and are not themselves interactive; falls back to the tag name when no direct text exists.
+- **DOM snapshot now renders parent context.** Each line shows `(in <role> "<name>")` at the end, using the `parentRole` / `parentName` already captured by the walker. Lets a reader disambiguate, for example, a sidebar list item from a chat-header button that would otherwise print the same label.
+
+## v0.9.0
+
+### Element-precise AX dispatch (macOS)
+
+Three macOS-only tools that dispatch against accessibility-tree elements by uid, without moving the cursor or stealing focus. Complement — not replace — coordinate-based `click` / `type_text`.
+
+- **`ax_click`** — press a button, menu item, checkbox, or toolbar item by AX uid via `AXPress`.
+- **`ax_set_value`** — write to a text field's `kAXValueAttribute`. Value assignment, not keystroke typing: no `keydown`/`keyup`, no IME composition, no undo-stack entry. Fall back to `click` + `type_text` when key-event semantics are required.
+- **`ax_select`** — select a row inside `NSOutlineView` / `NSTableView` by writing `AXSelectedRows` on the enclosing outline/table. Use for sidebars (System Settings, Mail, Xcode, Finder) and rule lists where rows refuse `AXPress`.
+
+All three return `{ ok, dispatched_via, bbox }` on success; on failure, a typed error (`snapshot_expired`, `uid_not_found`, `not_dispatchable`, `no_row_ancestor`, `no_outline_container`, `ax_error`) with an optional `fallback: {x, y}` coordinate for coordinate-based retry.
+
+### Session-stateful `take_ax_snapshot` (macOS)
+
+`take_ax_snapshot` on macOS is now session-backed: each call bumps a monotonic generation and emits uids as `a<N>g<gen>` (e.g. `a42g3`). Uids from prior snapshots are rejected by `ax_click` / `ax_set_value` / `ax_select` with `snapshot_expired`, eliminating the silent wrong-element-clicked failure mode. Snapshot immediately before each dispatch; every branch or retry starts with a fresh snapshot. Windows behavior is unchanged — bare `a<N>` uids, no session.
+
+### MCP tool metadata
+
+- **ToolAnnotations on every tool** — `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` safety hints let MCP clients surface the right permission prompts and defaults.
+- **`click` coordinate variants are mutually exclusive** — schema uses `oneOf` (screen / window / screenshot), enforced at runtime. Mixing variants now produces a clear validation error instead of silent coordinate misinterpretation.
+- **`focus_window`** returns structured JSON (`{ app_name, pid, kind }`) instead of free-form text.
+
+### CDP
+
+- **CDP tools are listed unconditionally.** Previously they appeared only after `cdp_connect`; they now appear at session start and return a stable "not connected" error until connected, so callers can discover the API up front.
+
+### Dependencies
+
+- `rmcp` bumped to `0.2` to unlock `ToolAnnotations`.
+- `rand` and `rustls-webpki` bumped for low-severity advisories.
+
 ## v0.8.0
 
 ### New tools
@@ -34,7 +92,9 @@ This means you can now automate **Chrome browsers** and **Electron apps** (Signa
 #### 16 new `cdp_*` tools
 
 - **`cdp_connect` / `cdp_disconnect`** — connect to a running Chrome/Electron instance on a given port
-- **`cdp_take_snapshot`** — accessibility tree snapshot of the browser page (element UIDs, roles, names)
+- **`cdp_take_ax_snapshot`** — accessibility tree snapshot of the browser page (element UIDs prefixed `a`, roles, names)
+- **`cdp_take_dom_snapshot`** — DOM-native snapshot of interactive elements (element UIDs prefixed `d`)
+- **`cdp_find_elements`** — search the live DOM for interactive elements matching a text query
 - **`cdp_evaluate_script`** — evaluate JavaScript in the page, with optional element references from the snapshot
 - **`cdp_click`** — click a DOM element by UID (scroll-into-view, more reliable than screen coordinates for web content)
 - **`cdp_hover`** — hover over a DOM element by UID
@@ -59,8 +119,8 @@ launch_app(app_name="Google Chrome", args=["--remote-debugging-port=9222", "--us
 # Connect and automate
 cdp_connect(port=9222)
 cdp_navigate(url="https://example.com")
-cdp_take_snapshot()
-cdp_fill(uid="10", value="search query")
+cdp_take_ax_snapshot()
+cdp_fill(uid="a10", value="search query")
 cdp_press_key(key="Enter")
 ```
 

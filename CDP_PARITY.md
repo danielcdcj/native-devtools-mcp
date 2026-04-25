@@ -6,7 +6,8 @@ This document tracks feature parity between our CDP tools and [chrome-devtools-m
 
 | chrome-devtools-mcp | native-devtools-mcp | Notes |
 |---|---|---|
-| `take_snapshot` | `cdp_take_snapshot` | Accessibility tree snapshot with UIDs |
+| `take_snapshot` | `cdp_take_dom_snapshot` | DOM snapshot of interactive elements with d-prefixed UIDs |
+| — | `cdp_find_elements` | Search live DOM for interactive elements by text query (preferred over full snapshot) |
 | `click` | `cdp_click` | Click by UID, supports double-click |
 | `hover` | `cdp_hover` | Hover by UID |
 | `fill` | `cdp_fill` | Fill input/textarea/select by UID |
@@ -15,12 +16,12 @@ This document tracks feature parity between our CDP tools and [chrome-devtools-m
 | `navigate_page` | `cdp_navigate` | URL, back, forward, reload |
 | `new_page` | `cdp_new_page` | Create new tab |
 | `close_page` | `cdp_close_page` | Close tab by index |
-| `wait_for` | `cdp_wait_for` | Poll snapshot for text |
+| `wait_for` | `cdp_wait_for` | Poll page text until any value appears (optional DOM snapshot via `include_snapshot=true`) |
 | `list_pages` | `cdp_list_pages` | List open tabs |
 | `select_page` | `cdp_select_page` | Switch active tab |
 | `evaluate_script` | `cdp_evaluate_script` | Run JS with optional UID args |
 | `take_screenshot` | `take_screenshot` | Native screenshot (not CDP) |
-| `type_text` | `cdp_press_key` | Use press_key for individual keys |
+| `type_text` | `cdp_type_text` | Character-by-character keyboard input into a focused element. Use `cdp_fill` for bulk form-field entry; use `cdp_press_key` for single keys and modifier combos. |
 | `drag` | — | Not implemented |
 | `fill_form` | — | Not implemented (use cdp_fill per field) |
 | `upload_file` | — | Not implemented |
@@ -45,7 +46,6 @@ This document tracks feature parity between our CDP tools and [chrome-devtools-m
 - **drag**: Uncommon interaction pattern. Can be done via `cdp_evaluate_script` with drag events.
 - **fill_form**: Convenience wrapper — use `cdp_fill` for each field individually.
 - **upload_file**: Requires `DOM.setFileInputFiles` — niche use case.
-- **type_text**: `cdp_press_key` covers key-by-key input; `cdp_fill` covers bulk text entry.
 
 ### Performance/debugging — out of scope
 
@@ -57,4 +57,4 @@ This document tracks feature parity between our CDP tools and [chrome-devtools-m
 - **get_console_message**, **list_console_messages**: Requires subscribing to `Runtime.consoleAPICalled` events. Potential future addition.
 - **get_network_request**, **list_network_requests**: Requires subscribing to `Network.requestWillBeSent` events. Potential future addition.
 
-## Our total: 15 CDP tools (1 always visible + 14 gated behind connection)
+## Our total: 18 CDP tools (all listed unconditionally; calls return "No CDP connection" until `cdp_connect` succeeds)

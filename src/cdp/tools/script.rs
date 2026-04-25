@@ -1,11 +1,14 @@
-//! CDP script and snapshot tools: evaluate_script, take_snapshot, wait_for.
+//! CDP script and snapshot tools: evaluate_script, find_elements,
+//! take_dom_snapshot, wait_for.
 
-use crate::cdp::{cdp_error, CdpClient};
-use crate::tools::ax_snapshot::format_snapshot;
-use chromiumoxide::cdp::browser_protocol::dom::{BackendNodeId, ResolveNodeParams};
-use chromiumoxide::cdp::js_protocol::runtime::{
-    CallArgument, CallFunctionOnParams, EvaluateParams,
+use crate::cdp::{cdp_error, page_url, CdpClient};
+use chromiumoxide::cdp::browser_protocol::dom::{
+    BackendNodeId, DescribeNodeParams, ResolveNodeParams,
 };
+use chromiumoxide::cdp::js_protocol::runtime::{
+    CallArgument, CallFunctionOnParams, EvaluateParams, ReleaseObjectParams,
+};
+use chromiumoxide::page::Page;
 use rmcp::model::{CallToolResult, Content};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -76,12 +79,6 @@ pub async fn cdp_evaluate_script(
     }
 
     // Args case: resolve UIDs to remote objects and call function with them.
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = match client.check_snapshot_staleness(&current_url) {
-        Ok(m) => m,
-        Err(e) => return e,
-    };
-
     let arg_list = match args.as_ref() {
         Some(a) => a,
         None => return cdp_error("args required when passing element references"),
@@ -90,16 +87,17 @@ pub async fn cdp_evaluate_script(
 
     // Collect (uid, backend_node_id) pairs first to avoid borrow issues.
     let mut uid_backend_pairs: Vec<(String, i64)> = Vec::with_capacity(arg_list.len());
+    let current_url = page_url(&page).await;
     for arg in arg_list {
         if let Some(uid) = arg.get("uid").and_then(|v| v.as_str()) {
-            let node = match snapshot_map.uid_to_node.get(uid) {
-                Some(n) => n,
-                None => {
-                    return cdp_error(format!(
-                        "uid={} not found. Call cdp_take_snapshot to refresh.",
-                        uid
-                    ));
-                }
+            let node = match crate::cdp::resolve_uid_from_maps(
+                uid,
+                client.last_dom_snapshot.as_ref(),
+                client.generation,
+                &current_url,
+            ) {
+                Ok(n) => n,
+                Err(msg) => return cdp_error(msg),
             };
             uid_backend_pairs.push((uid.to_string(), node.backend_node_id));
         }
@@ -180,52 +178,12 @@ pub async fn cdp_evaluate_script(
     }
 }
 
-pub async fn cdp_take_snapshot(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallToolResult {
-    let mut guard = cdp_client.write().await;
-    let client = match guard.as_mut() {
-        Some(c) => c,
-        None => return cdp_error("No CDP connection. Use cdp_connect first."),
-    };
-
-    let page = match client.require_page() {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    let result = page
-        .execute(
-            chromiumoxide::cdp::browser_protocol::accessibility::GetFullAxTreeParams::default(),
-        )
-        .await;
-
-    match result {
-        Ok(response) => {
-            let nodes_json: Vec<serde_json::Value> = response
-                .result
-                .nodes
-                .iter()
-                .map(|n| serde_json::to_value(n).unwrap_or_default())
-                .collect();
-
-            let page_url = page.url().await.ok().flatten().unwrap_or_default();
-
-            let (snapshot_nodes, snapshot_map) =
-                crate::cdp::snapshot::convert_cdp_ax_tree(&nodes_json, &page_url);
-
-            let output = format_snapshot(&snapshot_nodes);
-            client.last_snapshot = Some(snapshot_map);
-
-            CallToolResult::success(vec![Content::text(output)])
-        }
-        Err(e) => cdp_error(format!("Failed to get accessibility tree: {}", e)),
-    }
-}
-
 const MAX_WAIT_TIMEOUT_MS: u64 = 60_000;
 
 pub async fn cdp_wait_for(
     texts: Vec<String>,
     timeout_ms: Option<u64>,
+    include_snapshot: bool,
     cdp_client: Arc<RwLock<Option<CdpClient>>>,
 ) -> CallToolResult {
     let raw_timeout = timeout_ms.unwrap_or(10_000).min(MAX_WAIT_TIMEOUT_MS);
@@ -269,7 +227,17 @@ pub async fn cdp_wait_for(
         };
 
         if found {
-            return cdp_take_snapshot(cdp_client.clone()).await;
+            let elapsed_ms = start.elapsed().as_millis();
+            let header = format!("Text appeared after {}ms: {}", elapsed_ms, texts_json);
+            if !include_snapshot {
+                return CallToolResult::success(vec![Content::text(header)]);
+            }
+            // Smaller cap than the user-facing default: cdp_wait_for is
+            // typically followed by a targeted cdp_find_elements, so a
+            // lightweight snapshot is enough to show what appeared.
+            let mut result = cdp_take_dom_snapshot(Some(100), cdp_client.clone()).await;
+            result.content.insert(0, Content::text(header));
+            return result;
         }
 
         if start.elapsed() >= timeout {
@@ -282,4 +250,233 @@ pub async fn cdp_wait_for(
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Shared DOM walker + single-pass resolution logic used by both
+/// `cdp_find_elements` and `cdp_take_dom_snapshot`.
+///
+/// Runs the JS walker with `return_by_value=false` to get element references,
+/// then iterates to extract metadata and resolve `backendNodeId` atomically
+/// via `DOM.describeNode`. Drops candidates where resolution fails or returns
+/// `backendNodeId=0`.
+async fn resolve_dom_candidates(
+    page: &Page,
+    walker_js: &str,
+) -> Result<
+    (
+        Vec<crate::cdp::dom_discovery::DomCandidate>,
+        serde_json::Value,
+    ),
+    CallToolResult,
+> {
+    // Step 1: Evaluate walker with return_by_value=false to get element references
+    let mut eval_params = EvaluateParams::new(walker_js);
+    eval_params.return_by_value = Some(false);
+
+    let walker_result = match page.execute(eval_params).await {
+        Ok(resp) => resp,
+        Err(e) => return Err(cdp_error(format!("DOM walker failed: {}", e))),
+    };
+
+    let result_object_id = match walker_result.result.result.object_id {
+        Some(id) => id,
+        None => return Err(cdp_error("DOM walker returned no object reference")),
+    };
+
+    // Step 2: Extract inventory (by-value) from the result
+    let inventory_js = "function() { return JSON.stringify(this.inventory); }";
+    let inv_params = CallFunctionOnParams::builder()
+        .function_declaration(inventory_js)
+        .object_id(result_object_id.clone())
+        .return_by_value(true)
+        .build();
+    let inventory: serde_json::Value = match page.execute(inv_params.unwrap()).await {
+        Ok(resp) => resp
+            .result
+            .result
+            .value
+            .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
+            .unwrap_or(serde_json::json!([])),
+        Err(_) => serde_json::json!([]),
+    };
+
+    // Step 3: Extract all metadata in one bulk call (avoids per-element round-trips)
+    let meta_js = "function() { return JSON.stringify(this.metadata); }";
+    let meta_params = CallFunctionOnParams::builder()
+        .function_declaration(meta_js)
+        .object_id(result_object_id.clone())
+        .return_by_value(true)
+        .build();
+    let all_metadata: Vec<crate::cdp::dom_discovery::DomCandidate> =
+        match page.execute(meta_params.unwrap()).await {
+            Ok(resp) => resp
+                .result
+                .result
+                .value
+                .and_then(|v| v.as_str().and_then(|s| serde_json::from_str(s).ok()))
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+
+    // Step 4: Resolve backendNodeIds in parallel. Each element requires three
+    // RPCs (get ref, DOM.describeNode, releaseObject) — running them in
+    // parallel pipelines them over the single CDP WebSocket instead of
+    // paying round-trip latency per element.
+    let describe_futures = all_metadata.into_iter().enumerate().map(|(i, candidate)| {
+        let result_object_id = result_object_id.clone();
+        async move { resolve_candidate(page, &result_object_id, i, candidate).await }
+    });
+    let candidates: Vec<crate::cdp::dom_discovery::DomCandidate> =
+        futures_util::future::join_all(describe_futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+
+    // Release the wrapper remote object to avoid memory leaks
+    let _ = page
+        .execute(ReleaseObjectParams::new(result_object_id))
+        .await;
+
+    Ok((candidates, inventory))
+}
+
+/// Resolve one DOM candidate's backendNodeId via `DOM.describeNode`.
+///
+/// Returns `None` when any of the three round trips fails or the
+/// describe returns `backendNodeId=0` (no real DOM backing).
+async fn resolve_candidate(
+    page: &Page,
+    result_object_id: &chromiumoxide::cdp::js_protocol::runtime::RemoteObjectId,
+    index: usize,
+    mut candidate: crate::cdp::dom_discovery::DomCandidate,
+) -> Option<crate::cdp::dom_discovery::DomCandidate> {
+    let get_el_js = format!("function() {{ return this.elements[{}]; }}", index);
+    let el_params = CallFunctionOnParams::builder()
+        .function_declaration(&get_el_js)
+        .object_id(result_object_id.clone())
+        .return_by_value(false)
+        .build()
+        .ok()?;
+    let el_object_id = page
+        .execute(el_params)
+        .await
+        .ok()?
+        .result
+        .result
+        .object_id?;
+
+    let el_oid_for_release = el_object_id.clone();
+    let describe = DescribeNodeParams::builder()
+        .object_id(el_object_id)
+        .build();
+    let describe_result = page.execute(describe).await;
+    let _ = page
+        .execute(ReleaseObjectParams::new(el_oid_for_release))
+        .await;
+
+    let id = *describe_result.ok()?.result.node.backend_node_id.inner();
+    if id == 0 {
+        return None;
+    }
+    candidate.backend_node_id = id;
+    Some(candidate)
+}
+
+pub async fn cdp_find_elements(
+    query: String,
+    role: Option<String>,
+    max_results: Option<u32>,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let mut guard = cdp_client.write().await;
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
+    };
+
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let max = max_results.unwrap_or(10);
+    let page_url = page_url(&page).await;
+    let generation = client.generation;
+
+    let walker_js = crate::cdp::dom_discovery::dom_walker_js(&query, role.as_deref(), max);
+
+    let (candidates, inventory) = match resolve_dom_candidates(&page, &walker_js).await {
+        Ok(result) => result,
+        Err(e) => return e,
+    };
+
+    // Build snapshot map and format response
+    let snapshot_map =
+        crate::cdp::dom_discovery::build_dom_snapshot(&candidates, page_url.clone(), generation);
+
+    let matches_json: Vec<serde_json::Value> = candidates
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            serde_json::json!({
+                "uid": format!("d{}", i + 1),
+                "role": n.role,
+                "label": n.label,
+                "tag": n.tag,
+                "disabled": n.disabled,
+                "parent_role": n.parent_role,
+                "parent_name": n.parent_name,
+            })
+        })
+        .collect();
+
+    client.last_dom_snapshot = Some(snapshot_map);
+
+    let result = serde_json::json!({
+        "page_url": page_url,
+        "source": "dom",
+        "matches": matches_json,
+        "inventory": inventory,
+    });
+
+    CallToolResult::success(vec![Content::text(
+        serde_json::to_string_pretty(&result).unwrap_or_default(),
+    )])
+}
+
+pub async fn cdp_take_dom_snapshot(
+    max_nodes: Option<u32>,
+    cdp_client: Arc<RwLock<Option<CdpClient>>>,
+) -> CallToolResult {
+    let mut guard = cdp_client.write().await;
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => return cdp_error("No CDP connection. Use cdp_connect first."),
+    };
+
+    let page = match client.require_page() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let max = max_nodes.unwrap_or(500);
+    let page_url = page_url(&page).await;
+    let generation = client.generation;
+
+    // Use empty query to match all interactive elements
+    let walker_js = crate::cdp::dom_discovery::dom_walker_js("", None, max);
+
+    let (candidates, _inventory) = match resolve_dom_candidates(&page, &walker_js).await {
+        Ok(result) => result,
+        Err(e) => return e,
+    };
+
+    let snapshot_map =
+        crate::cdp::dom_discovery::build_dom_snapshot(&candidates, page_url, generation);
+
+    let output = crate::cdp::dom_discovery::format_dom_snapshot(&candidates);
+    client.last_dom_snapshot = Some(snapshot_map);
+
+    CallToolResult::success(vec![Content::text(output)])
 }

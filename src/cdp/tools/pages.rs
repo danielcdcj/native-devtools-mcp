@@ -1,6 +1,6 @@
 //! CDP page management tools: list, select, navigate, new, close, handle_dialog.
 
-use crate::cdp::{cdp_error, is_extension_url, CdpClient};
+use crate::cdp::{cdp_error, is_extension_url, page_url, CdpClient};
 use chromiumoxide::cdp::browser_protocol::page::{
     GetNavigationHistoryParams, HandleJavaScriptDialogParams, NavigateParams,
     NavigateToHistoryEntryParams, ReloadParams,
@@ -25,7 +25,7 @@ pub async fn cdp_list_pages(cdp_client: Arc<RwLock<Option<CdpClient>>>) -> CallT
     let mut filtered: Vec<chromiumoxide::page::Page> = Vec::new();
     let mut urls: Vec<String> = Vec::new();
     for page in pages {
-        let url = page.url().await.ok().flatten().unwrap_or_default();
+        let url = page_url(&page).await;
         if !is_extension_url(&url) {
             filtered.push(page);
             urls.push(url);
@@ -76,14 +76,20 @@ pub async fn cdp_select_page(
     }
 
     let page = client.last_page_list[page_idx].clone();
+    let same_page = client
+        .selected_page
+        .as_ref()
+        .is_some_and(|sel| sel.target_id() == page.target_id());
 
     if let Err(e) = page.bring_to_front().await {
         return cdp_error(format!("Failed to bring page {} to front: {}", page_idx, e));
     }
 
-    let url = page.url().await.ok().flatten().unwrap_or_default();
+    let url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.last_snapshot = None;
+    if !same_page {
+        client.invalidate_snapshots();
+    }
 
     CallToolResult::success(vec![Content::text(format!(
         "Selected page [{}]: {}",
@@ -187,7 +193,7 @@ pub async fn cdp_navigate(
                             target_url
                         ));
                     }
-                    client.last_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {}",
                         target_url
@@ -197,7 +203,7 @@ pub async fn cdp_navigate(
                 Err(_) => {
                     // Timed out waiting for load event — navigation was sent,
                     // page is likely still loading or already loaded.
-                    client.last_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated to {} (page may still be loading)",
                         target_url
@@ -207,7 +213,7 @@ pub async fn cdp_navigate(
         }
         "reload" => match page.execute(ReloadParams::default()).await {
             Ok(_) => {
-                client.last_snapshot = None;
+                client.invalidate_snapshots();
                 CallToolResult::success(vec![Content::text("Page reloaded")])
             }
             Err(e) => cdp_error(format!("Reload failed: {}", e)),
@@ -237,7 +243,7 @@ pub async fn cdp_navigate(
                 .await
             {
                 Ok(_) => {
-                    client.last_snapshot = None;
+                    client.invalidate_snapshots();
                     CallToolResult::success(vec![Content::text(format!(
                         "Navigated {}: {}",
                         action, entry_url
@@ -268,9 +274,9 @@ pub async fn cdp_new_page(
         Err(e) => return cdp_error(format!("Failed to create new page: {}", e)),
     };
 
-    let page_url = page.url().await.ok().flatten().unwrap_or_default();
+    let page_url = page_url(&page).await;
     client.selected_page = Some(page);
-    client.last_snapshot = None;
+    client.invalidate_snapshots();
 
     CallToolResult::success(vec![Content::text(format!(
         "Created and selected new page: {}",
@@ -324,6 +330,10 @@ pub async fn cdp_close_page(
     // browser.pages() which iterates an unordered HashMap. This is a best-effort
     // heuristic; the selected page may not match the browser's visually active tab.
     if is_selected {
+        // Invalidate up front: even if there is no replacement page, the
+        // snapshots we hold refer to a closed target and must be dropped.
+        client.invalidate_snapshots();
+
         let new_idx = if page_idx < client.last_page_list.len() {
             page_idx
         } else {
@@ -335,7 +345,8 @@ pub async fn cdp_close_page(
             } else {
                 client.selected_page = None;
             }
-            client.last_snapshot = None;
+        } else {
+            client.selected_page = None;
         }
     }
 

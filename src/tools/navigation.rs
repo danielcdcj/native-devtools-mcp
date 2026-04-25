@@ -1,6 +1,7 @@
 use crate::platform;
+use crate::tools::probe_app::{classify_running_app, AppKind};
 use rmcp::model::{CallToolResult, Content};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct ListWindowsParams {
@@ -65,10 +66,14 @@ pub struct LaunchAppParams {
     pub app_name: String,
     /// Optional CLI arguments to pass to the app (e.g., ["--remote-debugging-port=9222"])
     pub args: Option<Vec<String>>,
+    /// If true, launch without bringing the app to the foreground (uses `open -g` on macOS).
+    /// Recommended when the next action will use CDP or AX dispatch, which are focus-preserving.
+    pub background: Option<bool>,
 }
 
 pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
     let args = params.args.as_deref().unwrap_or(&[]);
+    let background = params.background.unwrap_or(false);
 
     // If args are provided, check if the app is already running — args only apply on fresh launch
     if !args.is_empty() && platform::is_app_running(&params.app_name) {
@@ -78,7 +83,7 @@ pub fn launch_app(params: LaunchAppParams) -> CallToolResult {
         ))]);
     }
 
-    match platform::launch_app(&params.app_name, args) {
+    match platform::launch_app(&params.app_name, args, background) {
         Ok(()) => CallToolResult::success(vec![Content::text(format!(
             "Launched '{}'",
             params.app_name
@@ -124,12 +129,66 @@ pub struct FocusWindowParams {
     pub pid: Option<i32>,
 }
 
-fn focused() -> CallToolResult {
-    CallToolResult::success(vec![Content::text("Window focused successfully")])
+/// Structured result returned by `focus_window`. Includes the resolved
+/// identity of the focused app regardless of which variant the caller
+/// used (app_name / pid / window_id), so downstream tools (CDP
+/// auto-connect in particular) don't have to re-resolve it with a
+/// follow-up `list_apps` or `list_windows` call.
+#[derive(Debug, Serialize)]
+pub struct FocusWindowResult {
+    /// Human-readable app name. Always present on success.
+    pub app_name: String,
+    /// Process ID of the focused app. Always present on success.
+    pub pid: i32,
+    /// Bundle identifier (macOS only; `None` on Windows or when unavailable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_id: Option<String>,
+    /// Classification used by CDP auto-connect policy.
+    pub kind: AppKind,
+}
+
+fn focused(result: FocusWindowResult) -> CallToolResult {
+    match serde_json::to_string(&result) {
+        Ok(json) => CallToolResult::success(vec![Content::text(json)]),
+        Err(e) => CallToolResult::error(vec![Content::text(format!(
+            "Failed to serialize focus_window result: {}",
+            e
+        ))]),
+    }
 }
 
 fn error(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg.into())])
+}
+
+/// Build the structured result for a successfully focused PID by
+/// consulting the live app list. Falls back to a minimal result when
+/// the PID is not in the app list (possible for short-lived apps
+/// between activation and enumeration) — `app_name` becomes the empty
+/// string and `kind` defaults to `Native`.
+fn build_result_for_pid(pid: i32, fallback_name: Option<&str>) -> FocusWindowResult {
+    if let Some(app) = platform::list_apps().into_iter().find(|a| a.pid == pid) {
+        let kind = classify_running_app(app.pid, app.bundle_id.as_deref(), &app.name);
+        FocusWindowResult {
+            app_name: app.name,
+            pid: app.pid,
+            bundle_id: app.bundle_id,
+            kind,
+        }
+    } else {
+        let name = fallback_name.unwrap_or("").to_string();
+        let kind = if name.is_empty() {
+            AppKind::Native
+        } else {
+            classify_running_app(pid, None, &name)
+        };
+        FocusWindowResult {
+            app_name: name,
+            pid,
+            bundle_id: None,
+            kind,
+        }
+    }
 }
 
 pub fn focus_window(params: FocusWindowParams) -> CallToolResult {
@@ -154,8 +213,16 @@ fn focus_by_app_name(app_name: &str) -> CallToolResult {
             .and_then(|w| w.first().map(|win| win.owner_pid as i32));
         if let Some(pid) = pid {
             platform::raise_windows(pid);
+            return focused(build_result_for_pid(pid, Some(app_name)));
         }
-        return focused();
+        // Activation succeeded but we couldn't find a PID to enrich with.
+        // Return a minimal result keyed off the caller-supplied name.
+        return focused(FocusWindowResult {
+            app_name: app_name.to_string(),
+            pid: 0,
+            bundle_id: None,
+            kind: AppKind::Native,
+        });
     }
 
     // Fallback: the primary activate_app path may not find some apps (e.g. Catalyst/SwiftUI
@@ -167,7 +234,7 @@ fn focus_by_app_name(app_name: &str) -> CallToolResult {
     if let Some(pid) = pid {
         if platform::activate_app_by_pid(pid) {
             platform::raise_windows(pid);
-            return focused();
+            return focused(build_result_for_pid(pid, Some(app_name)));
         }
     }
 
@@ -180,7 +247,7 @@ fn focus_by_app_name(app_name: &str) -> CallToolResult {
 fn focus_by_pid(pid: i32) -> CallToolResult {
     if platform::activate_app_by_pid(pid) {
         platform::raise_windows(pid);
-        focused()
+        focused(build_result_for_pid(pid, None))
     } else {
         error(format!(
             "No app found with PID {}. Use list_apps to find running apps.",
@@ -193,9 +260,13 @@ fn focus_by_window_id(window_id: u32) -> CallToolResult {
     match platform::find_window_by_id(window_id) {
         Ok(Some(window)) => {
             let pid = window.owner_pid as i32;
+            let owner_name = window.owner_name.clone();
             if platform::activate_app_by_pid(pid) {
                 platform::raise_windows(pid);
-                focused()
+                // `owner_name` gives us a reliable fallback if `list_apps`
+                // doesn't surface this pid (e.g. helper window owned by
+                // a process that list_apps doesn't consider user-facing).
+                focused(build_result_for_pid(pid, Some(&owner_name)))
             } else {
                 error(format!(
                     "Found window {} but failed to activate its owning app (PID {}).",
@@ -208,5 +279,38 @@ fn focus_by_window_id(window_id: u32) -> CallToolResult {
             window_id
         )),
         Err(e) => error(e),
+    }
+}
+
+#[cfg(test)]
+mod focus_window_tests {
+    use super::*;
+
+    #[test]
+    fn result_serializes_structured_fields() {
+        let result = FocusWindowResult {
+            app_name: "Signal".to_string(),
+            pid: 16024,
+            bundle_id: Some("org.whispersystems.signal-desktop".to_string()),
+            kind: AppKind::ElectronApp,
+        };
+        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["app_name"], "Signal");
+        assert_eq!(json["pid"], 16024);
+        assert_eq!(json["bundle_id"], "org.whispersystems.signal-desktop");
+        assert_eq!(json["kind"], "ElectronApp");
+    }
+
+    #[test]
+    fn result_omits_missing_bundle_id() {
+        let result = FocusWindowResult {
+            app_name: "Notepad".to_string(),
+            pid: 42,
+            bundle_id: None,
+            kind: AppKind::Native,
+        };
+        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("bundle_id"));
+        assert_eq!(json["kind"], "Native");
     }
 }

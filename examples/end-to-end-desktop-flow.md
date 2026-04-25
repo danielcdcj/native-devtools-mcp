@@ -10,6 +10,8 @@ Use this recipe for the common pattern:
 
 This is a reusable desktop pattern for macOS and Windows. Replace the app name, target text, and input text with values that match your app.
 
+> **On macOS, prefer the AX dispatch path for native apps.** Replace `find_text` + `click` with `take_ax_snapshot` + `ax_click`, and replace `click` + `type_text` with `ax_set_value` when the target is an `AXTextField` / `AXSearchField`. The AX path doesn't move the mouse or steal focus. See the [Native App AX Dispatch Flow](./native-app-ax-dispatch-flow.md). Keep this `find_text` + `click` + `type_text` recipe for Windows, Electron apps, or when the AX tree doesn't expose the target.
+
 ## Goal
 
 Open a desktop app, place focus into a text field or search box, enter text, and confirm the UI changed.

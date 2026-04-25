@@ -3,6 +3,7 @@
 /data
 /bin
 /dist
+/internal_docs
 
 # Swift
 .build/
@@ -21,3 +22,5 @@ npm/darwin-arm64/bin/native-devtools-mcp
 .claude/
 .mcp.json
 .DS_Store
+# Worktrees
+.worktrees/

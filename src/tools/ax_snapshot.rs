@@ -5,19 +5,28 @@ pub struct TakeAxSnapshotParams {
     pub app_name: Option<String>,
 }
 
-/// Collect the accessibility tree and format as snapshot text.
+/// Axis-aligned rectangle in screen points. Used for snapshot bboxes and
+/// for the bbox carried on `ax_click` / `ax_set_value` responses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Collect the accessibility tree and format as snapshot text (Windows).
+///
+/// **Windows-only.** On macOS the server dispatches `take_ax_snapshot`
+/// directly against [`crate::macos::ax::collect_ax_tree_indexed`] plus
+/// [`crate::tools::ax_session::AxSession::create_snapshot`], so uids carry
+/// the generation suffix that `ax_click` and `ax_set_value` require.
+/// Exposing a macOS variant here would produce bare `a<N>` uids that those
+/// tools reject as `snapshot_expired`.
+#[cfg(target_os = "windows")]
 pub fn take_ax_snapshot(params: TakeAxSnapshotParams) -> Result<String, String> {
-    let nodes = {
-        #[cfg(target_os = "macos")]
-        {
-            crate::macos::ax::collect_ax_tree(params.app_name.as_deref())?
-        }
-        #[cfg(target_os = "windows")]
-        {
-            crate::windows::uia::collect_uia_tree(params.app_name.as_deref())?
-        }
-    };
-    Ok(format_snapshot(&nodes))
+    let nodes = crate::windows::uia::collect_uia_tree(params.app_name.as_deref())?;
+    Ok(format_snapshot(&nodes, None))
 }
 
 /// A single node in a serialized accessibility tree snapshot.
@@ -32,48 +41,58 @@ pub struct AXSnapshotNode {
     pub expanded: Option<bool>,
     pub selected: Option<bool>,
     pub depth: u32,
+    /// Screen-point bbox. Populated by the macOS AX collector when the
+    /// element exposes `kAXPositionAttribute` and `kAXSizeAttribute`.
+    /// Always `None` from Windows UIA and CDP collectors.
+    pub bbox: Option<Rect>,
 }
 
-/// Formats a slice of [`AXSnapshotNode`]s into an indented text representation.
+/// Format snapshot nodes into the text representation.
 ///
-/// Each line has the form:
-/// `<indent>uid=<N> <role> ["<name>"] [value="<val>"] [focused] [disabled] [expanded] [selected]`
+/// When `generation` is `Some(g)`, each uid renders as `a<N>g<g>` (macOS AX,
+/// post-dispatch-branch format). When `None`, each uid renders as bare `a<N>`
+/// (preserves exact CDP output byte-for-byte).
 ///
-/// - Indent is 2 spaces per depth level.
-/// - `name` is quoted and only shown when `Some`.
-/// - `value` is shown as `value="..."` only when `Some`.
-/// - Boolean flags (`focused`, `disabled`) are shown only when `true`.
-/// - `expanded` is shown only when `Some(true)`.
-/// - `selected` is shown only when `Some(true)`.
-pub fn format_snapshot(nodes: &[AXSnapshotNode]) -> String {
+/// When a node has `bbox: Some`, a trailing `bbox=(x,y,w,h)` attribute is
+/// appended. Coordinates are formatted as plain integers via truncating
+/// cast — decimal values from AX are not expected in practice (AX returns
+/// i32-backed CGPoint/CGSize), and integer output keeps the line stable for
+/// human readers and downstream parsers.
+pub fn format_snapshot(nodes: &[AXSnapshotNode], generation: Option<u64>) -> String {
     let mut lines = Vec::with_capacity(nodes.len());
 
     for node in nodes {
         let indent = "  ".repeat(node.depth as usize);
-        let mut parts = vec![format!("uid={} {}", node.uid, node.role)];
+
+        let uid_tag = match generation {
+            Some(g) => format!("uid=a{}g{}", node.uid, g),
+            None => format!("uid=a{}", node.uid),
+        };
+        let mut parts = vec![format!("{} {}", uid_tag, node.role)];
 
         if let Some(name) = &node.name {
             parts.push(format!("\"{}\"", name));
         }
-
         if let Some(value) = &node.value {
             parts.push(format!("value=\"{}\"", value));
         }
-
         if node.focused {
             parts.push("focused".to_string());
         }
-
         if node.disabled {
             parts.push("disabled".to_string());
         }
-
         if node.expanded == Some(true) {
             parts.push("expanded".to_string());
         }
-
         if node.selected == Some(true) {
             parts.push("selected".to_string());
+        }
+        if let Some(bbox) = &node.bbox {
+            parts.push(format!(
+                "bbox=({},{},{},{})",
+                bbox.x as i64, bbox.y as i64, bbox.w as i64, bbox.h as i64
+            ));
         }
 
         lines.push(format!("{}{}", indent, parts.join(" ")));
@@ -174,7 +193,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_snapshot_basic() {
+    fn test_format_snapshot_basic_preserves_cdp_output_with_none_generation() {
         let nodes = vec![
             AXSnapshotNode {
                 uid: 1,
@@ -186,6 +205,7 @@ mod tests {
                 expanded: None,
                 selected: None,
                 depth: 0,
+                bbox: None,
             },
             AXSnapshotNode {
                 uid: 2,
@@ -197,6 +217,7 @@ mod tests {
                 expanded: None,
                 selected: None,
                 depth: 1,
+                bbox: None,
             },
             AXSnapshotNode {
                 uid: 3,
@@ -208,18 +229,19 @@ mod tests {
                 expanded: None,
                 selected: None,
                 depth: 1,
+                bbox: None,
             },
         ];
 
-        let result = format_snapshot(&nodes);
+        let result = format_snapshot(&nodes, None);
         assert_eq!(
             result,
-            "uid=1 RootWebArea \"Page Title\"\n  uid=2 button \"Submit\"\n  uid=3 textbox value=\"hello\" focused"
+            "uid=a1 RootWebArea \"Page Title\"\n  uid=a2 button \"Submit\"\n  uid=a3 textbox value=\"hello\" focused"
         );
     }
 
     #[test]
-    fn test_format_snapshot_with_attributes() {
+    fn test_format_snapshot_with_attributes_none_generation() {
         let nodes = vec![AXSnapshotNode {
             uid: 1,
             role: "checkbox".to_string(),
@@ -230,14 +252,15 @@ mod tests {
             expanded: Some(false),
             selected: Some(true),
             depth: 0,
+            bbox: None,
         }];
 
-        let result = format_snapshot(&nodes);
-        assert_eq!(result, "uid=1 checkbox \"Remember me\" disabled selected");
+        let result = format_snapshot(&nodes, None);
+        assert_eq!(result, "uid=a1 checkbox \"Remember me\" disabled selected");
     }
 
     #[test]
-    fn test_format_snapshot_empty_name_omitted() {
+    fn test_format_snapshot_empty_name_omitted_none_generation() {
         let nodes = vec![AXSnapshotNode {
             uid: 1,
             role: "generic".to_string(),
@@ -248,10 +271,88 @@ mod tests {
             expanded: None,
             selected: None,
             depth: 0,
+            bbox: None,
         }];
 
-        let result = format_snapshot(&nodes);
-        assert_eq!(result, "uid=1 generic");
+        let result = format_snapshot(&nodes, None);
+        assert_eq!(result, "uid=a1 generic");
+    }
+
+    #[test]
+    fn test_format_snapshot_emits_generation_tag_when_some() {
+        let nodes = vec![AXSnapshotNode {
+            uid: 42,
+            role: "button".to_string(),
+            name: Some("5".to_string()),
+            value: None,
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            depth: 0,
+            bbox: None,
+        }];
+        let result = format_snapshot(&nodes, Some(3));
+        assert_eq!(result, "uid=a42g3 button \"5\"");
+    }
+
+    #[test]
+    fn test_format_snapshot_emits_bbox_when_some() {
+        let nodes = vec![AXSnapshotNode {
+            uid: 1,
+            role: "button".to_string(),
+            name: Some("5".to_string()),
+            value: None,
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            depth: 0,
+            bbox: Some(Rect {
+                x: 412.0,
+                y: 285.0,
+                w: 64.0,
+                h: 32.0,
+            }),
+        }];
+        let result = format_snapshot(&nodes, Some(3));
+        assert_eq!(result, "uid=a1g3 button \"5\" bbox=(412,285,64,32)");
+    }
+
+    #[test]
+    fn test_format_snapshot_omits_bbox_when_none_even_with_generation() {
+        let nodes = vec![AXSnapshotNode {
+            uid: 1,
+            role: "generic".to_string(),
+            name: None,
+            value: None,
+            focused: false,
+            disabled: false,
+            expanded: None,
+            selected: None,
+            depth: 0,
+            bbox: None,
+        }];
+        let result = format_snapshot(&nodes, Some(3));
+        assert_eq!(result, "uid=a1g3 generic");
+    }
+
+    #[test]
+    fn test_rect_renders_integer_coords_without_trailing_decimals() {
+        // Load-bearing: CDP output and existing tests assume plain integers.
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1440.0,
+            h: 900.0,
+        };
+        assert_eq!(
+            format!(
+                "bbox=({},{},{},{})",
+                rect.x as i64, rect.y as i64, rect.w as i64, rect.h as i64
+            ),
+            "bbox=(0,0,1440,900)"
+        );
     }
 
     #[test]

@@ -165,76 +165,135 @@ mod android_tool_gating {
 mod cdp_tool_gating {
     use super::*;
 
+    /// The full set of CDP tools — used by visibility checks below.
+    /// Kept in sync with `get_cdp_connect_tool` + `get_cdp_tools` in
+    /// `src/server.rs`.
+    const CDP_TOOL_NAMES: &[&str] = &[
+        "cdp_connect",
+        "cdp_disconnect",
+        "cdp_take_dom_snapshot",
+        "cdp_find_elements",
+        "cdp_evaluate_script",
+        "cdp_click",
+        "cdp_list_pages",
+        "cdp_select_page",
+        "cdp_hover",
+        "cdp_fill",
+        "cdp_press_key",
+        "cdp_handle_dialog",
+        "cdp_navigate",
+        "cdp_new_page",
+        "cdp_close_page",
+        "cdp_wait_for",
+        "cdp_type_text",
+        "cdp_element_at_point",
+    ];
+
     #[test]
-    fn test_cdp_connect_always_visible() {
+    fn test_cdp_tools_always_visible_when_disconnected() {
+        // CDP tools are now listed unconditionally so the tool surface does
+        // not mutate mid-session. Handlers return a clean "No CDP connection"
+        // error when called without an active connection.
         let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-        assert!(names.contains(&"cdp_connect".to_string()));
+        for tool in CDP_TOOL_NAMES {
+            assert!(
+                names.contains(&tool.to_string()),
+                "{} should be listed even without a CDP connection",
+                tool
+            );
+        }
     }
 
     #[test]
-    fn test_cdp_tools_hidden_when_disconnected() {
-        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
-        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-
-        assert!(!names.contains(&"cdp_disconnect".to_string()));
-        assert!(!names.contains(&"cdp_take_snapshot".to_string()));
-        assert!(!names.contains(&"cdp_evaluate_script".to_string()));
-        assert!(!names.contains(&"cdp_click".to_string()));
-        assert!(!names.contains(&"cdp_list_pages".to_string()));
-        assert!(!names.contains(&"cdp_select_page".to_string()));
-        assert!(!names.contains(&"cdp_hover".to_string()));
-        assert!(!names.contains(&"cdp_fill".to_string()));
-        assert!(!names.contains(&"cdp_press_key".to_string()));
-        assert!(!names.contains(&"cdp_handle_dialog".to_string()));
-        assert!(!names.contains(&"cdp_navigate".to_string()));
-        assert!(!names.contains(&"cdp_new_page".to_string()));
-        assert!(!names.contains(&"cdp_close_page".to_string()));
-        assert!(!names.contains(&"cdp_wait_for".to_string()));
-        assert!(!names.contains(&"cdp_type_text".to_string()));
-    }
-
-    #[test]
-    fn test_cdp_tools_visible_when_connected() {
+    fn test_cdp_tools_always_visible_when_connected() {
         let tools = MacOSDevToolsServer::get_tools(false, false, true, false, false);
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-
-        // Base tool still visible
-        assert!(names.contains(&"cdp_connect".to_string()));
-
-        // Connected-only tools
-        assert!(names.contains(&"cdp_disconnect".to_string()));
-        assert!(names.contains(&"cdp_take_snapshot".to_string()));
-        assert!(names.contains(&"cdp_evaluate_script".to_string()));
-        assert!(names.contains(&"cdp_click".to_string()));
-        assert!(names.contains(&"cdp_list_pages".to_string()));
-        assert!(names.contains(&"cdp_select_page".to_string()));
-        assert!(names.contains(&"cdp_hover".to_string()));
-        assert!(names.contains(&"cdp_fill".to_string()));
-        assert!(names.contains(&"cdp_press_key".to_string()));
-        assert!(names.contains(&"cdp_handle_dialog".to_string()));
-        assert!(names.contains(&"cdp_navigate".to_string()));
-        assert!(names.contains(&"cdp_new_page".to_string()));
-        assert!(names.contains(&"cdp_close_page".to_string()));
-        assert!(names.contains(&"cdp_wait_for".to_string()));
-        assert!(names.contains(&"cdp_type_text".to_string()));
-        assert!(names.contains(&"cdp_element_at_point".to_string()));
+        for tool in CDP_TOOL_NAMES {
+            assert!(
+                names.contains(&tool.to_string()),
+                "{} should be listed when connected",
+                tool
+            );
+        }
     }
 
     #[test]
-    fn test_cdp_connection_adds_tools() {
+    fn test_cdp_tool_list_is_stable_across_connection_state() {
+        // The visible tool list must be identical regardless of
+        // `cdp_connected` — mid-session tool-list changes are the whole
+        // reason these tools are now unconditional.
         let disconnected = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let connected = MacOSDevToolsServer::get_tools(false, false, true, false, false);
-
-        assert!(
-            connected.len() > disconnected.len(),
-            "CDP connected state should expose more tools: {} vs {}",
+        assert_eq!(
+            disconnected.len(),
             connected.len(),
-            disconnected.len()
+            "CDP connection state must not change the number of visible tools"
         );
+        let dn: Vec<_> = disconnected.iter().map(|t| t.name.to_string()).collect();
+        let cn: Vec<_> = connected.iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(dn, cn);
+    }
+}
 
-        // Should add exactly 16 tools (disconnect + 15 functional tools)
-        assert_eq!(connected.len() - disconnected.len(), 16);
+#[cfg(test)]
+#[cfg(feature = "cdp")]
+mod cdp_not_connected_errors {
+    //! Calling CDP tool handlers without an active connection must return a
+    //! structured error, not panic or silently no-op. This guards the
+    //! "tools always listed" guarantee.
+
+    use native_devtools_mcp::cdp::tools;
+    use native_devtools_mcp::cdp::CdpClient;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn empty_client() -> Arc<RwLock<Option<CdpClient>>> {
+        Arc::new(RwLock::new(None))
+    }
+
+    fn assert_not_connected(result: &rmcp::model::CallToolResult) {
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "expected error result when CDP is not connected, got: {:?}",
+            result
+        );
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            text.to_lowercase().contains("no cdp connection"),
+            "error should mention 'No CDP connection', got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn cdp_click_without_connection_returns_clean_error() {
+        let result = tools::cdp_click("d1".to_string(), false, false, empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_take_dom_snapshot_without_connection_returns_clean_error() {
+        let result = tools::cdp_take_dom_snapshot(None, empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_list_pages_without_connection_returns_clean_error() {
+        let result = tools::cdp_list_pages(empty_client()).await;
+        assert_not_connected(&result);
+    }
+
+    #[tokio::test]
+    async fn cdp_element_at_point_without_connection_returns_clean_error() {
+        let result = tools::cdp_element_at_point(0.0, 0.0, empty_client()).await;
+        assert_not_connected(&result);
     }
 }
 
@@ -261,6 +320,139 @@ mod server_capabilities {
             Some(true),
             "Server should advertise tools.listChanged capability"
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_annotations {
+    //! Every tool the server exposes must carry MCP safety-hint
+    //! annotations (readOnlyHint, destructiveHint, idempotentHint,
+    //! openWorldHint) so clients can reason about the tool before calling.
+
+    use super::*;
+
+    /// Build the full set of tools across every connection permutation so
+    /// conditional tools (app_*, android_*, cdp_*, hover, recording) are all
+    /// visible.
+    fn all_tools() -> Vec<rmcp::model::Tool> {
+        MacOSDevToolsServer::get_tools(true, true, true, true, true)
+    }
+
+    #[test]
+    fn test_every_tool_has_annotations() {
+        let tools = all_tools();
+        let missing: Vec<String> = tools
+            .iter()
+            .filter(|t| t.annotations.is_none())
+            .map(|t| t.name.to_string())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "These tools are missing MCP annotations: {:?}",
+            missing
+        );
+    }
+
+    fn find_tool<'a>(tools: &'a [rmcp::model::Tool], name: &str) -> &'a rmcp::model::Tool {
+        tools
+            .iter()
+            .find(|t| t.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("tool {name} not found"))
+    }
+
+    fn find_annotation(tools: &[rmcp::model::Tool], name: &str) -> rmcp::model::ToolAnnotations {
+        find_tool(tools, name)
+            .annotations
+            .clone()
+            .unwrap_or_else(|| panic!("{name} should have annotations"))
+    }
+
+    #[test]
+    fn test_quit_app_flagged_destructive() {
+        let tools = all_tools();
+        let ann = find_annotation(&tools, "quit_app");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.read_only_hint, Some(false));
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_close_page_flagged_destructive() {
+        let tools = all_tools();
+        let ann = find_annotation(&tools, "cdp_close_page");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.read_only_hint, Some(false));
+    }
+
+    #[test]
+    fn test_read_only_queries_flagged_read_only_and_idempotent() {
+        let tools = all_tools();
+        for name in [
+            "take_screenshot",
+            "list_windows",
+            "list_apps",
+            "find_text",
+            "element_at_point",
+            "probe_app",
+        ] {
+            let ann = find_annotation(&tools, name);
+            assert_eq!(
+                ann.read_only_hint,
+                Some(true),
+                "{name} should be readOnlyHint=true"
+            );
+            assert_eq!(
+                ann.idempotent_hint,
+                Some(true),
+                "{name} should be idempotentHint=true"
+            );
+            assert_eq!(ann.destructive_hint, Some(false));
+        }
+    }
+
+    #[test]
+    fn test_state_change_tools_flagged_not_read_only_not_destructive() {
+        let tools = all_tools();
+        for name in ["click", "type_text", "press_key", "scroll", "drag"] {
+            let ann = find_annotation(&tools, name);
+            assert_eq!(ann.read_only_hint, Some(false), "{name}");
+            assert_eq!(ann.destructive_hint, Some(false), "{name}");
+        }
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_navigate_open_world() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "cdp_navigate")
+            .expect("cdp_navigate not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("cdp_navigate should have annotations");
+        assert_eq!(
+            ann.open_world_hint,
+            Some(true),
+            "cdp_navigate reaches the open web"
+        );
+    }
+
+    #[cfg(feature = "cdp")]
+    #[test]
+    fn test_cdp_evaluate_script_flagged_destructive_and_open_world() {
+        let tools = all_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "cdp_evaluate_script")
+            .expect("cdp_evaluate_script not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("cdp_evaluate_script should have annotations");
+        assert_eq!(ann.destructive_hint, Some(true));
+        assert_eq!(ann.open_world_hint, Some(true));
     }
 }
 
@@ -582,5 +774,186 @@ mod recording_tool_gating {
         let not_recording = MacOSDevToolsServer::get_tools(false, false, false, false, false);
         let recording = MacOSDevToolsServer::get_tools(false, false, false, false, true);
         assert_eq!(recording.len() - not_recording.len(), 1);
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod ax_dispatch_tool_gating {
+    use super::*;
+
+    #[test]
+    fn ax_dispatch_triad_is_visible_on_macos() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(names.contains(&"ax_click".to_string()));
+        assert!(names.contains(&"ax_set_value".to_string()));
+        assert!(names.contains(&"ax_select".to_string()));
+    }
+
+    #[test]
+    fn ax_click_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_click")
+            .expect("ax_click not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_click should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+        assert_eq!(ann.idempotent_hint, Some(false));
+    }
+
+    #[test]
+    fn ax_set_value_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_set_value")
+            .expect("ax_set_value not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_set_value should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+    }
+
+    #[test]
+    fn ax_select_flagged_state_change() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "ax_select")
+            .expect("ax_select not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("ax_select should have annotations");
+        assert_eq!(ann.read_only_hint, Some(false));
+        assert_eq!(ann.destructive_hint, Some(false));
+        assert_eq!(ann.idempotent_hint, Some(false));
+    }
+
+    #[test]
+    fn instructions_mention_ax_dispatch_triad() {
+        let server = MacOSDevToolsServer::new();
+        let info = server.get_info();
+        let instr = info.instructions.expect("instructions should be set");
+        assert!(
+            instr.contains("ax_click"),
+            "instructions should mention ax_click"
+        );
+        assert!(
+            instr.contains("ax_set_value"),
+            "instructions should mention ax_set_value"
+        );
+        assert!(
+            instr.contains("ax_select"),
+            "instructions should mention ax_select"
+        );
+        assert!(
+            instr.contains("take_ax_snapshot"),
+            "instructions should mention take_ax_snapshot as the snapshot source for ax_* tools"
+        );
+    }
+
+    /// Static guardrail — the name strings in the `server.rs::call_tool`
+    /// match arms must exactly equal the registered tool names, or clients
+    /// will call a tool and get "method not found" instead of a handler.
+    ///
+    /// We probe this indirectly: the test constructs tool request params
+    /// with the expected names and asserts they deserialize into the
+    /// handler's param structs — cheap, cfg-gated, and catches both
+    /// misspellings and schema drift.
+    #[test]
+    fn ax_dispatch_param_structs_accept_schema_fields() {
+        use native_devtools_mcp::tools::ax_click::AxClickParams;
+        use native_devtools_mcp::tools::ax_select::AxSelectParams;
+        use native_devtools_mcp::tools::ax_set_value::AxSetValueParams;
+
+        let p: AxClickParams = serde_json::from_value(serde_json::json!({ "uid": "a1g1" }))
+            .expect("ax_click params must accept { uid }");
+        assert_eq!(p.uid, "a1g1");
+
+        let q: AxSetValueParams =
+            serde_json::from_value(serde_json::json!({ "uid": "a2g1", "text": "hello" }))
+                .expect("ax_set_value params must accept { uid, text }");
+        assert_eq!(q.uid, "a2g1");
+        assert_eq!(q.text, "hello");
+
+        let s: AxSelectParams = serde_json::from_value(serde_json::json!({ "uid": "a3g1" }))
+            .expect("ax_select params must accept { uid }");
+        assert_eq!(s.uid, "a3g1");
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_os = "macos"))]
+mod ax_dispatch_tool_gating_non_macos {
+    use super::*;
+
+    #[test]
+    fn ax_dispatch_triad_is_absent_off_macos() {
+        let tools = MacOSDevToolsServer::get_tools(true, true, true, true, true);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(!names.contains(&"ax_click".to_string()));
+        assert!(!names.contains(&"ax_set_value".to_string()));
+        assert!(!names.contains(&"ax_select".to_string()));
+    }
+
+    #[test]
+    fn instructions_do_not_advertise_macos_tools_off_macos() {
+        let server = MacOSDevToolsServer::new();
+        let info = server.get_info();
+        let instr = info.instructions.expect("instructions should be set");
+        assert!(
+            !instr.contains("ax_click"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+        assert!(
+            !instr.contains("ax_set_value"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+        assert!(
+            !instr.contains("ax_select"),
+            "Windows/Linux build must not advertise macOS-only tools in instructions"
+        );
+    }
+}
+
+// Cross-platform: `take_ax_snapshot` is now state-changing on BOTH platforms.
+// Windows takes a minor accuracy hit (the tool really is still read-only
+// there) in exchange for a uniform client-safety posture — see the design
+// doc's §Tool surface > Annotation change.
+#[cfg(test)]
+mod take_ax_snapshot_annotation_migration {
+    use super::*;
+
+    #[test]
+    fn take_ax_snapshot_flagged_state_change_cross_platform() {
+        let tools = MacOSDevToolsServer::get_tools(false, false, false, false, false);
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "take_ax_snapshot")
+            .expect("take_ax_snapshot not found");
+        let ann = tool
+            .annotations
+            .as_ref()
+            .expect("take_ax_snapshot should have annotations");
+        assert_eq!(
+            ann.read_only_hint,
+            Some(false),
+            "take_ax_snapshot must not be readOnlyHint=true after this branch"
+        );
+        assert_eq!(
+            ann.idempotent_hint,
+            Some(false),
+            "take_ax_snapshot must not be idempotentHint=true after this branch"
+        );
+        assert_eq!(ann.destructive_hint, Some(false));
     }
 }

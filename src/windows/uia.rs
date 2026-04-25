@@ -655,6 +655,7 @@ unsafe fn collect_uia_tree_recursive(
         expanded,
         selected,
         depth,
+        bbox: None,
     });
 
     // Walk children via the tree walker

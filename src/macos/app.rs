@@ -233,19 +233,44 @@ pub fn is_app_running(app_name: &str) -> bool {
     false
 }
 
+/// Build the `open` [`Command`] for launching an application.
+///
+/// Extracted so the argument list can be inspected in unit tests without
+/// actually executing `open`. The caller is responsible for running the
+/// returned command.
+///
+/// * `app_name`   — app to launch (passed as `open -a <app_name>`)
+/// * `args`       — optional extra CLI args forwarded after `--args`
+/// * `background` — when `true`, prepends `-g` so the app is launched
+///   without stealing foreground focus (`open -g -a …`)
+pub fn build_launch_command(
+    app_name: &str,
+    args: &[String],
+    background: bool,
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new("open");
+    if background {
+        cmd.arg("-g");
+    }
+    cmd.arg("-a").arg(app_name);
+    if !args.is_empty() {
+        cmd.arg("--args");
+        cmd.args(args);
+    }
+    cmd
+}
+
 /// Launch an application by name using `open -a`.
 ///
 /// Finds the app in standard locations (/Applications, ~/Applications, etc.)
 /// and launches it. If args is non-empty, passes them via `--args`.
 /// If the app is already running and no args are given, it is brought to the front.
-pub fn launch_app(app_name: &str, args: &[String]) -> Result<(), String> {
-    let mut cmd = std::process::Command::new("open");
-    cmd.arg("-a").arg(app_name);
-
-    if !args.is_empty() {
-        cmd.arg("--args");
-        cmd.args(args);
-    }
+///
+/// When `background` is `true`, the `-g` flag is passed to `open` so the
+/// app launches without stealing foreground focus. Recommended whenever the
+/// next action will use CDP or AX dispatch, both of which are focus-preserving.
+pub fn launch_app(app_name: &str, args: &[String], background: bool) -> Result<(), String> {
+    let mut cmd = build_launch_command(app_name, args, background);
 
     let output = cmd
         .output()
@@ -412,7 +437,7 @@ mod tests {
         let app = "Calculator";
 
         // Ensure Calculator is running
-        launch_app(app, &[]).ok();
+        launch_app(app, &[], false).ok();
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let apps = list_apps();
@@ -452,7 +477,7 @@ mod tests {
         );
 
         // Relaunch and verify it appears (via CGWindowList supplement)
-        launch_app(app, &[]).ok();
+        launch_app(app, &[], false).ok();
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let apps = list_apps();
@@ -517,5 +542,67 @@ mod tests {
     #[test]
     fn test_nonexistent_path_not_electron() {
         assert!(!is_electron_bundle("/nonexistent/path"));
+    }
+
+    // MARK: - build_launch_command tests
+
+    fn cmd_args(cmd: &std::process::Command) -> Vec<&std::ffi::OsStr> {
+        cmd.get_args().collect()
+    }
+
+    #[test]
+    fn build_launch_command_foreground_has_no_dash_g() {
+        let cmd = build_launch_command("Calculator", &[], false);
+        let args = cmd_args(&cmd);
+        assert!(
+            !args.contains(&std::ffi::OsStr::new("-g")),
+            "Expected no -g flag when background=false, got: {:?}",
+            args
+        );
+        assert!(args.contains(&std::ffi::OsStr::new("-a")));
+        assert!(args.contains(&std::ffi::OsStr::new("Calculator")));
+    }
+
+    #[test]
+    fn build_launch_command_background_includes_dash_g() {
+        let cmd = build_launch_command("Calculator", &[], true);
+        let args = cmd_args(&cmd);
+        assert!(
+            args.contains(&std::ffi::OsStr::new("-g")),
+            "Expected -g flag when background=true, got: {:?}",
+            args
+        );
+        assert!(args.contains(&std::ffi::OsStr::new("-a")));
+        assert!(args.contains(&std::ffi::OsStr::new("Calculator")));
+    }
+
+    #[test]
+    fn build_launch_command_background_dash_g_precedes_dash_a() {
+        let cmd = build_launch_command("MyApp", &[], true);
+        let args = cmd_args(&cmd);
+        let g_pos = args
+            .iter()
+            .position(|a| *a == std::ffi::OsStr::new("-g"))
+            .expect("-g must be present when background=true");
+        let a_pos = args
+            .iter()
+            .position(|a| *a == std::ffi::OsStr::new("-a"))
+            .expect("-a must always be present");
+        assert!(
+            g_pos < a_pos,
+            "-g ({}) must come before -a ({}) in open invocation",
+            g_pos,
+            a_pos
+        );
+    }
+
+    #[test]
+    fn build_launch_command_background_with_extra_args() {
+        let extra = vec!["--remote-debugging-port=9222".to_string()];
+        let cmd = build_launch_command("Electron App", &extra, true);
+        let args = cmd_args(&cmd);
+        assert!(args.contains(&std::ffi::OsStr::new("-g")));
+        assert!(args.contains(&std::ffi::OsStr::new("--args")));
+        assert!(args.contains(&std::ffi::OsStr::new("--remote-debugging-port=9222")));
     }
 }

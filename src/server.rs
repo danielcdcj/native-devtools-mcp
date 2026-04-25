@@ -10,6 +10,7 @@ use rmcp::{
     model::{
         CallToolRequestParam, CallToolResult, Implementation, ListToolsResult,
         PaginatedRequestParam, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
     },
     service::{RequestContext, RoleServer},
     Error as McpError,
@@ -53,6 +54,74 @@ fn json_to_object(value: Value) -> rmcp::model::JsonObject {
     }
 }
 
+// ============================================================================
+// Tool safety-hint annotations
+//
+// Each tool is tagged with the MCP `ToolAnnotations` hints
+// (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) so clients
+// can reason about safety before invoking. These are *hints* per the MCP spec.
+// ============================================================================
+
+/// Read-only, idempotent, closed-world (queries: screenshots, snapshots, finds).
+fn annotate_read_only() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(true)
+        .idempotent(true)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Non-destructive state change on a closed world (clicks, typing, scrolling,
+/// focusing, launching a local app, connecting to a local debug server).
+fn annotate_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(false)
+}
+
+/// Destructive tool on a closed world (quit app, close tab).
+fn annotate_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(false)
+}
+
+/// Non-destructive state change that reaches an open world (e.g. web
+/// navigation, arbitrary URL loads).
+fn annotate_open_world_state_change() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(false)
+        .open_world(true)
+}
+
+/// Arbitrary code evaluation in an open world (JS eval in a browser page).
+fn annotate_open_world_destructive() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(false)
+        .idempotent(false)
+        .destructive(true)
+        .open_world(true)
+}
+
+/// Apply the given annotation to every tool in `tools` whose name appears in
+/// `names`. Missing names are silently ignored because the conditional tool
+/// groups (app_*, android_*, cdp_*, hover, recording) aren't always present.
+/// The `test_every_tool_has_annotations` test catches any tool left without
+/// an annotation.
+fn annotate_tools(tools: &mut [Tool], names: &[&str], annotation: ToolAnnotations) {
+    for name in names {
+        if let Some(tool) = tools.iter_mut().find(|t| t.name.as_ref() == *name) {
+            tool.annotations = Some(annotation.clone());
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MacOSDevToolsServer {
     app_client: Arc<RwLock<Option<AppProtocolClient>>>,
@@ -66,6 +135,8 @@ pub struct MacOSDevToolsServer {
     /// Handle for the CDP connection watchdog task; aborted on disconnect.
     #[cfg(feature = "cdp")]
     cdp_watchdog: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    #[cfg(target_os = "macos")]
+    ax_session: Arc<crate::tools::ax_session::AxSession>,
 }
 
 impl Default for MacOSDevToolsServer {
@@ -87,6 +158,8 @@ impl MacOSDevToolsServer {
             cdp_client: Arc::new(RwLock::new(None)),
             #[cfg(feature = "cdp")]
             cdp_watchdog: Arc::new(RwLock::new(None)),
+            #[cfg(target_os = "macos")]
+            ax_session: Arc::new(crate::tools::ax_session::AxSession::new()),
         }
     }
 
@@ -198,6 +271,13 @@ impl MacOSDevToolsServer {
     /// Get tools available based on connection state.
     /// Base tools and app_connect are always available.
     /// Other app_* tools are only available when connected.
+    ///
+    /// CDP tools are always listed (independent of `cdp_connected`) so the
+    /// tool surface does not mutate mid-session — clients that prompt-cache
+    /// the tool list stay warm. Each CDP tool handler returns a clean
+    /// "No CDP connection" error when called without an active connection.
+    /// The `cdp_connected` parameter is accepted for API stability but is
+    /// no longer used to gate visibility.
     pub fn get_tools(
         app_connected: bool,
         android_connected: bool,
@@ -205,6 +285,7 @@ impl MacOSDevToolsServer {
         hover_tracking: bool,
         recording: bool,
     ) -> Vec<Tool> {
+        let _ = cdp_connected;
         let mut tools = Self::get_base_tools();
         tools.push(Self::get_app_connect_tool());
         if app_connected {
@@ -217,20 +298,149 @@ impl MacOSDevToolsServer {
         #[cfg(feature = "cdp")]
         {
             tools.push(Self::get_cdp_connect_tool());
-            if cdp_connected {
-                tools.extend(Self::get_cdp_tools());
-            }
+            tools.extend(Self::get_cdp_tools());
         }
-        #[cfg(not(feature = "cdp"))]
-        let _ = cdp_connected;
         tools.extend(Self::get_hover_tracking_tools(hover_tracking));
         tools.extend(Self::get_recording_tools(recording));
+        Self::apply_tool_annotations(&mut tools);
         tools
+    }
+
+    /// Attach MCP safety-hint annotations (readOnlyHint, destructiveHint,
+    /// idempotentHint, openWorldHint) to every tool in the list.
+    ///
+    /// Classification keys off tool *name* (not description or schema) so
+    /// it's stable across schema edits. Tool names absent from `tools`
+    /// (conditional groups gated by connection state) are ignored —
+    /// `test_every_tool_has_annotations` catches any unclassified tool.
+    fn apply_tool_annotations(tools: &mut [Tool]) {
+        // Read-only queries: screenshots, snapshots, finds, metadata.
+        annotate_tools(
+            tools,
+            &[
+                "take_screenshot",
+                "list_windows",
+                "list_apps",
+                "get_displays",
+                "find_text",
+                "element_at_point",
+                "find_image",
+                "probe_app",
+                "android_list_devices",
+                "app_get_info",
+                "app_get_tree",
+                "app_query",
+                "app_get_element",
+                "app_list_windows",
+                "app_screenshot",
+                "android_screenshot",
+                "android_find_text",
+                "android_list_apps",
+                "android_get_display_info",
+                "android_get_current_activity",
+            ],
+            annotate_read_only(),
+        );
+
+        // Non-destructive state changes: clicks, typing, launches, sessions.
+        annotate_tools(
+            tools,
+            &[
+                "focus_window",
+                "launch_app",
+                "click",
+                "move_mouse",
+                "drag",
+                "scroll",
+                "type_text",
+                "press_key",
+                "load_image",
+                "app_connect",
+                "android_connect",
+                "start_hover_tracking",
+                "start_recording",
+                "app_disconnect",
+                "app_click",
+                "app_type",
+                "app_press_key",
+                "app_focus",
+                "app_focus_window",
+                "android_disconnect",
+                "android_click",
+                "android_swipe",
+                "android_type_text",
+                "android_press_key",
+                "android_launch_app",
+                "get_hover_events",
+                "stop_hover_tracking",
+                "stop_recording",
+            ],
+            annotate_state_change(),
+        );
+
+        // take_ax_snapshot is state-changing on both platforms: macOS bumps
+        // the session generation on every call (invalidating prior uids);
+        // Windows advertises the same posture for a uniform client-safety
+        // contract even though the underlying UIA read is still pure.
+        annotate_tools(tools, &["take_ax_snapshot"], annotate_state_change());
+
+        #[cfg(target_os = "macos")]
+        {
+            annotate_tools(
+                tools,
+                &["ax_click", "ax_set_value", "ax_select"],
+                annotate_state_change(),
+            );
+        }
+
+        annotate_tools(tools, &["quit_app"], annotate_destructive());
+
+        #[cfg(feature = "cdp")]
+        {
+            annotate_tools(
+                tools,
+                &[
+                    "cdp_take_dom_snapshot",
+                    "cdp_find_elements",
+                    "cdp_list_pages",
+                    "cdp_element_at_point",
+                    "cdp_wait_for",
+                ],
+                annotate_read_only(),
+            );
+            annotate_tools(
+                tools,
+                &[
+                    "cdp_connect",
+                    "cdp_disconnect",
+                    "cdp_click",
+                    "cdp_hover",
+                    "cdp_fill",
+                    "cdp_press_key",
+                    "cdp_handle_dialog",
+                    "cdp_type_text",
+                    "cdp_select_page",
+                ],
+                annotate_state_change(),
+            );
+            annotate_tools(
+                tools,
+                &["cdp_navigate", "cdp_new_page"],
+                annotate_open_world_state_change(),
+            );
+            annotate_tools(
+                tools,
+                &["cdp_evaluate_script"],
+                annotate_open_world_destructive(),
+            );
+            annotate_tools(tools, &["cdp_close_page"], annotate_destructive());
+        }
     }
 
     /// Tools that are always available (system tools, CGEvent tools, etc.)
     fn get_base_tools() -> Vec<Tool> {
-        vec![
+        #[allow(unused_mut)]
+        let mut tools = vec![
             Tool::new(
                 "take_screenshot",
                 "Capture a screenshot of the screen, a specific window, or a region. Returns a base64-encoded image, JSON metadata for coordinate conversion, and OCR text annotations including clickable coordinates.",
@@ -341,6 +551,10 @@ impl MacOSDevToolsServer {
                             "type": "array",
                             "items": { "type": "string" },
                             "description": "CLI arguments to pass to the app (e.g., ['--remote-debugging-port=9222']). Only applied on fresh launch — if the app is already running, returns an error."
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "If true, launch without bringing the app to the foreground (uses `open -g` on macOS). Recommended when the next action will use CDP or AX dispatch, which are focus-preserving."
                         }
                     }
                 }))),
@@ -366,53 +580,62 @@ impl MacOSDevToolsServer {
             // System-level input tools (CGEvent on macOS, SendInput on Windows)
             Tool::new(
                 "click",
-                "Click at screen coordinates. Works with any app (egui, Electron, etc.). Supports screenshot metadata for deterministic conversion. Requires Accessibility permission on macOS.",
+                "Click at screen coordinates. Pass exactly one coordinate variant — the runtime \
+                 rejects mixes. Variants: \
+                 (1) 'screenshot-pixels' (PREFERRED after take_screenshot) — screenshot_x, \
+                 screenshot_y, screenshot_origin_x, screenshot_origin_y, screenshot_scale from \
+                 take_screenshot metadata; \
+                 (2) 'screen' — absolute screen x, y (use with find_text results); \
+                 (3) 'window-relative' — window_x, window_y, window_id from list_windows; \
+                 (4) 'screenshot-pixels-legacy' (DEPRECATED) — screenshot_x, screenshot_y, \
+                 screenshot_window_id. \
+                 Works with any app (egui, Electron, etc.). Requires Accessibility permission on macOS.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "x": {
                             "type": "number",
-                            "description": "Screen X coordinate"
+                            "description": "[screen variant] Absolute screen X coordinate. Use with find_text results."
                         },
                         "y": {
                             "type": "number",
-                            "description": "Screen Y coordinate"
+                            "description": "[screen variant] Absolute screen Y coordinate. Use with find_text results."
                         },
                         "window_x": {
                             "type": "number",
-                            "description": "X coordinate relative to window (use with window_id)"
+                            "description": "[window-relative variant] X relative to window top-left. Pair with window_y and window_id."
                         },
                         "window_y": {
                             "type": "number",
-                            "description": "Y coordinate relative to window (use with window_id)"
+                            "description": "[window-relative variant] Y relative to window top-left. Pair with window_x and window_id."
                         },
                         "window_id": {
                             "type": "integer",
-                            "description": "Window ID for window-relative coordinates"
+                            "description": "[window-relative variant] Target window ID (from list_windows)."
                         },
                         "screenshot_x": {
                             "type": "number",
-                            "description": "X pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
+                            "description": "[screenshot-pixels / screenshot-pixels-legacy] X pixel inside the screenshot image."
                         },
                         "screenshot_y": {
                             "type": "number",
-                            "description": "Y pixel coordinate from screenshot (use with screenshot_origin_* + screenshot_scale or screenshot_window_id)"
+                            "description": "[screenshot-pixels / screenshot-pixels-legacy] Y pixel inside the screenshot image."
                         },
                         "screenshot_origin_x": {
                             "type": "number",
-                            "description": "Screenshot origin X (from take_screenshot metadata)"
+                            "description": "[screenshot-pixels, PREFERRED] screenshot_origin_x from take_screenshot metadata."
                         },
                         "screenshot_origin_y": {
                             "type": "number",
-                            "description": "Screenshot origin Y (from take_screenshot metadata)"
+                            "description": "[screenshot-pixels, PREFERRED] screenshot_origin_y from take_screenshot metadata."
                         },
                         "screenshot_scale": {
                             "type": "number",
-                            "description": "Screenshot scale factor (from take_screenshot metadata)"
+                            "description": "[screenshot-pixels, PREFERRED] screenshot_scale from take_screenshot metadata."
                         },
                         "screenshot_window_id": {
                             "type": "integer",
-                            "description": "Window ID the screenshot was taken from (legacy: lookup window at click time)"
+                            "description": "[screenshot-pixels-legacy, DEPRECATED] Window ID the screenshot was taken from. Prefer screenshot_origin_x/y + screenshot_scale."
                         },
                         "button": {
                             "type": "string",
@@ -715,7 +938,16 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "take_ax_snapshot",
-                "Take an accessibility tree snapshot of an application. Returns a structured text representation with unique element IDs, roles, names, and state attributes. Works for any app without requiring a debug port.",
+                "Take an accessibility tree snapshot of an application. Returns a \
+                 structured text representation with unique element IDs, roles, names, \
+                 state attributes, and (on macOS) per-element bounding boxes. Works for \
+                 any app without requiring a debug port. \
+                 macOS note: this tool mutates server state — each call bumps a \
+                 monotonic generation and invalidates every prior uid for ax_click / \
+                 ax_set_value / ax_select consumption. Snapshot IDs on macOS look like \
+                 'a42g3' (generation-tagged); Windows IDs remain bare 'a42'. \
+                 Re-snapshot immediately before any ax_click / ax_set_value / ax_select \
+                 call.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -728,7 +960,7 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "probe_app",
-                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_take_snapshot).",
+                "Probe an application to determine its type (Native, ElectronApp, or ChromeBrowser). Works whether the app is running or not. Use this to decide between native automation (take_ax_snapshot, click, find_text) and CDP-based tools (cdp_connect, cdp_find_elements, cdp_take_dom_snapshot).",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["app_name"],
@@ -740,7 +972,97 @@ impl MacOSDevToolsServer {
                     }
                 }))),
             ),
-        ]
+        ];
+        #[cfg(target_os = "macos")]
+        {
+            tools.push(Self::get_ax_click_tool());
+            tools.push(Self::get_ax_set_value_tool());
+            tools.push(Self::get_ax_select_tool());
+        }
+        tools
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_click_tool() -> Tool {
+        Tool::new(
+            "ax_click",
+            "macOS only. Dispatch AXPress against a UI element identified by its uid \
+             from the most recent take_ax_snapshot (e.g. \"a42g3\"). The 'g<gen>' \
+             suffix is a generation tag — any fresh take_ax_snapshot invalidates all \
+             prior uids, so always snapshot immediately before the uid is used. Does \
+             not move the mouse cursor and does not steal focus from the frontmost \
+             app. On failure the tool returns an error whose JSON body includes \
+             { error: { code, message, fallback: { x, y } | null } }; when fallback is \
+             populated you can retry via click(x, y).",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot, e.g. \"a42g3\". Must match the current snapshot generation."
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_set_value_tool() -> Tool {
+        Tool::new(
+            "ax_set_value",
+            "macOS only. Write to an element's kAXValueAttribute — value assignment, \
+             not key-event typing. Use for AXTextField / AXTextArea / AXSearchField and \
+             similar text widgets. Does NOT fire keydown/keyup, does NOT participate in \
+             IME/composition, does NOT populate the app's undo stack, and will not work \
+             on rich editors that refuse AXValue writes. On not_dispatchable, the caller \
+             should fall back to a two-step sequence: click(fallback.x, fallback.y) to \
+             focus, then type_text(text) for key-event input.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid", "text"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot, e.g. \"a42g3\"."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to assign via kAXValueAttribute."
+                    }
+                }
+            }))),
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_ax_select_tool() -> Tool {
+        Tool::new(
+            "ax_select",
+            "macOS only. Select a row inside an NSOutlineView / NSTableView (sidebars, \
+             rule lists, file browsers) by writing AXSelectedRows on the enclosing \
+             outline or table. Accepts a uid pointing at the row, a cell inside the row, \
+             or any descendant — the tool walks up to the enclosing AXRow then the \
+             enclosing AXOutline / AXTable. Does not move the cursor and does not steal \
+             focus. Use ax_select instead of ax_click for row targets: rows typically \
+             refuse AXPress (returning not_dispatchable or AX error -25205), and a \
+             coordinate click steals focus. On failure the tool returns { error: { code, \
+             message, fallback: { x, y } | null } } with codes snapshot_expired, \
+             uid_not_found, no_row_ancestor, no_outline_container, not_dispatchable, or \
+             ax_error. The fallback centre falls back from the row bbox to the \
+             originally-targeted element bbox so the caller can still click(x, y) if \
+             desired.",
+            Arc::new(json_to_object(serde_json::json!({
+                "type": "object",
+                "required": ["uid"],
+                "properties": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Element uid from the most recent take_ax_snapshot. Points at the row itself, a cell within the row, or any descendant."
+                    }
+                }
+            }))),
+        )
     }
 
     /// The app_connect tool - always available to initiate connections
@@ -1237,7 +1559,7 @@ impl MacOSDevToolsServer {
     fn get_cdp_connect_tool() -> Tool {
         Tool::new(
             "cdp_connect",
-            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_take_snapshot to see page elements.",
+            "Connect to a Chrome or Electron app via its remote debugging port. The app must be launched with --remote-debugging-port=PORT and --user-data-dir=PATH (Chrome 136+ requires a non-default profile for the debug port to open). After connecting, use cdp_find_elements to discover page elements (preferred), or cdp_take_dom_snapshot for a full page overview.",
             Arc::new(json_to_object(serde_json::json!({
                 "type": "object",
                 "required": ["port"],
@@ -1252,27 +1574,57 @@ impl MacOSDevToolsServer {
     }
 
     #[cfg(feature = "cdp")]
+    const UID_DESC: &'static str =
+        "Element UID from cdp_take_dom_snapshot or cdp_find_elements (d-prefixed)";
+
     fn get_cdp_tools() -> Vec<Tool> {
         vec![
             Tool::new(
                 "cdp_disconnect",
-                "Disconnect from the Chrome/Electron app. CDP tools will no longer be available until cdp_connect is called again.",
+                "Disconnect from the Chrome/Electron app. CDP tools remain listed but will return a 'not connected' error until cdp_connect is called again.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "properties": {}
                 }))),
             ),
             Tool::new(
-                "cdp_take_snapshot",
-                "Take a text snapshot of the selected browser page based on the accessibility tree. Returns page elements with unique IDs (uid), roles, and names. Always take a fresh snapshot before clicking or interacting — element UIDs change between snapshots. Prefer this over take_screenshot for identifying clickable elements in web content.",
+                "cdp_take_dom_snapshot",
+                "Take a full DOM snapshot of the selected browser page. Returns all interactive elements with UIDs prefixed 'd' (e.g., d1, d2). Use when you need the complete page structure — captures contenteditable editors, placeholder inputs, and custom widgets. For targeted lookups, prefer cdp_find_elements instead. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
-                    "properties": {}
+                    "properties": {
+                        "max_nodes": {
+                            "type": "integer",
+                            "description": "Maximum number of nodes to return (default: 500)"
+                        }
+                    }
+                }))),
+            ),
+            Tool::new(
+                "cdp_find_elements",
+                "PREFERRED discovery tool. Search the live DOM for interactive elements matching a text query. Returns a compact result set with UIDs prefixed 'd' (e.g., d1, d2), plus a page-level inventory of all interactive elements grouped by role. Always try this first — it gives focused results without flooding context. Use cdp_take_dom_snapshot only if you need the full page structure. UIDs are valid for cdp_click, cdp_fill, and other action tools.",
+                Arc::new(json_to_object(serde_json::json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Text to search for in element labels"
+                        },
+                        "role": {
+                            "type": "string",
+                            "description": "Optional role filter (e.g., 'textbox', 'button')"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum matches to return (default: 10)"
+                        }
+                    }
                 }))),
             ),
             Tool::new(
                 "cdp_evaluate_script",
-                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_snapshot via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: '5'}].",
+                "Evaluate a JavaScript function in the selected browser page. Returns the response as JSON. Example without arguments: '() => document.title' or 'async () => fetch(url)'. Example with element arguments: pass UIDs from cdp_take_dom_snapshot or cdp_find_elements via args to reference DOM elements, e.g., '(el) => el.innerText' with args=[{uid: 'd5'}].",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["function"],
@@ -1286,7 +1638,7 @@ impl MacOSDevToolsServer {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "uid": { "type": "string", "description": "Element UID from cdp_take_snapshot" }
+                                    "uid": { "type": "string", "description": (Self::UID_DESC) }
                                 }
                             },
                             "description": "Optional element arguments from snapshot UIDs"
@@ -1296,14 +1648,14 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_click",
-                "Click a DOM element by its UID from a cdp_take_snapshot result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content. Always call cdp_take_snapshot first to get current element UIDs.",
+                "Click a DOM element by its UID from a cdp_take_dom_snapshot or cdp_find_elements result. Scrolls the element into view automatically and clicks its center. More reliable than coordinate-based clicking for web content.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["uid"],
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "Element UID from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "dbl_click": {
                             "type": "boolean",
@@ -1311,7 +1663,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1347,11 +1699,11 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1365,7 +1717,7 @@ impl MacOSDevToolsServer {
                     "properties": {
                         "uid": {
                             "type": "string",
-                            "description": "The uid of an element on the page from cdp_take_snapshot"
+                            "description": (Self::UID_DESC)
                         },
                         "value": {
                             "type": "string",
@@ -1373,7 +1725,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1391,7 +1743,7 @@ impl MacOSDevToolsServer {
                         },
                         "include_snapshot": {
                             "type": "boolean",
-                            "description": "Whether to include a snapshot in the response (default: false)"
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response (default: false)"
                         }
                     }
                 }))),
@@ -1481,6 +1833,10 @@ impl MacOSDevToolsServer {
                         "timeout": {
                             "type": "integer",
                             "description": "Maximum wait time in milliseconds (default: 10000)"
+                        },
+                        "include_snapshot": {
+                            "type": "boolean",
+                            "description": "Appends a DOM snapshot (d-prefixed UIDs) to the response after the text appears (default: false). When false, only a short 'text appeared after Xms' line is returned."
                         }
                     }
                 }))),
@@ -1505,10 +1861,12 @@ impl MacOSDevToolsServer {
             ),
             Tool::new(
                 "cdp_element_at_point",
-                "Given screen coordinates (x, y) in points, resolve the CDP accessibility snapshot UID \
-                 of the DOM element at that position. Returns the element's UID, role, name, and \
-                 backend_node_id. Requires an active CDP connection. Coordinates use the same \
-                 screen-point system as element_at_point and click.",
+                "Given screen coordinates (x, y) in points, hit-test the DOM element at that \
+                 position. Always returns the element's backend_node_id. If a current DOM \
+                 snapshot already contains that node, the response also includes its d-prefixed \
+                 UID, role, and name; otherwise uid is null and a note points at \
+                 cdp_take_dom_snapshot / cdp_find_elements. Requires an active CDP connection. \
+                 Coordinates use the same screen-point system as element_at_point and click.",
                 Arc::new(json_to_object(serde_json::json!({
                     "type": "object",
                     "required": ["x", "y"],
@@ -1530,6 +1888,74 @@ impl MacOSDevToolsServer {
 
 impl ServerHandler for MacOSDevToolsServer {
     fn get_info(&self) -> ServerInfo {
+        let mut instructions = String::from(
+            "Native DevTools MCP server for automating desktop apps (macOS/Windows) and Android devices.\n\n\
+             WHICH TOOLS TO USE:\n\
+             - Desktop apps (coordinate-based, cross-platform): no prefix (click, find_text, take_screenshot, type_text, etc.). Moves the cursor; steals focus.\n",
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            instructions.push_str(
+                "- Desktop apps (element-precise, macOS only): ax_* (ax_click, ax_set_value, ax_select) — focus-preserving dispatch against uids from take_ax_snapshot.\n",
+            );
+        }
+
+        instructions.push_str(
+            "- Android devices: android_* (android_click, android_find_text, etc.)\n\
+             - App debug protocol: app_* — only when given a WebSocket URL to connect to.\n\
+             NEVER mix these — desktop tools do not work on Android and vice versa.\n\n\
+             == DESKTOP (macOS/Windows) ==\n\n\
+             CLICKING BY TEXT (PREFERRED): Use find_text to locate UI elements by name, \
+             then click at the returned coordinates.\n\
+             Example: find_text(text='Submit') → click(x=..., y=...).\n\n\
+             CLICKING BY VISUAL POSITION: Use take_screenshot with include_ocr=true. \
+             The OCR results include screen coordinates you can click directly. \
+             For positions not covered by OCR, use the screenshot metadata \
+             (origin_x, origin_y, scale) to convert pixel positions.\n\n\
+             Always call focus_window before clicking to ensure the target window receives input.\n\n\
+             Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code') \
+             to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n",
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            instructions.push_str(
+                "ELEMENT-PRECISE AUTOMATION (macOS, PREFERRED for native apps): \
+                 Call take_ax_snapshot(app_name='...') to get a tree of elements tagged \
+                 with generation-stamped uids like 'a42g3'. Then pick the dispatch \
+                 primitive that matches the target: ax_click(uid) dispatches AXPress for \
+                 buttons, menu items, and anything pressable; ax_set_value(uid, text) \
+                 writes kAXValueAttribute on text fields; ax_select(uid) writes \
+                 AXSelectedRows for NSOutlineView / NSTableView row selection (sidebars, \
+                 rule lists, file browsers) — rows typically refuse AXPress so ax_click \
+                 returns not_dispatchable or AX error -25205 against them. IMPORTANT: any \
+                 fresh take_ax_snapshot invalidates all prior uids — snapshot immediately \
+                 before each ax_click / ax_set_value / ax_select call. ax_set_value is \
+                 value assignment, not keystrokes: no IME, no undo-stack entry. If a call \
+                 fails with not_dispatchable and returns a fallback {x, y}, retry via \
+                 click(x, y) (plus type_text(text) for ax_set_value).\n\n",
+            );
+        }
+
+        instructions.push_str(
+            "App debug protocol (app_* tools): For element-level precision in apps with an embedded \
+             debug server. Use app_connect with a WebSocket URL first, then app_click, app_type, etc.\n\n\
+             == ANDROID ==\n\n\
+             All Android tools require connecting to a device first:\n\
+             1. android_list_devices — find available devices and their serial numbers\n\
+             2. android_connect(serial='...') — connect (this unlocks all other android_* tools)\n\
+             To switch devices, call android_disconnect first, then android_connect to the new device.\n\n\
+             CLICKING BY TEXT (PREFERRED): Use android_find_text to search the accessibility tree, \
+             then android_click at the returned coordinates.\n\
+             Example: android_find_text(text='Settings') → android_click(x=..., y=...).\n\n\
+             CLICKING BY VISUAL POSITION: Use android_screenshot to see the screen, \
+             then android_click at the desired coordinates.\n\
+             Note: android_screenshot has no OCR — always prefer android_find_text for text elements.\n\n\
+             Android coordinates are absolute screen pixels — no scale conversion needed.\n\
+             Use android_press_key with Android keycodes (e.g., 'KEYCODE_BACK', 'KEYCODE_HOME').",
+        );
+
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
@@ -1540,47 +1966,13 @@ impl ServerHandler for MacOSDevToolsServer {
                 name: "native-devtools-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            instructions: Some(
-                "Native DevTools MCP server for automating desktop apps (macOS/Windows) and Android devices.\n\n\
-                 WHICH TOOLS TO USE:\n\
-                 - Desktop apps: use tools WITHOUT a prefix (click, find_text, take_screenshot, type_text, etc.)\n\
-                 - Android devices: use tools WITH the android_ prefix (android_click, android_find_text, etc.)\n\
-                 - App debug protocol: use app_* tools only when given a WebSocket URL to connect to\n\
-                 NEVER mix these — desktop tools do not work on Android and vice versa.\n\n\
-                 == DESKTOP (macOS/Windows) ==\n\n\
-                 CLICKING BY TEXT (PREFERRED): Use find_text to locate UI elements by name, \
-                 then click at the returned coordinates.\n\
-                 Example: find_text(text='Submit') → click(x=..., y=...).\n\n\
-                 CLICKING BY VISUAL POSITION: Use take_screenshot with include_ocr=true. \
-                 The OCR results include screen coordinates you can click directly. \
-                 For positions not covered by OCR, use the screenshot metadata \
-                 (origin_x, origin_y, scale) to convert pixel positions.\n\n\
-                 Always call focus_window before clicking to ensure the target window receives input.\n\n\
-                 Screenshot best practice: Use take_screenshot with app_name (e.g., app_name='Code') \
-                 to capture a specific window. Avoid mode='screen' unless you need to see multiple windows.\n\n\
-                 App debug protocol (app_* tools): For element-level precision in apps with an embedded \
-                 debug server. Use app_connect with a WebSocket URL first, then app_click, app_type, etc.\n\n\
-                 == ANDROID ==\n\n\
-                 All Android tools require connecting to a device first:\n\
-                 1. android_list_devices — find available devices and their serial numbers\n\
-                 2. android_connect(serial='...') — connect (this unlocks all other android_* tools)\n\
-                 To switch devices, call android_disconnect first, then android_connect to the new device.\n\n\
-                 CLICKING BY TEXT (PREFERRED): Use android_find_text to search the accessibility tree, \
-                 then android_click at the returned coordinates.\n\
-                 Example: android_find_text(text='Settings') → android_click(x=..., y=...).\n\n\
-                 CLICKING BY VISUAL POSITION: Use android_screenshot to see the screen, \
-                 then android_click at the desired coordinates.\n\
-                 Note: android_screenshot has no OCR — always prefer android_find_text for text elements.\n\n\
-                 Android coordinates are absolute screen pixels — no scale conversion needed.\n\
-                 Use android_press_key with Android keycodes (e.g., 'KEYCODE_BACK', 'KEYCODE_HOME')."
-                    .to_string(),
-            ),
+            instructions: Some(instructions),
         }
     }
 
     async fn list_tools(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let connected = self.is_connected().await;
@@ -1765,10 +2157,50 @@ impl ServerHandler for MacOSDevToolsServer {
                 let params: crate::tools::ax_snapshot::TakeAxSnapshotParams =
                     serde_json::from_value(args)
                         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-                match crate::tools::ax_snapshot::take_ax_snapshot(params) {
-                    Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                #[cfg(target_os = "macos")]
+                {
+                    // Native macOS path: walk the AX tree, capture retained
+                    // AXRef handles, swap them into the session (generation
+                    // bump), format with the assigned generation so uids are
+                    // stamped `a<N>g<gen>`.
+                    let (nodes, refs) =
+                        match crate::macos::ax::collect_ax_tree_indexed(params.app_name.as_deref())
+                        {
+                            Ok(v) => v,
+                            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                        };
+                    let generation = self.ax_session.create_snapshot(refs).await;
+                    let snapshot =
+                        crate::tools::ax_snapshot::format_snapshot(&nodes, Some(generation));
+                    Ok(CallToolResult::success(vec![Content::text(snapshot)]))
                 }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Windows UIA path: unchanged — no session, uids stay bare `a<N>`.
+                    match crate::tools::ax_snapshot::take_ax_snapshot(params) {
+                        Ok(snapshot) => Ok(CallToolResult::success(vec![Content::text(snapshot)])),
+                        Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            "ax_click" => {
+                let params: crate::tools::ax_click::AxClickParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_click::ax_click(params, self.ax_session.clone()).await)
+            }
+            #[cfg(target_os = "macos")]
+            "ax_set_value" => {
+                let params: crate::tools::ax_set_value::AxSetValueParams =
+                    serde_json::from_value(args)
+                        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_set_value::ax_set_value(params, self.ax_session.clone()).await)
+            }
+            #[cfg(target_os = "macos")]
+            "ax_select" => {
+                let params: crate::tools::ax_select::AxSelectParams = serde_json::from_value(args)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+                Ok(crate::tools::ax_select::ax_select(params, self.ax_session.clone()).await)
             }
             "probe_app" => {
                 let params: crate::tools::probe_app::ProbeAppParams = serde_json::from_value(args)
@@ -2210,16 +2642,17 @@ impl ServerHandler for MacOSDevToolsServer {
                 match crate::cdp::CdpClient::connect(port).await {
                     Ok(client) => {
                         let page_info = if let Some(page) = client.selected_page.as_ref() {
-                            let url = page.url().await.ok().flatten().unwrap_or_default();
+                            let url = crate::cdp::page_url(page).await;
                             format!("Selected page: {}", url)
                         } else {
                             "No pages found".to_string()
                         };
                         *self.cdp_client.write().await = Some(client);
                         self.start_cdp_watchdog(port).await;
-                        let _ = context.peer.notify_tool_list_changed().await;
+                        // Tool list does not change on CDP connect/disconnect — CDP
+                        // tools are always listed so prompt caches remain stable.
                         Ok(CallToolResult::success(vec![Content::text(format!(
-                            "Connected to Chrome/Electron on port {}. CDP tools are now available.\n{}",
+                            "Connected to Chrome/Electron on port {}. CDP tool calls will now succeed.\n{}",
                             port, page_info
                         ))]))
                     }
@@ -2231,22 +2664,46 @@ impl ServerHandler for MacOSDevToolsServer {
                 self.stop_cdp_watchdog().await;
                 if let Some(client) = self.cdp_client.write().await.take() {
                     client.disconnect();
-                    let _ = context.peer.notify_tool_list_changed().await;
+                    // Tool list is unchanged on disconnect — CDP tools remain
+                    // listed and will return "not connected" errors until
+                    // cdp_connect succeeds again.
                     Ok(CallToolResult::success(vec![Content::text(
-                        "Disconnected from Chrome/Electron. CDP tools are no longer available.",
+                        "Disconnected from Chrome/Electron. CDP tool calls will return a 'not connected' error until cdp_connect is called again.",
                     )]))
                 } else {
+                    // Use the canonical "not connected" message shared by every
+                    // CDP tool handler so clients see one stable error shape.
                     Ok(CallToolResult::error(vec![Content::text(
-                        "No CDP connection active.",
+                        "No CDP connection. Use cdp_connect first.",
                     )]))
                 }
             }
             #[cfg(feature = "cdp")]
-            "cdp_take_snapshot" => {
-                if let Err(e) = self.ensure_cdp_connection().await {
-                    return Ok(e);
-                }
-                Ok(crate::cdp::tools::cdp_take_snapshot(self.cdp_client.clone()).await)
+            "cdp_take_dom_snapshot" => {
+                let max_nodes = args
+                    .get("max_nodes")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
+                Ok(
+                    crate::cdp::tools::cdp_take_dom_snapshot(max_nodes, self.cdp_client.clone())
+                        .await,
+                )
+            }
+            #[cfg(feature = "cdp")]
+            "cdp_find_elements" => {
+                let query = parse_string_field(&args, "query")?;
+                let role = args.get("role").and_then(|v| v.as_str()).map(String::from);
+                let max_results = args
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32);
+                Ok(crate::cdp::tools::cdp_find_elements(
+                    query,
+                    role,
+                    max_results,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_evaluate_script" => {
@@ -2412,7 +2869,17 @@ impl ServerHandler for MacOSDevToolsServer {
                     ));
                 }
                 let timeout = args.get("timeout").and_then(|v| v.as_u64());
-                Ok(crate::cdp::tools::cdp_wait_for(texts, timeout, self.cdp_client.clone()).await)
+                let include_snapshot = args
+                    .get("include_snapshot")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(crate::cdp::tools::cdp_wait_for(
+                    texts,
+                    timeout,
+                    include_snapshot,
+                    self.cdp_client.clone(),
+                )
+                .await)
             }
             #[cfg(feature = "cdp")]
             "cdp_type_text" => {

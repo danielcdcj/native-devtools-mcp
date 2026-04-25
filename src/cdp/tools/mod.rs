@@ -1,7 +1,8 @@
 //! CDP tool implementations, split by concern:
 //! - `input`: click, hover, fill, press_key
 //! - `pages`: list_pages, select_page, navigate, new_page, close_page, handle_dialog
-//! - `script`: evaluate_script, take_snapshot, wait_for
+//! - `script`: evaluate_script, take_dom_snapshot, find_elements, wait_for
+//! - `element_at_point`: resolve screen coordinates to snapshot UIDs
 
 mod element_at_point;
 mod input;
@@ -13,7 +14,7 @@ pub use input::{cdp_click, cdp_fill, cdp_hover, cdp_press_key, cdp_type_text};
 pub use pages::{
     cdp_close_page, cdp_handle_dialog, cdp_list_pages, cdp_navigate, cdp_new_page, cdp_select_page,
 };
-pub use script::{cdp_evaluate_script, cdp_take_snapshot, cdp_wait_for};
+pub use script::{cdp_evaluate_script, cdp_find_elements, cdp_take_dom_snapshot, cdp_wait_for};
 
 // Shared helpers used by input tools.
 
@@ -25,20 +26,22 @@ use chromiumoxide::page::Page;
 use rmcp::model::CallToolResult;
 
 /// Resolve a UID to a backend node ID and element metadata from the snapshot.
-async fn resolve_node(
+///
+/// Staleness is determined by both `client.generation` (catches same-URL
+/// reloads and SPA navigations) and `current_url` vs. the snapshot's
+/// stamped URL (catches out-of-band navigations between tool calls).
+fn resolve_node(
     uid: &str,
     client: &CdpClient,
-    page: &Page,
+    current_url: &str,
 ) -> Result<(BackendNodeId, String, String), CallToolResult> {
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    let snapshot_map = client.check_snapshot_staleness(&current_url)?;
-
-    let node = snapshot_map.uid_to_node.get(uid).ok_or_else(|| {
-        cdp_error(format!(
-            "uid={} not found. Call cdp_take_snapshot to get current elements.",
-            uid
-        ))
-    })?;
+    let node = crate::cdp::resolve_uid_from_maps(
+        uid,
+        client.last_dom_snapshot.as_ref(),
+        client.generation,
+        current_url,
+    )
+    .map_err(cdp_error)?;
 
     Ok((
         BackendNodeId::new(node.backend_node_id),
@@ -78,7 +81,8 @@ async fn resolve_element_center(
     client: &CdpClient,
     page: &Page,
 ) -> Result<(String, String, f64, f64), CallToolResult> {
-    let (backend_node_id, node_role, node_name) = resolve_node(uid, client, page).await?;
+    let current_url = crate::cdp::page_url(page).await;
+    let (backend_node_id, node_role, node_name) = resolve_node(uid, client, &current_url)?;
 
     let scroll_params = ScrollIntoViewIfNeededParams::builder()
         .backend_node_id(backend_node_id)
