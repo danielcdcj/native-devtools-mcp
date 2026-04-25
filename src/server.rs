@@ -2680,6 +2680,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_take_dom_snapshot" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let max_nodes = args
                     .get("max_nodes")
                     .and_then(|v| v.as_u64())
@@ -2691,6 +2692,7 @@ impl ServerHandler for MacOSDevToolsServer {
             }
             #[cfg(feature = "cdp")]
             "cdp_find_elements" => {
+                if let Err(e) = self.ensure_cdp_connection().await { return Ok(e); }
                 let query = parse_string_field(&args, "query")?;
                 let role = args.get("role").and_then(|v| v.as_str()).map(String::from);
                 let max_results = args
